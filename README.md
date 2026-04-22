@@ -1,2 +1,2 @@
 # reaper
-REAPER_LangPack_JP
+REAPER_LangPack_JP　test
