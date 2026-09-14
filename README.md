@@ -20,10 +20,11 @@ BLT ReaScripts is a collection of workflow tools for REAPER.
 
 ## Requirements
 
-- REAPER
+- REAPER v7.62 以上（一部のスクリプトで必須）
+- SWS 
 - ReaPack
-- ReaImGui for scripts with a graphical interface
-
+   ・js_ReaScript API
+   ・ReaImGui
 ※テスト中
 
 ## Updates
