@@ -1,23 +1,154 @@
 <?xml version="1.0" encoding="utf-8"?>
-<index version="1" name="BLT ReaScripts" commit="9372ba92f64159b54148122d3fbe4ba5d4a8b484">
+<index version="1" name="BLT ReaScripts" commit="d26af680cda9db0f45e5c4d4de6510f4d13ae5db">
   <category name="BLT_ReaScripts">
-    <reapack name="BLT_INTERVAL.lua" type="script" desc="BLT INTERVAL">
+    <reapack name="BLT_AUTO_TRIM_SPLIT.lua" type="script" desc="AUTO TRIM / SPLIT">
       <metadata>
         <description><![CDATA[{\rtf1\ansi\deff0{\fonttbl{\f0 \fswiss Helvetica;}{\f1 \fmodern Courier;}}
 {\colortbl;\red255\green0\blue0;\red0\green0\blue255;}
 \widowctrl\hyphauto
 
-{\pard \ql \f0 \sa180 \li0 \fi0 Select two or more items, enter a non-negative interval in seconds or grid units, then Align. The earliest start stays fixed. Ties: track order, then item order. Modes: start-to-start interval or end-to-next-start gap. Scope: all selected items or each track independently. Units: seconds or current project grid. js_ReaScriptAPI is required for the custom title bar. REAPER 6+ / Lua.\par}
+{\pard \ql \f0 \sa180 \li0 \fi0 BLT SERIES Beta TEST UPLOAD\par}
 }
 ]]></description>
       </metadata>
-      <version name="3.0.1" time="2026-09-14T15:42:39Z">
-        <changelog><![CDATA[Animated glass HUD theme; all artwork is drawn with native gfx primitives.]]></changelog>
-        <source main="main">https://github.com/balrulu/reaper/raw/8da2e1fffedfc3b6eecde1571c9c56ea8c84a1af/BLT_ReaScripts/BLT_INTERVAL.lua</source>
+      <version name="0.5.0" author="Balrulu" time="2026-09-14T20:13:45Z">
+        <changelog><![CDATA[Beta Test]]></changelog>
+        <source main="main">https://github.com/balrulu/reaper/raw/d26af680cda9db0f45e5c4d4de6510f4d13ae5db/BLT_ReaScripts/BLT_AUTO_TRIM_SPLIT.lua</source>
       </version>
-      <version name="0.5.0" time="2026-09-14T16:22:50Z">
-        <changelog><![CDATA[Animated glass HUD theme; all artwork is drawn with native gfx primitives.]]></changelog>
-        <source main="main">https://github.com/balrulu/reaper/raw/58f7e71d9d531a0fb2f225845d0e4aeab1bd4a2a/BLT_ReaScripts/BLT_INTERVAL.lua</source>
+    </reapack>
+    <reapack name="BLT_BATCH_RENAME.lua" type="script" desc="BATCH RENAME">
+      <metadata>
+        <description><![CDATA[{\rtf1\ansi\deff0{\fonttbl{\f0 \fswiss Helvetica;}{\f1 \fmodern Courier;}}
+{\colortbl;\red255\green0\blue0;\red0\green0\blue255;}
+\widowctrl\hyphauto
+
+{\pard \ql \f0 \sa180 \li0 \fi0 BLT SERIES Beta TEST UPLOAD\par}
+}
+]]></description>
+      </metadata>
+      <version name="0.5.0" author="Balrulu" time="2026-09-14T20:13:45Z">
+        <changelog><![CDATA[Beta Test]]></changelog>
+        <source main="main">https://github.com/balrulu/reaper/raw/d26af680cda9db0f45e5c4d4de6510f4d13ae5db/BLT_ReaScripts/BLT_BATCH_RENAME.lua</source>
+      </version>
+    </reapack>
+    <reapack name="BLT_CR_MINIM.lua" type="script" desc="CR MINIM">
+      <metadata>
+        <description><![CDATA[{\rtf1\ansi\deff0{\fonttbl{\f0 \fswiss Helvetica;}{\f1 \fmodern Courier;}}
+{\colortbl;\red255\green0\blue0;\red0\green0\blue255;}
+\widowctrl\hyphauto
+
+{\pard \ql \f0 \sa180 \li0 \fi0 BLT SERIES Beta TEST UPLOAD\par}
+}
+]]></description>
+      </metadata>
+      <version name="0.5.0" author="Balrulu" time="2026-09-14T20:13:45Z">
+        <changelog><![CDATA[Beta Test]]></changelog>
+        <source main="main">https://github.com/balrulu/reaper/raw/d26af680cda9db0f45e5c4d4de6510f4d13ae5db/BLT_ReaScripts/BLT_CR_MINIM.lua</source>
+      </version>
+    </reapack>
+    <reapack name="BLT_ENVELOPE_CANVAS.lua" type="script" desc="ENVELOPE CANVAS">
+      <metadata>
+        <description><![CDATA[{\rtf1\ansi\deff0{\fonttbl{\f0 \fswiss Helvetica;}{\f1 \fmodern Courier;}}
+{\colortbl;\red255\green0\blue0;\red0\green0\blue255;}
+\widowctrl\hyphauto
+
+{\pard \ql \f0 \sa180 \li0 \fi0 BLT SERIES Beta TEST UPLOAD\par}
+}
+]]></description>
+      </metadata>
+      <version name="0.5.0" author="Balrulu" time="2026-09-14T20:13:45Z">
+        <changelog><![CDATA[Beta Test]]></changelog>
+        <source main="main">https://github.com/balrulu/reaper/raw/d26af680cda9db0f45e5c4d4de6510f4d13ae5db/BLT_ReaScripts/BLT_ENVELOPE_CANVAS.lua</source>
+      </version>
+    </reapack>
+    <reapack name="BLT_INTERVAL.lua" type="script" desc="INTERVAL">
+      <metadata>
+        <description><![CDATA[{\rtf1\ansi\deff0{\fonttbl{\f0 \fswiss Helvetica;}{\f1 \fmodern Courier;}}
+{\colortbl;\red255\green0\blue0;\red0\green0\blue255;}
+\widowctrl\hyphauto
+
+{\pard \ql \f0 \sa180 \li0 \fi0 BLT SERIES Beta TEST UPLOAD\par}
+}
+]]></description>
+      </metadata>
+      <version name="0.5.0" author="Balrulu" time="2026-09-14T20:13:45Z">
+        <changelog><![CDATA[Beta Test]]></changelog>
+        <source main="main">https://github.com/balrulu/reaper/raw/d26af680cda9db0f45e5c4d4de6510f4d13ae5db/BLT_ReaScripts/BLT_INTERVAL.lua</source>
+      </version>
+    </reapack>
+    <reapack name="BLT_LOOP_RM_STUDIO.lua" type="script" desc="LOOP RM STUDIO">
+      <metadata>
+        <description><![CDATA[{\rtf1\ansi\deff0{\fonttbl{\f0 \fswiss Helvetica;}{\f1 \fmodern Courier;}}
+{\colortbl;\red255\green0\blue0;\red0\green0\blue255;}
+\widowctrl\hyphauto
+
+{\pard \ql \f0 \sa180 \li0 \fi0 BLT SERIES Beta TEST UPLOAD\par}
+}
+]]></description>
+      </metadata>
+      <version name="0.5.0" author="Balrulu" time="2026-09-14T20:13:45Z">
+        <changelog><![CDATA[Beta Test]]></changelog>
+        <source main="main">https://github.com/balrulu/reaper/raw/d26af680cda9db0f45e5c4d4de6510f4d13ae5db/BLT_ReaScripts/BLT_LOOP_RM_STUDIO.lua</source>
+      </version>
+    </reapack>
+    <reapack name="BLT_LOUDNESS_TRACE.lua" type="script" desc="LOUDNESS TRACE">
+      <metadata>
+        <description><![CDATA[{\rtf1\ansi\deff0{\fonttbl{\f0 \fswiss Helvetica;}{\f1 \fmodern Courier;}}
+{\colortbl;\red255\green0\blue0;\red0\green0\blue255;}
+\widowctrl\hyphauto
+
+{\pard \ql \f0 \sa180 \li0 \fi0 BLT SERIES Beta TEST UPLOAD\par}
+}
+]]></description>
+      </metadata>
+      <version name="0.5.0" author="Balrulu" time="2026-09-14T20:13:45Z">
+        <changelog><![CDATA[Beta Test]]></changelog>
+        <source main="main">https://github.com/balrulu/reaper/raw/d26af680cda9db0f45e5c4d4de6510f4d13ae5db/BLT_ReaScripts/BLT_LOUDNESS_TRACE.lua</source>
+      </version>
+    </reapack>
+    <reapack name="BLT_MARKER_REGION_DESK.lua" type="script" desc="MARKER REGION DESK">
+      <metadata>
+        <description><![CDATA[{\rtf1\ansi\deff0{\fonttbl{\f0 \fswiss Helvetica;}{\f1 \fmodern Courier;}}
+{\colortbl;\red255\green0\blue0;\red0\green0\blue255;}
+\widowctrl\hyphauto
+
+{\pard \ql \f0 \sa180 \li0 \fi0 BLT SERIES Beta TEST UPLOAD\par}
+}
+]]></description>
+      </metadata>
+      <version name="0.5.0" author="Balrulu" time="2026-09-14T20:13:45Z">
+        <changelog><![CDATA[Beta Test]]></changelog>
+        <source main="main">https://github.com/balrulu/reaper/raw/d26af680cda9db0f45e5c4d4de6510f4d13ae5db/BLT_ReaScripts/BLT_MARKER_REGION_DESK.lua</source>
+      </version>
+    </reapack>
+    <reapack name="BLT_SIMPLE_NORMALIZER.lua" type="script" desc="SIMPLE NORMALIZER">
+      <metadata>
+        <description><![CDATA[{\rtf1\ansi\deff0{\fonttbl{\f0 \fswiss Helvetica;}{\f1 \fmodern Courier;}}
+{\colortbl;\red255\green0\blue0;\red0\green0\blue255;}
+\widowctrl\hyphauto
+
+{\pard \ql \f0 \sa180 \li0 \fi0 BLT SERIES Beta TEST UPLOAD\par}
+}
+]]></description>
+      </metadata>
+      <version name="0.5.0" author="Balrulu" time="2026-09-14T20:13:45Z">
+        <changelog><![CDATA[Beta Test]]></changelog>
+        <source main="main">https://github.com/balrulu/reaper/raw/d26af680cda9db0f45e5c4d4de6510f4d13ae5db/BLT_ReaScripts/BLT_SIMPLE_NORMALIZER.lua</source>
+      </version>
+    </reapack>
+    <reapack name="BLT_VARIANT_FORGE.lua" type="script" desc="VARIANT FORGE">
+      <metadata>
+        <description><![CDATA[{\rtf1\ansi\deff0{\fonttbl{\f0 \fswiss Helvetica;}{\f1 \fmodern Courier;}}
+{\colortbl;\red255\green0\blue0;\red0\green0\blue255;}
+\widowctrl\hyphauto
+
+{\pard \ql \f0 \sa180 \li0 \fi0 BLT SERIES Beta TEST UPLOAD\par}
+}
+]]></description>
+      </metadata>
+      <version name="0.5.0" author="Balrulu" time="2026-09-14T20:13:45Z">
+        <changelog><![CDATA[Beta Test]]></changelog>
+        <source main="main">https://github.com/balrulu/reaper/raw/d26af680cda9db0f45e5c4d4de6510f4d13ae5db/BLT_ReaScripts/BLT_VARIANT_FORGE.lua</source>
       </version>
     </reapack>
   </category>
