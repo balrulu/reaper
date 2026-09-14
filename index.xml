@@ -1,6 +1,24 @@
 <?xml version="1.0" encoding="utf-8"?>
-<index version="1" name="BLT ReaScripts">
-<metadata><description><![CDATA[{\rtf1\ansi\deff0{\fonttbl{\f0 \fswiss Helvetica;}{\f1 \fmodern Courier;}}
+<index version="1" name="BLT ReaScripts" commit="8da2e1fffedfc3b6eecde1571c9c56ea8c84a1af">
+  <category name="BLT_ReaScripts">
+    <reapack name="BLT_INTERVAL.lua" type="script" desc="Interval - Align selected item spacing by seconds or project grid (Japanese GUI)">
+      <metadata>
+        <description><![CDATA[{\rtf1\ansi\deff0{\fonttbl{\f0 \fswiss Helvetica;}{\f1 \fmodern Courier;}}
+{\colortbl;\red255\green0\blue0;\red0\green0\blue255;}
+\widowctrl\hyphauto
+
+{\pard \ql \f0 \sa180 \li0 \fi0 Select two or more items, enter a non-negative interval in seconds or grid units, then Align. The earliest start stays fixed. Ties: track order, then item order. Modes: start-to-start interval or end-to-next-start gap. Scope: all selected items or each track independently. Units: seconds or current project grid. js_ReaScriptAPI is required for the custom title bar. REAPER 6+ / Lua.\par}
+}
+]]></description>
+      </metadata>
+      <version name="3.0.1" time="2026-09-14T15:42:39Z">
+        <changelog><![CDATA[Animated glass HUD theme; all artwork is drawn with native gfx primitives.]]></changelog>
+        <source main="main">https://github.com/balrulu/reaper/raw/8da2e1fffedfc3b6eecde1571c9c56ea8c84a1af/BLT_ReaScripts/BLT_INTERVAL.lua</source>
+      </version>
+    </reapack>
+  </category>
+  <metadata>
+    <description><![CDATA[{\rtf1\ansi\deff0{\fonttbl{\f0 \fswiss Helvetica;}{\f1 \fmodern Courier;}}
 {\colortbl;\red255\green0\blue0;\red0\green0\blue255;}
 \widowctrl\hyphauto
 
@@ -35,4 +53,6 @@ GitHub Issues
 }}}
  for bug reports and feature requests.\par}
 }
-]]></description></metadata></index>
+]]></description>
+  </metadata>
+</index>
