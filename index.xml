@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
-<index version="1" name="BLT ReaScripts" commit="58f7e71d9d531a0fb2f225845d0e4aeab1bd4a2a">
+<index version="1" name="BLT ReaScripts" commit="9372ba92f64159b54148122d3fbe4ba5d4a8b484">
   <category name="BLT_ReaScripts">
-    <reapack name="BLT_INTERVAL.lua" type="script" desc="Interval - Align selected item spacing by seconds or project grid (Japanese GUI)">
+    <reapack name="BLT_INTERVAL.lua" type="script" desc="BLT INTERVAL">
       <metadata>
         <description><![CDATA[{\rtf1\ansi\deff0{\fonttbl{\f0 \fswiss Helvetica;}{\f1 \fmodern Courier;}}
 {\colortbl;\red255\green0\blue0;\red0\green0\blue255;}
