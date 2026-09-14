@@ -1,8 +1,7 @@
 # BLT ReaScripts
 
 BLT ReaScripts is a collection of workflow tools for REAPER.
-
-The packages in this repository are distributed through ReaPack.
+テスト中
 
 ## Installation
 
@@ -17,22 +16,17 @@ The packages in this repository are distributed through ReaPack.
 4. Synchronize ReaPack, open **Browse packages...**, and search for `BLT`.
 5. Select the packages you want, choose **Install**, then click **Apply**.
 
+   ※テスト中
+
 ## Requirements
 
 - REAPER
 - ReaPack
 - ReaImGui for scripts with a graphical interface
 
-Individual packages may have additional requirements. See each package's ReaPack description for details.
+※テスト中
 
 ## Updates
 
 Use **Extensions > ReaPack > Synchronize packages** to check for new versions.
-
-## Repository contents
-
-ReaPack packages are stored under [`BLT_ReaScripts`](BLT_ReaScripts/). The package index is generated automatically from package metadata whenever the `main` branch is updated.
-
-## Support
-
-Please use [GitHub Issues](https://github.com/balrulu/reaper/issues) for bug reports and feature requests.
+※テスト中
