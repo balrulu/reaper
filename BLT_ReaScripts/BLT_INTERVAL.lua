@@ -1,5 +1,6 @@
 -- @description Interval - Align selected item spacing by seconds or project grid (Japanese GUI)
 -- @version 3.0.1
+-- @changelog
 --   Animated glass HUD theme; all artwork is drawn with native gfx primitives.
 -- @about
 --   Select two or more items, enter a non-negative interval in seconds or grid units, then Align.
