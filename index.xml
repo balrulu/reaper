@@ -1,3 +1,38 @@
 <?xml version="1.0" encoding="utf-8"?>
 <index version="1" name="BLT ReaScripts">
-</index>
+<metadata><description><![CDATA[{\rtf1\ansi\deff0{\fonttbl{\f0 \fswiss Helvetica;}{\f1 \fmodern Courier;}}
+{\colortbl;\red255\green0\blue0;\red0\green0\blue255;}
+\widowctrl\hyphauto
+
+{\pard \ql \f0 \sa180 \li0 \fi0 \outlinelevel0 \b \fs36 BLT ReaScripts\par}
+{\pard \ql \f0 \sa180 \li0 \fi0 BLT ReaScripts is a collection of workflow tools for REAPER.\par}
+{\pard \ql \f0 \sa180 \li0 \fi0 The packages in this repository are distributed through ReaPack.\par}
+{\pard \ql \f0 \sa180 \li0 \fi0 \outlinelevel1 \b \fs32 Installation\par}
+{\pard \ql \f0 \sa180 \li360 \fi-360 1.\tx360\tab Install {\field{\*\fldinst{HYPERLINK "https://reapack.com/"}}{\fldrslt{\ul
+ReaPack
+}}}
+ if it is not already installed.\par}
+{\pard \ql \f0 \sa180 \li360 \fi-360 2.\tx360\tab In REAPER, open {\b Extensions > ReaPack > Import repositories...}.\par}
+{\pard \ql \f0 \sa180 \li360 \fi-360 3.\tx360\tab Paste the following repository URL:\par}
+{\pard \ql \f0 \sa180 \li360 \fi0 \f1 https://github.com/balrulu/reaper/raw/main/index.xml\par}
+{\pard \ql \f0 \sa180 \li360 \fi-360 4.\tx360\tab Synchronize ReaPack, open {\b Browse packages...}, and search for {\f1 BLT}.\par}
+{\pard \ql \f0 \sa180 \li360 \fi-360 5.\tx360\tab Select the packages you want, choose {\b Install}, then click {\b Apply}.\sa180\par}
+{\pard \ql \f0 \sa180 \li0 \fi0 \outlinelevel1 \b \fs32 Requirements\par}
+{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab REAPER\par}
+{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab ReaPack\par}
+{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab ReaImGui for scripts with a graphical interface\sa180\par}
+{\pard \ql \f0 \sa180 \li0 \fi0 Individual packages may have additional requirements. See each package's ReaPack description for details.\par}
+{\pard \ql \f0 \sa180 \li0 \fi0 \outlinelevel1 \b \fs32 Updates\par}
+{\pard \ql \f0 \sa180 \li0 \fi0 Use {\b Extensions > ReaPack > Synchronize packages} to check for new versions.\par}
+{\pard \ql \f0 \sa180 \li0 \fi0 \outlinelevel1 \b \fs32 Repository contents\par}
+{\pard \ql \f0 \sa180 \li0 \fi0 ReaPack packages are stored under {\field{\*\fldinst{HYPERLINK "BLT_ReaScripts/"}}{\fldrslt{\ul
+{\f1 BLT_ReaScripts}
+}}}
+. The package index is generated automatically from package metadata whenever the {\f1 main} branch is updated.\par}
+{\pard \ql \f0 \sa180 \li0 \fi0 \outlinelevel1 \b \fs32 Support\par}
+{\pard \ql \f0 \sa180 \li0 \fi0 Please use {\field{\*\fldinst{HYPERLINK "https://github.com/balrulu/reaper/issues"}}{\fldrslt{\ul
+GitHub Issues
+}}}
+ for bug reports and feature requests.\par}
+}
+]]></description></metadata></index>
