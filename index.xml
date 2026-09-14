@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<index version="1" name="BLT ReaScripts" commit="8da2e1fffedfc3b6eecde1571c9c56ea8c84a1af">
+<index version="1" name="BLT ReaScripts" commit="58f7e71d9d531a0fb2f225845d0e4aeab1bd4a2a">
   <category name="BLT_ReaScripts">
     <reapack name="BLT_INTERVAL.lua" type="script" desc="Interval - Align selected item spacing by seconds or project grid (Japanese GUI)">
       <metadata>
@@ -14,6 +14,10 @@
       <version name="3.0.1" time="2026-09-14T15:42:39Z">
         <changelog><![CDATA[Animated glass HUD theme; all artwork is drawn with native gfx primitives.]]></changelog>
         <source main="main">https://github.com/balrulu/reaper/raw/8da2e1fffedfc3b6eecde1571c9c56ea8c84a1af/BLT_ReaScripts/BLT_INTERVAL.lua</source>
+      </version>
+      <version name="0.5.0" time="2026-09-14T16:22:50Z">
+        <changelog><![CDATA[Animated glass HUD theme; all artwork is drawn with native gfx primitives.]]></changelog>
+        <source main="main">https://github.com/balrulu/reaper/raw/58f7e71d9d531a0fb2f225845d0e4aeab1bd4a2a/BLT_ReaScripts/BLT_INTERVAL.lua</source>
       </version>
     </reapack>
   </category>
