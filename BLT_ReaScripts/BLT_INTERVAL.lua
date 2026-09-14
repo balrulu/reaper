@@ -1,7 +1,8 @@
--- @description Interval - Align selected item spacing by seconds or project grid (Japanese GUI)
+-- @description BLT INTERVAL
 -- @version 0.5.0
+-- @Author: Balrulu
 -- @changelog
---   Animated glass HUD theme; all artwork is drawn with native gfx primitives.
+--   test
 -- @about
 --   Select two or more items, enter a non-negative interval in seconds or grid units, then Align.
 --   The earliest start stays fixed. Ties: track order, then item order.
