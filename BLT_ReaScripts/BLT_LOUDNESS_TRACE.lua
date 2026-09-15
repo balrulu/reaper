@@ -1,10 +1,35 @@
 -- @description LOUDNESS TRACE
--- @version 0.5.0
+-- @version 0.5.2
 -- @author Balrulu
 -- @changelog
---   Beta Test
+--   Unify Mac font and display scaling; fix floating TRACE collapse detection.
 -- @about
 --   BLT SERIES Beta TEST UPLOAD
+
+-- BLT window geometry 1.0.0. Embedded; screen coordinates only.
+local function create_window_geometry(api,graphics)
+ local osname=api.GetOS() or ''
+ if not osname:match('OSX') and not osname:match('macOS') then return api end
+ local G=setmetatable({}, {__index=api})
+ -- Internal screen Y points downward. Client coordinates remain untouched.
+ function G.GetMousePosition()
+  local x,y=api.GetMousePosition();return x,-y
+ end
+ function G.JS_Window_GetRect(hwnd)
+  local ok,l,t,r,b=api.JS_Window_GetRect(hwnd)
+  if not ok then return ok,l,t,r,b end
+  return ok,l,-math.max(t,b),r,-math.min(t,b)
+ end
+ function G.JS_Window_SetPosition(hwnd,x,y,w,h,z,flags)
+  if graphics and graphics.dock and (graphics.dock(-1)&1)~=0 then return false end
+  -- SWELL SetWindowPos uses a bottom-left origin for floating macOS windows.
+  return api.JS_Window_SetPosition(hwnd,x,-y-h,w,h,z,flags)
+ end
+ return G
+end
+
+local WindowGeometry=create_window_geometry(reaper,gfx)
+local BLT_MAC=(reaper.GetOS() or ''):match('OSX')~=nil or (reaper.GetOS() or ''):match('macOS')~=nil
 
 local Core = {}
 local floor, min, max, sin, pi = math.floor, math.min, math.max, math.sin, math.pi
@@ -911,9 +936,9 @@ local function font(size,kind,bold) host.font(size,kind,bold) end
 function B.position(hwnd,x,y,w,h,a,b)
  local old=B.lastRect
  if old and old[1]==hwnd and old[2]==x and old[3]==y and old[4]==w and old[5]==h then return true end
- local ok,l,t,r,bt=R.JS_Window_GetRect(hwnd)
+ local ok,l,t,r,bt=WindowGeometry.JS_Window_GetRect(hwnd)
  if ok and l==x and t==y and r-l==w and bt-t==h then B.lastRect={hwnd,x,y,w,h};return true end
- local done=R.JS_Window_SetPosition(hwnd,x,y,w,h,a,b)
+ local done=WindowGeometry.JS_Window_SetPosition(hwnd,x,y,w,h,a,b)
  if done then B.lastRect={hwnd,x,y,w,h} end;return done
 end
 function B.store(section,key,value,persist)
@@ -1394,9 +1419,9 @@ local function custom_titlebar(blocked)
     elseif inBar and not (host.transition and host.transition()) then
       local hwnd=gfx_window_handle()
       if hwnd then
-        local ok,l,t,r,b=R.JS_Window_GetRect(hwnd)
+        local ok,l,t,r,b=WindowGeometry.JS_Window_GetRect(hwnd)
         if ok then
-          local sx,sy=R.GetMousePosition()
+          local sx,sy=WindowGeometry.GetMousePosition()
           Chrome.drag={mouseX=sx,mouseY=sy,left=l,top=t,width=r-l,height=b-t,lastX=l,lastY=t}
         end
       end
@@ -1405,7 +1430,7 @@ local function custom_titlebar(blocked)
 
   if down and Chrome.resize then update_window_resize() end
   if down and Chrome.drag and not Chrome.resize then
-    local d=Chrome.drag;local sx,sy=R.GetMousePosition()
+    local d=Chrome.drag;local sx,sy=WindowGeometry.GetMousePosition()
     local x,y=d.left+(sx-d.mouseX),d.top+(sy-d.mouseY)
     local hwnd=(x~=d.lastX or y~=d.lastY) and gfx_window_handle() or nil
     if hwnd and B.position(hwnd,x,y,d.width,d.height,"","") then
@@ -3412,7 +3437,7 @@ local function reset_window_size()
   if A.collapsed or A.windowTransition then return end
   local hwnd=gfx_window_handle()
   if not hwnd then return end
-  local ok,l,t=R.JS_Window_GetRect(hwnd)
+  local ok,l,t=WindowGeometry.JS_Window_GetRect(hwnd)
   if ok then BLT.position(hwnd,l,t,W,H+A.titleH,'','') end
 end
 
@@ -3475,9 +3500,9 @@ end
 local function begin_resize(mode)
   local hwnd=gfx_window_handle()
   if not hwnd or not mode then return false end
-  local ok,l,t,r,b=R.JS_Window_GetRect(hwnd)
+  local ok,l,t,r,b=WindowGeometry.JS_Window_GetRect(hwnd)
   if not ok then return false end
-  local sx,sy=R.GetMousePosition()
+  local sx,sy=WindowGeometry.GetMousePosition()
   A.resizeDrag={mode=mode,mouseX=sx,mouseY=sy,left=l,top=t,right=r,bottom=b}
   A.titleDrag=nil
   A.pressed=nil
@@ -3488,7 +3513,7 @@ local function update_resize()
   if not d then return end
   local hwnd=gfx_window_handle()
   if not hwnd then A.resizeDrag=nil; return end
-  local sx,sy=R.GetMousePosition()
+  local sx,sy=WindowGeometry.GetMousePosition()
   local dx,dy=sx-d.mouseX,sy-d.mouseY
   local l,t,r,b=d.left,d.top,d.right,d.bottom
   if d.mode:find('l',1,true) then l=min(d.left+dx,r-A.minWindowW) end
@@ -3600,11 +3625,11 @@ local function collapse_window()
   local dock,dx,dy,dw,dh=gfx.dock(-1,0,0,0,0)
   -- A docked gfx window is owned by REAPER's docker and cannot be reduced to a
   -- free compact bar without changing the user's docking layout.
-  if dock and dock~=0 then
+  if dock and (dock&1)~=0 then
     Language.mb('ドッキング中はウィンドウを縮小できません。\nフローティング表示で使用してください。','LOUDNESS TRACE',0)
     return
   end
-  local ok,l,t,r,b=R.JS_Window_GetRect(hwnd)
+  local ok,l,t,r,b=WindowGeometry.JS_Window_GetRect(hwnd)
   local okc,cw,ch=R.JS_Window_GetClientSize(hwnd)
   if not ok or not okc or not l or not r or not cw then return end
   local outerW,outerH=r-l,b-t
@@ -3622,7 +3647,7 @@ local function expand_window()
   local hwnd=gfx_window_handle()
   local g=A.normalWindow
   if not hwnd or not g then return end
-  local ok,l,t,r,b=R.JS_Window_GetRect(hwnd)
+  local ok,l,t,r,b=WindowGeometry.JS_Window_GetRect(hwnd)
   if not ok then return end
   local from={left=l,top=t,width=r-l,height=b-t}
 
@@ -3819,7 +3844,7 @@ local function controller()
   if A.job then rect(250,594,276*A.job.progress,2,C.ice,.8) end
   fold_control('collapse',(W-64)*.5,603,64,18,true,function() A.requestFold=true end)
 
-  BLT.footer(A.job and string.format('解析中 %d%%',math.floor(A.job.progress*100)) or (A.stale and 'プロジェクトが変更されています。再解析してください。' or (A.data and '解析結果を表示しています。' or '時間範囲を選択してください。')),A.stale,W,H+22,'0.5.0')
+  BLT.footer(A.job and string.format('解析中 %d%%',math.floor(A.job.progress*100)) or (A.stale and 'プロジェクトが変更されています。再解析してください。' or (A.data and '解析結果を表示しています。' or '時間範囲を選択してください。')),A.stale,W,H+22,'0.5.2')
   inputs_mouse();custom_titlebar()
 end
 
@@ -3913,7 +3938,7 @@ local function startup()
     -- Replace the operating-system caption with the controller's own title bar.
     R.JS_Window_SetStyle(A.gfxWindow,"POPUP")
     if Platform.mac then
-      local ok,l,t=R.JS_Window_GetRect(A.gfxWindow)
+      local ok,l,t=WindowGeometry.JS_Window_GetRect(A.gfxWindow)
       if ok then BLT.position(A.gfxWindow,l,t,ww,hh+A.titleH,'','') end
     else BLT.position(A.gfxWindow,wx,wy,ww,hh+A.titleH,'','') end
   end

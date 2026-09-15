@@ -1,10 +1,35 @@
 -- @description BATCH RENAME
--- @version 0.5.0
+-- @version 0.5.3
 -- @author Balrulu
 -- @changelog
---   Beta Test
+--   Unify Mac font and display scaling; fix floating TRACE collapse detection.
 -- @about
 --   BLT SERIES Beta TEST UPLOAD
+
+-- BLT window geometry 1.0.0. Embedded; screen coordinates only.
+local function create_window_geometry(api,graphics)
+ local osname=api.GetOS() or ''
+ if not osname:match('OSX') and not osname:match('macOS') then return api end
+ local G=setmetatable({}, {__index=api})
+ -- Internal screen Y points downward. Client coordinates remain untouched.
+ function G.GetMousePosition()
+  local x,y=api.GetMousePosition();return x,-y
+ end
+ function G.JS_Window_GetRect(hwnd)
+  local ok,l,t,r,b=api.JS_Window_GetRect(hwnd)
+  if not ok then return ok,l,t,r,b end
+  return ok,l,-math.max(t,b),r,-math.min(t,b)
+ end
+ function G.JS_Window_SetPosition(hwnd,x,y,w,h,z,flags)
+  if graphics and graphics.dock and (graphics.dock(-1)&1)~=0 then return false end
+  -- SWELL SetWindowPos uses a bottom-left origin for floating macOS windows.
+  return api.JS_Window_SetPosition(hwnd,x,-y-h,w,h,z,flags)
+ end
+ return G
+end
+
+local WindowGeometry=create_window_geometry(reaper,gfx)
+local BLT_MAC=(reaper.GetOS() or ''):match('OSX')~=nil or (reaper.GetOS() or ''):match('macOS')~=nil
 
 -- BLT language runtime 1.1.0. Embed with an app-specific catalog; no runtime file I/O.
 local function create_language(api,section,catalog)
@@ -514,9 +539,9 @@ local function font(size,kind,bold) host.font(size,kind,bold) end
 function B.position(hwnd,x,y,w,h,a,b)
  local old=B.lastRect
  if old and old[1]==hwnd and old[2]==x and old[3]==y and old[4]==w and old[5]==h then return true end
- local ok,l,t,r,bt=R.JS_Window_GetRect(hwnd)
+ local ok,l,t,r,bt=WindowGeometry.JS_Window_GetRect(hwnd)
  if ok and l==x and t==y and r-l==w and bt-t==h then B.lastRect={hwnd,x,y,w,h};return true end
- local done=R.JS_Window_SetPosition(hwnd,x,y,w,h,a,b)
+ local done=WindowGeometry.JS_Window_SetPosition(hwnd,x,y,w,h,a,b)
  if done then B.lastRect={hwnd,x,y,w,h} end;return done
 end
 function B.store(section,key,value,persist)
@@ -997,9 +1022,9 @@ local function custom_titlebar(blocked)
     elseif inBar and not (host.transition and host.transition()) then
       local hwnd=gfx_window_handle()
       if hwnd then
-        local ok,l,t,r,b=R.JS_Window_GetRect(hwnd)
+        local ok,l,t,r,b=WindowGeometry.JS_Window_GetRect(hwnd)
         if ok then
-          local sx,sy=R.GetMousePosition()
+          local sx,sy=WindowGeometry.GetMousePosition()
           Chrome.drag={mouseX=sx,mouseY=sy,left=l,top=t,width=r-l,height=b-t,lastX=l,lastY=t}
         end
       end
@@ -1008,7 +1033,7 @@ local function custom_titlebar(blocked)
 
   if down and Chrome.resize then update_window_resize() end
   if down and Chrome.drag and not Chrome.resize then
-    local d=Chrome.drag;local sx,sy=R.GetMousePosition()
+    local d=Chrome.drag;local sx,sy=WindowGeometry.GetMousePosition()
     local x,y=d.left+(sx-d.mouseX),d.top+(sy-d.mouseY)
     local hwnd=(x~=d.lastX or y~=d.lastY) and gfx_window_handle() or nil
     if hwnd and B.position(hwnd,x,y,d.width,d.height,"","") then
@@ -2012,7 +2037,7 @@ local Chrome={window=nil,mouseDown=false,drag=nil,resize=nil,mouseActive=false,r
   isWindows=R.GetOS():match("Win")~=nil,resizeEdge=6,resizeCornerBand=8,resizeCornerSpan=24,resizeTopLeftGuard=30,resizeTopRightGuard=110,
   tooltipHover=nil,tooltipSince=0,tooltipVisible=false,tooltipDelay=.70,
   cursorId={we=32644,ns=32645,nwse=32642,nesw=32643,arrow=32512}}
-Chrome.font=Chrome.isWindows and "Segoe UI" or (R.GetOS():match("OSX") and "Helvetica Neue" or "sans-serif")
+Chrome.font=Chrome.isWindows and "Segoe UI" or (BLT_MAC and "Helvetica Neue" or "sans-serif")
 local CHROME_DEFAULT={
   mint={Chrome.mint[1],Chrome.mint[2],Chrome.mint[3]},
   ice={Chrome.ice[1],Chrome.ice[2],Chrome.ice[3]},
@@ -2481,7 +2506,7 @@ end
 local function apply_custom_window_style(target_w,target_h)
   local hwnd=gfx_window_handle()
   if not hwnd then return false end
-  local ok,l,t=R.JS_Window_GetRect(hwnd)
+  local ok,l,t=WindowGeometry.JS_Window_GetRect(hwnd)
   if not R.JS_Window_SetStyle(hwnd,"POPUP") then return false end
   if ok then BLT.position(hwnd,l,t,target_w,target_h,"","") end
   return true
@@ -2490,7 +2515,7 @@ end
 local function reset_window_size()
   local hwnd=gfx_window_handle()
   if not hwnd then return end
-  local ok,l,t=R.JS_Window_GetRect(hwnd)
+  local ok,l,t=WindowGeometry.JS_Window_GetRect(hwnd)
   if ok then BLT.position(hwnd,l,t,W,H+Chrome.titleH,"","") end
   BLT.store(SECTION,"window_w",tostring(W),true)
   BLT.store(SECTION,"window_h",tostring(H+Chrome.titleH),true)
@@ -2556,9 +2581,9 @@ local function titlebar_cleanup() set_resize_cursor(nil) end
 local function begin_window_resize(mode)
   local hwnd=gfx_window_handle()
   if not hwnd or not mode then return false end
-  local ok,l,t,r,b=R.JS_Window_GetRect(hwnd)
+  local ok,l,t,r,b=WindowGeometry.JS_Window_GetRect(hwnd)
   if not ok then return false end
-  local sx,sy=R.GetMousePosition()
+  local sx,sy=WindowGeometry.GetMousePosition()
   Chrome.resize={mode=mode,mouseX=sx,mouseY=sy,left=l,top=t,right=r,bottom=b}
   Chrome.drag=nil
   return true
@@ -2569,7 +2594,7 @@ local function update_window_resize()
   if not d then return end
   local hwnd=gfx_window_handle()
   if not hwnd then Chrome.resize=nil; return end
-  local sx,sy=R.GetMousePosition()
+  local sx,sy=WindowGeometry.GetMousePosition()
   local dx,dy=sx-d.mouseX,sy-d.mouseY
   local l,t,r,b=d.left,d.top,d.right,d.bottom
   if d.mode:find("l",1,true) then l=math.min(d.left+dx,r-Chrome.minW) end
@@ -2709,9 +2734,9 @@ function IME.frame()
     I.PushStyleVar(ctx,I.StyleVar_FramePadding,max(2,12*unit),max(0,(h-I.GetTextLineHeight(ctx))/2))
     I.SetNextItemWidth(ctx,w)
     if focus_now then I.SetKeyboardFocusHere(ctx) end
-    local text
-    finish,text=I.InputTextWithHint(ctx,"##affix",Language.text("追加なし"),Core.Edit.value(E),I.InputTextFlags_EnterReturnsTrue)
-    cancel=I.IsItemDeactivated(ctx) and I.IsKeyPressed(ctx,I.Key_Escape,false)
+    local _,text=I.InputTextWithHint(ctx,"##affix",Language.text("追加なし"),Core.Edit.value(E),0)
+    finish=I.IsItemDeactivated(ctx)
+    cancel=finish and I.IsKeyPressed(ctx,I.Key_Escape,false)
     if text~=Core.Edit.value(E) then
       local trial=Core.Edit.new(text);trial.key=E.key
       local value,err=edit_value(trial)
@@ -3119,7 +3144,7 @@ local function draw()
     message=string.format("注意：変更後に同名となる名前が %d組（%dアイテム）あります。実行時に確認します。",st.duplicate_groups,st.duplicate_items or 0)
     message_bad=true
   end
-  BLT.footer(message,message_bad,W,H+22,'0.5.0')
+  BLT.footer(message,message_bad,W,H+22,'0.5.3')
   draw_duplicate_modal()
   custom_titlebar()
 end
@@ -3308,7 +3333,8 @@ local x,y=tonumber(R.GetExtState(SECTION,"window_x")),tonumber(R.GetExtState(SEC
 local w,h=tonumber(R.GetExtState(SECTION,"window_w")),tonumber(R.GetExtState(SECTION,"window_h"))
 if h==900+Chrome.titleH then h=H+Chrome.titleH end
 w=finite(w) and clamp(w,780,1900) or W; h=finite(h) and clamp(h,630+Chrome.titleH,1400+Chrome.titleH) or (H+Chrome.titleH)
-gfx.ext_retina=1
+-- Match native window/input coordinates in logical points on Mac.
+gfx.ext_retina=BLT_MAC and 0 or 1
 if finite(x) and finite(y) then gfx.init(Chrome.windowTitle,w,h,0,x,y)
 else gfx.init(Chrome.windowTitle,w,h,0) end
 if not apply_custom_window_style(w,h) then gfx.quit(); Language.mb("カスタムタイトルバーを初期化できません。","Batch Rename | エラー",0); return end

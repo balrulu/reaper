@@ -1,10 +1,35 @@
 -- @description CR MINIM
--- @version 0.5.0
+-- @version 0.5.5
 -- @author Balrulu
 -- @changelog
---   Beta Test
+--   Unify Mac font and display scaling; fix floating TRACE collapse detection.
 -- @about
 --   BLT SERIES Beta TEST UPLOAD
+
+-- BLT window geometry 1.0.0. Embedded; screen coordinates only.
+local function create_window_geometry(api,graphics)
+ local osname=api.GetOS() or ''
+ if not osname:match('OSX') and not osname:match('macOS') then return api end
+ local G=setmetatable({}, {__index=api})
+ -- Internal screen Y points downward. Client coordinates remain untouched.
+ function G.GetMousePosition()
+  local x,y=api.GetMousePosition();return x,-y
+ end
+ function G.JS_Window_GetRect(hwnd)
+  local ok,l,t,r,b=api.JS_Window_GetRect(hwnd)
+  if not ok then return ok,l,t,r,b end
+  return ok,l,-math.max(t,b),r,-math.min(t,b)
+ end
+ function G.JS_Window_SetPosition(hwnd,x,y,w,h,z,flags)
+  if graphics and graphics.dock and (graphics.dock(-1)&1)~=0 then return false end
+  -- SWELL SetWindowPos uses a bottom-left origin for floating macOS windows.
+  return api.JS_Window_SetPosition(hwnd,x,-y-h,w,h,z,flags)
+ end
+ return G
+end
+
+local WindowGeometry=create_window_geometry(reaper,gfx)
+local BLT_MAC=(reaper.GetOS() or ''):match('OSX')~=nil or (reaper.GetOS() or ''):match('macOS')~=nil
 
 -- BLT language runtime 1.1.0. Embed with an app-specific catalog; no runtime file I/O.
 local function create_language(api,section,catalog)
@@ -62,6 +87,8 @@ end
 
 -- Latest embedded application catalog.
 local LanguageCatalog={en={
+ ["頭フェード ms"]="Fade in ms",
+ ["後フェード ms"]="Fade out ms",
  ["ファクトリーデフォルト"]="Factory Default",
  ["ファクトリーデフォルトは変更できません。"]="Factory Default is read-only.",
  ["「"]="\"",
@@ -482,9 +509,9 @@ local function font(size,kind,bold) host.font(size,kind,bold) end
 function B.position(hwnd,x,y,w,h,a,b)
  local old=B.lastRect
  if old and old[1]==hwnd and old[2]==x and old[3]==y and old[4]==w and old[5]==h then return true end
- local ok,l,t,r,bt=R.JS_Window_GetRect(hwnd)
+ local ok,l,t,r,bt=WindowGeometry.JS_Window_GetRect(hwnd)
  if ok and l==x and t==y and r-l==w and bt-t==h then B.lastRect={hwnd,x,y,w,h};return true end
- local done=R.JS_Window_SetPosition(hwnd,x,y,w,h,a,b)
+ local done=WindowGeometry.JS_Window_SetPosition(hwnd,x,y,w,h,a,b)
  if done then B.lastRect={hwnd,x,y,w,h} end;return done
 end
 function B.store(section,key,value,persist)
@@ -965,9 +992,9 @@ local function custom_titlebar(blocked)
     elseif inBar and not (host.transition and host.transition()) then
       local hwnd=gfx_window_handle()
       if hwnd then
-        local ok,l,t,r,b=R.JS_Window_GetRect(hwnd)
+        local ok,l,t,r,b=WindowGeometry.JS_Window_GetRect(hwnd)
         if ok then
-          local sx,sy=R.GetMousePosition()
+          local sx,sy=WindowGeometry.GetMousePosition()
           Chrome.drag={mouseX=sx,mouseY=sy,left=l,top=t,width=r-l,height=b-t,lastX=l,lastY=t}
         end
       end
@@ -976,7 +1003,7 @@ local function custom_titlebar(blocked)
 
   if down and Chrome.resize then update_window_resize() end
   if down and Chrome.drag and not Chrome.resize then
-    local d=Chrome.drag;local sx,sy=R.GetMousePosition()
+    local d=Chrome.drag;local sx,sy=WindowGeometry.GetMousePosition()
     local x,y=d.left+(sx-d.mouseX),d.top+(sy-d.mouseY)
     local hwnd=(x~=d.lastX or y~=d.lastY) and gfx_window_handle() or nil
     if hwnd and B.position(hwnd,x,y,d.width,d.height,"","") then
@@ -1201,7 +1228,7 @@ end)()
 local min,max,abs,floor=math.min,math.max,math.abs,math.floor
 local function finite(n) return type(n)=='number' and n==n and abs(n)<math.huge end
 local function clamp(n,a,b) return max(a,min(b,n)) end
-local Core={VERSION='0.5.0',SECTION='BLT_CR_MINIM'}
+local Core={VERSION='0.5.5',SECTION='BLT_CR_MINIM'}
 -- Presentation only: show message content without source locations or filenames.
 function Core.display_message(value)
  local text=tostring(value or '')
@@ -1231,9 +1258,10 @@ end
 Core.specs={count={0,128,true,1},offset={0,3600000,false,10},slice={1,60000,false,1},interval0={1,60000,false,1},interval1={1,60000,false,1},gap={0,60000,false,1},pitch0={-24,24,false,.5},pitch1={-24,24,false,.5},curve={.2,5,false,.1},fade={0,100,false,1},bend0={-24,24,false,.5},bend1={-24,24,false,.5},trem0={0,80,false,.5},trem1={0,80,false,.5},depth={0,100,false,1},pan0={-100,100,false,1},pan1={-100,100,false,1},gain0={-60,12,false,1},gain1={-60,12,false,1}}
 Core.specs.pattern={1,4,true,1};Core.specs.tail={1,2,true,1}
 Core.specs.slice_end={1,60000,false,1}
+Core.specs.slice_fade_in={0,60000,false,1};Core.specs.slice_fade_out={0,60000,false,1}
 Core.specs.bend_mid={-24,24,false,.5};Core.specs.pass={5,95,false,1};Core.specs.gain_mid={-60,12,false,1}
 -- Decimal precision is shared by numeric entry, dragging, and waveform editing.
-Core.precision={offset=0,slice=0,slice_end=0,interval0=0,interval1=0,gap=0,fade=0,count=0,depth=0,pan0=0,pan1=0,pass=0,pitch0=2,pitch1=2,bend0=2,bend_mid=2,bend1=2,gain0=1,gain_mid=1,gain1=1,trem0=1,trem1=1,curve=2}
+Core.precision={slice_fade_in=2,slice_fade_out=2,offset=0,slice=0,slice_end=0,interval0=0,interval1=0,gap=0,fade=0,count=0,depth=0,pan0=0,pan1=0,pass=0,pitch0=2,pitch1=2,bend0=2,bend_mid=2,bend1=2,gain0=1,gain_mid=1,gain1=1,trem0=1,trem1=1,curve=2}
 function Core.quantize(key,value,nearest)
  local digits=Core.precision[key];if not digits then return value end
  local m=10^digits;local n=abs(value)*m
@@ -1249,10 +1277,10 @@ function Core.number_text(key,value)
 end
 function Core.fine_adjustment(key,spec)
  local step=spec and spec[4] or 1
- return step<1 and (Core.precision[key] or 0)>0
+ return (step<1 or key=='slice_fade_in' or key=='slice_fade_out') and (Core.precision[key] or 0)>0
 end
-Core.chaos_base={retrigger_on=true,tail_on=true,flyby=false,bend_mid=7,pass=50,gain_mid=0,vary_length=false,slice_end=85,count=7,offset=0,slice=85,interval0=100,interval1=100,gap=10,pitch0=0,pitch1=0,curve=1,fade=2,bend0=0,bend1=0,trem0=0,trem1=0,depth=0,pan0=0,pan1=0,gain0=0,gain1=0,pattern=1,tail=1,motion=false}
-Core.defaults={retrigger_on=true,tail_on=true,flyby=true,bend_mid=-13,pass=35,gain_mid=-3,vary_length=true,slice_end=25,count=16,offset=0,slice=120,interval0=180,interval1=32,gap=3,pitch0=-7,pitch1=12,curve=1.7,fade=2,bend0=0,bend1=-10,trem0=0,trem1=12.5,depth=90,pan0=0,pan1=0,gain0=0,gain1=0,pattern=3,tail=1,motion=true}
+Core.chaos_base={retrigger_on=true,tail_on=true,flyby=false,bend_mid=7,pass=50,gain_mid=0,vary_length=false,slice_end=85,count=7,offset=0,slice_fade_in=.5,slice_fade_out=.5,slice=85,interval0=100,interval1=100,gap=10,pitch0=0,pitch1=0,curve=1,fade=2,bend0=0,bend1=0,trem0=0,trem1=0,depth=0,pan0=0,pan1=0,gain0=0,gain1=0,pattern=1,tail=1,motion=false}
+Core.defaults={retrigger_on=true,tail_on=true,flyby=true,bend_mid=-13,pass=35,gain_mid=-3,vary_length=true,slice_end=25,count=16,offset=0,slice_fade_in=.5,slice_fade_out=.5,slice=120,interval0=180,interval1=32,gap=3,pitch0=-7,pitch1=12,curve=1.7,fade=2,bend0=0,bend1=-10,trem0=0,trem1=12.5,depth=90,pan0=0,pan1=0,gain0=0,gain1=0,pattern=3,tail=1,motion=true}
 function Core.settings()
  local s={};for k,v in pairs(Core.defaults) do s[k]=v end;return s
 end
@@ -1301,6 +1329,7 @@ function Core.chaos(mode,duration,sr,random)
   for key,sp in pairs(Core.specs) do s[key]=range(sp[1],sp[2]) end
   for key,value in pairs(Core.defaults) do if type(value)=='boolean' then s[key]=coin() end end
   s.count=integer(1,128);s.pattern=integer(1,4);s.tail=integer(1,2)
+  s.slice_fade_in=range(0,2);s.slice_fade_out=range(0,2)
   -- Bound the aggregate repetition duration, not merely each individual field.
   local max_interval=min(60000,240000/s.count)
   s.interval0=range(1,max_interval);s.interval1=range(1,max_interval)
@@ -1404,7 +1433,7 @@ function Core.plan(s,duration,sr)
   local audible=min(eventspan/rate,slot-s.gap/1000)
   assert(audible>=2/sr,'無音時間が間隔以上です。間隔を広げるか無音時間を短くしてください。')
   local reverse=s.pattern==2 or s.pattern==3 and i%2==0 or s.pattern==4 and (i-1)%4>=2
-  events[#events+1]={start=at,len=audible,source=off,span=eventspan,rate=rate,reverse=reverse,pitch=pitch,slot=slot,end_fade=min(.0005,audible*.25)}
+  events[#events+1]={start=at,len=audible,source=off,span=eventspan,rate=rate,reverse=reverse,pitch=pitch,slot=slot,fade_in=min(s.slice_fade_in/1000,audible*.5),fade_out=min(s.slice_fade_out/1000,audible*.5)}
   at=at+slot
  end
  if s.tail_on~=false then
@@ -1446,11 +1475,11 @@ end
 function Core.gains(e,t,s)
  local u=clamp(t/e.len,0,1);local edge=e.tail and min(s.fade/1000,e.len/2) or 0
  local gain=edge>0 and min(1,t/edge,(e.len-t)/edge) or 1
- -- De-click only the end of each retrigger; leave its attack and tail controls intact.
- -- Half-cosine reaches silence smoothly over 0.5 ms (at most 25% of a tiny slice).
+ -- Half-cosine de-click at both retrigger edges; tail uses its own fade control.
  if not e.tail then
-  local fade=e.end_fade or min(.0005,e.len*.25);local remaining=e.len-t
-  if fade>0 and remaining<fade then gain=.5-.5*math.cos(math.pi*clamp(remaining/fade,0,1)) end
+  local fade_in,fade_out=e.fade_in,e.fade_out
+  if fade_in>0 and t<fade_in then gain=.5-.5*math.cos(math.pi*clamp(t/fade_in,0,1))
+  elseif fade_out>0 and e.len-t<fade_out then gain=.5-.5*math.cos(math.pi*clamp((e.len-t)/fade_out,0,1)) end
  end
  local pan=0
  if e.tail and s.motion then
@@ -1701,7 +1730,7 @@ local C={
   hover={0.430,0.790,1.000}, warn={1.000,0.755,0.490}, red={1.000,0.230,0.300}, quiet={0.300,0.360,0.440}
 }
 local fonts={"Yu Gothic UI","Segoe UI","Consolas"}
-if R.GetOS():match("OSX") then fonts={"Hiragino Sans","Helvetica Neue","Menlo"} end
+if BLT_MAC then fonts={"Hiragino Sans","Helvetica Neue","Menlo"} end
 if R.GetOS():match("Linux") then fonts={"sans-serif","sans-serif","monospace"} end
 
 local scale,ox,oy=1,0,0
@@ -1842,7 +1871,7 @@ local Chrome={window=nil,mouseDown=false,drag=nil,resize=nil,mouseActive=false,r
   isWindows=R.GetOS():match("Win")~=nil,resizeEdge=6,resizeCornerBand=8,resizeCornerSpan=24,resizeTopLeftGuard=30,resizeTopRightGuard=110,
   tooltipHover=nil,tooltipSince=0,tooltipVisible=false,tooltipDelay=.70,
   cursorId={we=32644,ns=32645,nwse=32642,nesw=32643,arrow=32512}}
-Chrome.font=Chrome.isWindows and "Segoe UI" or (R.GetOS():match("OSX") and "Helvetica Neue" or "sans-serif")
+Chrome.font=Chrome.isWindows and "Segoe UI" or (BLT_MAC and "Helvetica Neue" or "sans-serif")
 local CHROME_DEFAULT={
   mint={Chrome.mint[1],Chrome.mint[2],Chrome.mint[3]},
   ice={Chrome.ice[1],Chrome.ice[2],Chrome.ice[3]},
@@ -2311,7 +2340,7 @@ end
 local function apply_custom_window_style(target_w,target_h)
   local hwnd=gfx_window_handle()
   if not hwnd then return false end
-  local ok,l,t=R.JS_Window_GetRect(hwnd)
+  local ok,l,t=WindowGeometry.JS_Window_GetRect(hwnd)
   if not R.JS_Window_SetStyle(hwnd,"POPUP") then return false end
   if ok then BLT.position(hwnd,l,t,target_w,target_h,"","") end
   return true
@@ -2320,7 +2349,7 @@ end
 local function reset_window_size()
   local hwnd=gfx_window_handle()
   if not hwnd then return end
-  local ok,l,t=R.JS_Window_GetRect(hwnd)
+  local ok,l,t=WindowGeometry.JS_Window_GetRect(hwnd)
   if ok then BLT.position(hwnd,l,t,W,H+Chrome.titleH,"","") end
   BLT.store(SECTION,"window_w",tostring(W),true)
   BLT.store(SECTION,"window_h",tostring(H+Chrome.titleH),true)
@@ -2386,9 +2415,9 @@ local function titlebar_cleanup() set_resize_cursor(nil) end
 local function begin_window_resize(mode)
   local hwnd=gfx_window_handle()
   if not hwnd or not mode then return false end
-  local ok,l,t,r,b=R.JS_Window_GetRect(hwnd)
+  local ok,l,t,r,b=WindowGeometry.JS_Window_GetRect(hwnd)
   if not ok then return false end
-  local sx,sy=R.GetMousePosition()
+  local sx,sy=WindowGeometry.GetMousePosition()
   Chrome.resize={mode=mode,mouseX=sx,mouseY=sy,left=l,top=t,right=r,bottom=b}
   Chrome.drag=nil
   return true
@@ -2399,7 +2428,7 @@ local function update_window_resize()
   if not d then return end
   local hwnd=gfx_window_handle()
   if not hwnd then Chrome.resize=nil; return end
-  local sx,sy=R.GetMousePosition()
+  local sx,sy=WindowGeometry.GetMousePosition()
   local dx,dy=sx-d.mouseX,sy-d.mouseY
   local l,t,r,b=d.left,d.top,d.right,d.bottom
   if d.mode:find("l",1,true) then l=math.min(d.left+dx,r-Chrome.minW) end
@@ -2768,9 +2797,9 @@ local function choose(id,x,y,w,text,key,value)
  button(id,x,y,w,30,text,function() A[key]=value;UI.refresh() end,text,A.panel_enabled~=false and not (key=='tail' and value==2 and A.retrigger_on==false),A[key]==value and C.accent2 or nil)
  if A[key]==value and A.panel_enabled~=false then rect(x+w*.36,y-2,w*.28,4,C.accent2,.85);rect(x,y,w,30,C.accent,.1) end
 end
-local function field_label(key,x,y,w,text,enabled)
+local function field_label(key,x,y,w,text,enabled,size)
  enabled=enabled~=false and A.panel_enabled~=false
- label(text,x,y,14,enabled==false and C.faint or C.muted,1,w,19)
+ label(text,x,y,size or 14,enabled==false and C.faint or C.muted,1,w,19)
  UI.field(key,x,y+20,w,enabled)
 end
 local function checkbox(id,x,y,w,text,key)
@@ -2836,7 +2865,8 @@ function UI.draw(now)
  panel(20,354,395,498,'スライス＆リトリガー','REPEAT ENGINE')
  panel_switch('retrigger_on',307,360);A.panel_enabled=A.retrigger_on
  group_label('切り出す範囲',36,410,363)
- field_label('offset',36,436,363,'切り出し開始 ms')
+ field_label('offset',36,436,172,'切り出し開始 ms')
+ field_label('slice_fade_in',227,436,80,'頭フェード ms',nil,12);field_label('slice_fade_out',319,436,80,'後フェード ms',nil,12)
  field_label('slice',36,488,172,'最初の長さ ms');field_label('slice_end',227,488,172,'最後の長さ ms',A.vary_length)
  checkbox('vary_length',36,540,363,'最初 → 最後で長さを変化させる','vary_length')
  group_label('発音の並びと間隔',36,570,363)
@@ -2874,7 +2904,7 @@ function UI.draw(now)
  PrimaryButton.draw(PrimaryButton.painter,ex,ey,ew,eh,A.busy and '生成中止' or '生成実行',A.busy and 'GENERATING' or 'EXECUTE',ready or A.busy,A.busy,A.busy and A.progress or nil,hot,pressed=='execute' and (gfx.mouse_cap&1)~=0,R.time_precise(),BLT.host.active())
  register('execute',ex,ey,ew,eh,UI.execute,A.busy and 'もう一度押すと生成を中止します' or '波形ピークを作成後、同じトラックの右側の空きへ1秒空けて配置します',ready or A.busy)
 
- BLT.footer(Core.display_message(A.source_problem or A.problem or A.status),A.source_problem or A.problem or A.warning,W,H+22,'0.5.0')
+ BLT.footer(Core.display_message(A.source_problem or A.problem or A.status),A.source_problem or A.problem or A.warning,W,H+22,'0.5.2')
  flush_text_queue();custom_titlebar();gfx.update();A.content_dirty=false;redraw_dirty=false
 end
 function UI.interact()
@@ -2965,7 +2995,8 @@ if not chrome_ok then Language.mb(Core.display_message(chrome_err),'BLT CR MINIM
 local ww=clamp(tonumber(R.GetExtState(SECTION,'window_w')) or W,Chrome.minW,2200)
 local wh=clamp(tonumber(R.GetExtState(SECTION,'window_h')) or H+Chrome.titleH,Chrome.minH,1800)
 local wx,wy=tonumber(R.GetExtState(SECTION,'window_x')),tonumber(R.GetExtState(SECTION,'window_y'))
-gfx.ext_retina=1
+-- Match native window/input coordinates in logical points on Mac.
+gfx.ext_retina=BLT_MAC and 0 or 1
 if finite(wx) and finite(wy) then gfx.init(Chrome.windowTitle,ww,wh,0,wx,wy) else gfx.init(Chrome.windowTitle,ww,wh,0) end
 if not apply_custom_window_style(ww,wh) then gfx.quit();Language.mb('カスタムアプリバーを初期化できません。','BLT CR MINIM',0);return end
 if Chameleon.enabled then Chameleon.refresh(true) end

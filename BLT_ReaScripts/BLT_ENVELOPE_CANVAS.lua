@@ -1,10 +1,35 @@
 -- @description ENVELOPE CANVAS
--- @version 0.5.0
+-- @version 0.5.10
 -- @author Balrulu
 -- @changelog
---   Beta Test
+--   Unify Mac font and display scaling; fix floating TRACE collapse detection.
 -- @about
 --   BLT SERIES Beta TEST UPLOAD
+
+-- BLT window geometry 1.0.0. Embedded; screen coordinates only.
+local function create_window_geometry(api,graphics)
+ local osname=api.GetOS() or ''
+ if not osname:match('OSX') and not osname:match('macOS') then return api end
+ local G=setmetatable({}, {__index=api})
+ -- Internal screen Y points downward. Client coordinates remain untouched.
+ function G.GetMousePosition()
+  local x,y=api.GetMousePosition();return x,-y
+ end
+ function G.JS_Window_GetRect(hwnd)
+  local ok,l,t,r,b=api.JS_Window_GetRect(hwnd)
+  if not ok then return ok,l,t,r,b end
+  return ok,l,-math.max(t,b),r,-math.min(t,b)
+ end
+ function G.JS_Window_SetPosition(hwnd,x,y,w,h,z,flags)
+  if graphics and graphics.dock and (graphics.dock(-1)&1)~=0 then return false end
+  -- SWELL SetWindowPos uses a bottom-left origin for floating macOS windows.
+  return api.JS_Window_SetPosition(hwnd,x,-y-h,w,h,z,flags)
+ end
+ return G
+end
+
+local WindowGeometry=create_window_geometry(reaper,gfx)
+local BLT_MAC=(reaper.GetOS() or ''):match('OSX')~=nil or (reaper.GetOS() or ''):match('macOS')~=nil
 
 -- BLT language runtime 1.1.0. Embed with an app-specific catalog; no runtime file I/O.
 local function create_language(api,section,catalog)
@@ -62,6 +87,18 @@ end
 
 -- Latest embedded application catalog.
 local LanguageCatalog={en={
+ ["BLTフィルターのReaEQを確認できません。"]="Cannot identify the managed ReaEQ.",
+ ["ReaEQの周波数範囲を取得できません。"]="Cannot read the ReaEQ frequency range.",
+ ["BLTフィルターが重複しています。FXチェーンを確認してください。"]="Duplicate BLT filters. Check the FX chain.",
+ ["ReaEQ (Cockos) を追加できません。"]="Cannot add ReaEQ (Cockos).",
+ ["ReaEQの初期状態を設定できません。"]="Cannot initialize ReaEQ.",
+ ["ReaEQのバンドを設定できません。"]="Cannot configure ReaEQ bands.",
+ ["ReaEQのチャンネルを設定できません。"]="Cannot configure ReaEQ channels.",
+ ["ReaEQの識別情報を保存できません。"]="Cannot store the ReaEQ identity.",
+ ["旧BLTフィルターを置換できません。"]="Cannot replace the old BLT filter.",
+ ["ReaEQの周波数を設定できません。"]="Cannot set the ReaEQ frequency.",
+ [" ReaEQの周波数範囲に収めました。"]=" Clamped to the ReaEQ frequency range.",
+
  ["ファクトリーデフォルト"]="Factory Default",
  ["ファクトリーデフォルトは変更できません。"]="Factory Default is read-only.",
  ["「"]="\"",
@@ -112,8 +149,6 @@ local LanguageCatalog={en={
  ["専用フィルターの同名ファイルに異なる内容があります："]="Different filter content exists at: ",
  ["専用フィルターを保存できません："]="Cannot save dedicated filter: ",
  ["専用フィルターの保存に失敗しました："]="Failed to save dedicated filter: ",
- ["重複した専用フィルターを整理できません。"]="Cannot remove duplicate dedicated filters.",
- ["専用フィルターを読み込めません。FXブラウザーの再スキャン後に再生成してください。"]="Cannot load dedicated filter. Rescan FX browser, then generate again.",
  ["HPの有効状態を設定できません。"]="Cannot set HP enabled state.",
  ["LPの有効状態を設定できません。"]="Cannot set LP enabled state.",
  ["フィルターのカーブを作成できません。"]="Cannot create filter curves.",
@@ -150,6 +185,10 @@ local LanguageCatalog={en={
  ["矩形波"]="Square",
  ["三角波"]="Triangle",
  ["水平線"]="Flat",
+ ["ランダムステップ"]="Random Step",
+ ["周期：一定"]="Constant",
+ ["アッチェレランド"]="Accelerando",
+ ["リタルダンド"]="Ritardando",
  ["振幅：一定"]="Constant",
  ["クレッシェンド"]="Crescendo",
  ["デクレッシェンド"]="Decrescendo",
@@ -190,11 +229,10 @@ local LanguageCatalog={en={
  ["左"]="Left",
  ["両側"]="Both",
  ["右"]="Right",
- ["周期数"]="Cycles",
- ["回"]=" cycles",
+ ["周期幅"]="Period",
  ["最大高さ"]="Max. height",
  ["Alt：位相反転"]="Alt: invert phase",
- ["波形からカーブ取得"]="Curve from waveform",
+ ["波形の既存カーブ取得"]="Read existing curve",
  ["ランダム生成"]="Randomize",
  ["戻す"]="Undo",
  ["やり直す"]="Redo",
@@ -482,9 +520,9 @@ local function font(size,kind,bold) host.font(size,kind,bold) end
 function B.position(hwnd,x,y,w,h,a,b)
  local old=B.lastRect
  if old and old[1]==hwnd and old[2]==x and old[3]==y and old[4]==w and old[5]==h then return true end
- local ok,l,t,r,bt=R.JS_Window_GetRect(hwnd)
+ local ok,l,t,r,bt=WindowGeometry.JS_Window_GetRect(hwnd)
  if ok and l==x and t==y and r-l==w and bt-t==h then B.lastRect={hwnd,x,y,w,h};return true end
- local done=R.JS_Window_SetPosition(hwnd,x,y,w,h,a,b)
+ local done=WindowGeometry.JS_Window_SetPosition(hwnd,x,y,w,h,a,b)
  if done then B.lastRect={hwnd,x,y,w,h} end;return done
 end
 function B.store(section,key,value,persist)
@@ -965,9 +1003,9 @@ local function custom_titlebar(blocked)
     elseif inBar and not (host.transition and host.transition()) then
       local hwnd=gfx_window_handle()
       if hwnd then
-        local ok,l,t,r,b=R.JS_Window_GetRect(hwnd)
+        local ok,l,t,r,b=WindowGeometry.JS_Window_GetRect(hwnd)
         if ok then
-          local sx,sy=R.GetMousePosition()
+          local sx,sy=WindowGeometry.GetMousePosition()
           Chrome.drag={mouseX=sx,mouseY=sy,left=l,top=t,width=r-l,height=b-t,lastX=l,lastY=t}
         end
       end
@@ -976,7 +1014,7 @@ local function custom_titlebar(blocked)
 
   if down and Chrome.resize then update_window_resize() end
   if down and Chrome.drag and not Chrome.resize then
-    local d=Chrome.drag;local sx,sy=R.GetMousePosition()
+    local d=Chrome.drag;local sx,sy=WindowGeometry.GetMousePosition()
     local x,y=d.left+(sx-d.mouseX),d.top+(sy-d.mouseY)
     local hwnd=(x~=d.lastX or y~=d.lastY) and gfx_window_handle() or nil
     if hwnd and B.position(hwnd,x,y,d.width,d.height,"","") then
@@ -1198,7 +1236,7 @@ end
 return B
 end)()
 
-local Core={VERSION='0.5.0',SECTION='BLT_CURVE_CANVAS',MAX_POINTS=1024}
+local Core={VERSION='0.5.10',SECTION='BLT_CURVE_CANVAS',MAX_POINTS=1024}
 local min,max,abs,floor,ceil=math.min,math.max,math.abs,math.floor,math.ceil
 local function clamp(v,a,b) return max(a,min(b,v)) end
 local function finite(v) return type(v)=='number' and v==v and abs(v)<math.huge end
@@ -1206,14 +1244,15 @@ function Core.copy(t)
  if type(t)~='table' then return t end
  local out={};for k,v in pairs(t) do out[k]=Core.copy(v) end;return out
 end
+Core.FILTER_MAX_VALUE=2*math.log(1200)/math.log(4800)-1
 function Core.new_layers()
  local t={};for _,key in ipairs({'pitch','tape','speed','volume'}) do t[key]={points={{x=0,y=0},{x=1,y=0}},kind='linear',enabled=true,
   min_y=key=='pitch' and -2 or -1,max_y=(key=='pitch' or key=='volume') and 2 or 1} end
- for _,key in ipairs({'highpass','lowpass'}) do local y=key=='highpass' and -1 or 1
-  t[key]={points={{x=0,y=y},{x=1,y=y}},kind='linear',enabled=false,filter=true,min_y=-1,max_y=1,neutral=y}
+ for _,key in ipairs({'highpass','lowpass'}) do local y=key=='highpass' and -1 or Core.FILTER_MAX_VALUE
+  t[key]={points={{x=0,y=y},{x=1,y=y}},kind='linear',enabled=false,filter=true,min_y=-1,max_y=Core.FILTER_MAX_VALUE,neutral=y}
  end;return t
 end
-function Core.frequency(y) return 20*4800^((clamp(y,-1,1)+1)/2) end
+function Core.frequency(y) return min(24000,20*4800^((clamp(y,-1,Core.FILTER_MAX_VALUE)+1)/2)) end
 function Core.smoothness(c)
  if c.kind~='smooth' then return 0 end
  return finite(c.smoothness) and clamp(c.smoothness,0,2) or 1
@@ -1260,6 +1299,9 @@ function Core.interpolate(c,x)
  return curved+(eased-curved)*(amount-1)
 end
 function Core.value(c,x)
+ if c.link_source then
+  return clamp(Core.value(c.link_source,x)+c.link_offset,c.min_y,c.max_y)
+ end
  if #c.points==0 then return 0 end
  local value=Core.interpolate(c,x)
  return c.filter and Core.filter_value(value) or value
@@ -1326,7 +1368,39 @@ end
 function Core.compact_pattern(points)
  local c={points=points};Core.simplify(c,.0015);return c.points
 end
-function Core.pattern(kind,cycles,height,envelope)
+function Core.pattern(kind,cycles,height,envelope,random_levels,tempo)
+ if tempo and tempo~=1 then
+  local points=Core.pattern(kind,cycles,height,1,random_levels)
+  for _,p in ipairs(points) do
+   local phase=p.x
+   -- Invert integrated speed: 0.5 -> 1.5 (or 1.5 -> 0.5), mean 1.
+   local x=tempo==2 and 2*phase/(.5+math.sqrt(.25+2*phase)) or 2*phase/(1.5+math.sqrt(2.25-2*phase))
+   p.x=x;p.y=p.y*(envelope==2 and x or envelope==3 and 1-x or 1)
+  end
+  return points
+ end
+ if kind=='random_step' then
+  local count=max(1,ceil(cycles-1e-12));local levels={}
+  for i=1,count do
+   local v=random_levels and random_levels[i]
+   levels[i]=finite(v) and clamp(v,-1,1) or math.random()*2-1
+  end
+  local function value(i)
+   local a=(i-1)/cycles;local b=min(i/cycles,1);local center=(a+b)/2
+   local gain=envelope==2 and center or envelope==3 and 1-center or 1
+   return levels[i]*height*gain
+  end
+  local out={{x=0,y=value(1)}}
+  for i=1,count-1 do
+   local x=i/cycles
+   if x<1 then
+    out[#out+1]={x=max(0,x-min(1e-5,.01/cycles)),y=value(i)}
+    out[#out+1]={x=x,y=value(i+1)}
+   end
+  end
+  out[#out+1]={x=1,y=value(count)}
+  return Core.compact_pattern(out)
+ end
  if kind=='horizontal' then return {{x=0,y=0},{x=1,y=0}} end
  -- Piecewise-linear waves need only extrema or the two sides of a jump.
  if kind=='triangle' or kind=='saw' or kind=='square' then
@@ -1394,6 +1468,7 @@ function Core.simplify(c,tolerance)
 end
 function Core.constant(c)
  if not c.enabled then return 0 end
+ if c.link_source and Core.constant(c.link_source)==nil then return nil end
  local y=c.points[1].y
  for _,p in ipairs(c.points) do if abs(p.y-y)>1e-10 then return nil end end
  return y
@@ -1477,7 +1552,18 @@ end
 function Core.chunk(item)
  local ok,s=R.GetItemStateChunk(item,'',false);if not ok or not s or s=='' then error('対象の復元データを取得できません。',0) end;return s
 end
-function Core.signature(s) return s:gsub('\nSEL [^\n]*','\nSEL 0') end
+function Core.signature(s)
+ local out,stack={},{}
+ for line in (s:gsub('\r\n','\n')..'\n'):gmatch('(.-)\n') do
+  local token=line:match('^%s*(%S+)');local parent=stack[#stack]
+  local ui_only=(parent=='ITEM' and token=='SEL') or
+   (parent=='TAKEFX' and (token=='SHOW' or token=='LASTSEL' or token=='DOCKED' or token=='FLOATPOS'))
+  if not ui_only then out[#out+1]=line end
+  if token and token:sub(1,1)=='<' then stack[#stack+1]=token:sub(2)
+  elseif token=='>' then stack[#stack]=nil end
+ end
+ return table.concat(out,'\n')
+end
 function Core.selected(project)
  local t={};for i=0,R.CountSelectedMediaItems(project)-1 do t[#t+1]=R.GetSelectedMediaItem(project,i) end;return t
 end
@@ -1564,136 +1650,153 @@ function Core.hide_take_fx(take,fx)
  if type(R.TakeFX_SetOpen)=='function' then pcall(R.TakeFX_SetOpen,take,fx,false) end
  if type(R.TakeFX_Show)=='function' then pcall(R.TakeFX_Show,take,fx,2);pcall(R.TakeFX_Show,take,fx,0) end
 end
-Core.FILTER_JSFX=[==[desc:BLT Envelope Canvas Filter
-// 12 dB/octave Butterworth HP + LP, log cutoff, no external dependencies.
-slider1:0<0,1,0.000001>HP cutoff (20 Hz to 96 kHz, log)
-slider2:1<0,1,0.000001>LP cutoff (20 Hz to 96 kHz, log)
-slider3:0<0,1,1{Off,On}>High pass
-slider4:0<0,1,1{Off,On}>Low pass
-
-@init
-function automation_start(idx) instance(index,value,target,endpos,step) (
- index=idx; value=slider(index);
- endpos=slider_next_chg(index,target);
- endpos>0 ? step=(target-value)/endpos : (endpos=samplesblock; step=0;);
-);
-function automation_tick(pos) instance(index,value,target,endpos,step) local(result) (
- pos>=endpos ? (
-  value=target;
-  endpos=slider_next_chg(index,target);
-  endpos>pos ? step=(target-value)/(endpos-pos) : (endpos=samplesblock; step=0;);
- );
- result=value; value+=step; result;
-);
-function coefficients(v) instance(g,a) local(f) (
- f=min(20*exp(log(4800)*min(1,max(0,v))),srate*0.45);
- g=tan($pi*f/srate); a=1/(1+g*(g+sqrt(2)));
-);
-smh=slider1; sml=slider2;
-hp.coefficients(smh); lp.coefficients(sml);
-lasth=smh; lastl=sml; tick=0;
-smooth=1-exp(-1/(srate*0.0005));
-
-@block
-hp.automation_start(1); lp.automation_start(2);
-samplepos=0;
-channels=min(64,max(1,num_ch));
-
-@sample
-hv=hp.automation_tick(samplepos); lv=lp.automation_tick(samplepos);
-smh+=smooth*(hv-smh); sml+=smooth*(lv-sml);
-tick<=0 ? (
- abs(smh-lasth)>0.0000000001 ? (hp.coefficients(smh); lasth=smh;);
- abs(sml-lastl)>0.0000000001 ? (lp.coefficients(sml); lastl=sml;);
- tick=16;
-);
-tick-=1; ch=0;
-loop(channels,
- p=ch*4; x=spl(ch);
- slider3>=0.5 ? (
-  v1=hp.a*(p[0]+hp.g*(x-p[1])); v2=p[1]+hp.g*v1;
-  p[0]=2*v1-p[0]; p[1]=2*v2-p[1]; x=x-sqrt(2)*v1-v2;
- ) : (p[0]=0; p[1]=0;);
- slider4>=0.5 ? (
-  v1=lp.a*(p[2]+lp.g*(x-p[3])); v2=p[3]+lp.g*v1;
-  p[2]=2*v1-p[2]; p[3]=2*v2-p[3]; x=v2;
- ) : (p[2]=0; p[3]=0;);
- spl(ch)=x; ch+=1;
-);
-samplepos+=1;
-]==]
-Core.FILTER_PATH='BLT/BLT_Envelope_Canvas_Filter.jsfx'
-function Core.install_filter()
- local dir=R.GetResourcePath()..'/Effects/BLT'
- local path=R.GetResourcePath()..'/Effects/'..Core.FILTER_PATH
- local file=io.open(path,'rb')
- if file then
-  local existing=file:read('*a');file:close()
-  if existing==Core.FILTER_JSFX then return end
-  error('専用フィルターの同名ファイルに異なる内容があります：'..path,0)
- end
- R.RecursiveCreateDirectory(dir,0)
- local err;file,err=io.open(path,'wb')
- if not file then error('専用フィルターを保存できません：'..tostring(err),0) end
- local ok,write_err=file:write(Core.FILTER_JSFX);local closed,close_err=file:close()
- if not ok or not closed then os.remove(path);error('専用フィルターの保存に失敗しました：'..tostring(write_err or close_err),0) end
-end
+Core.FILTER_TAG='BLT Envelope Canvas HP / LP [ReaEQ]'
+Core.FILTER_OWNER='P_EXT:BLT_EC_FILTER_GUIDS'
 function Core.find_filters(take)
+ local _,saved=R.GetSetMediaItemTakeInfo_String(take,Core.FILTER_OWNER,'',false)
+ local owned={};for id in tostring(saved or ''):gmatch('[^|]+') do owned[id]=true end
  local found={}
  for fx=0,R.TakeFX_GetCount(take)-1 do
   local ok,id=R.TakeFX_GetNamedConfigParm(take,fx,'fx_ident')
-  if ok then
-   id=tostring(id):gsub('\\','/'):lower():gsub('^js:%s*','')
-   if ('/'..id):match('/blt/blt_envelope_canvas_filter%.jsfx$') then found[#found+1]={fx=fx} end
+  id=ok and tostring(id):gsub('\\','/'):lower():gsub('^js:%s*','') or ''
+  local legacy=('/'..id):match('/blt/blt_envelope_canvas_filter%.jsfx$') or ('/'..id):match('/blt/blt_curve_canvas_filter%.jsfx$')
+  local _,name=R.TakeFX_GetNamedConfigParm(take,fx,'renamed_name')
+  local guid=R.TakeFX_GetFXGUID(take,fx)
+  local ours=owned[guid] or name==Core.FILTER_TAG
+  if legacy then found[#found+1]={fx=fx,legacy=true}
+  elseif ours then
+   local eq=R.TakeFX_GetNamedConfigParm(take,fx,'BANDTYPE0')
+   assert(eq,'BLTフィルターのReaEQを確認できません。')
+   found[#found+1]={fx=fx,guid=guid}
   end
  end
  return found
 end
-function Core.create_filter_eq(v,layers,existing)
- Core.install_filter()
- existing=existing or Core.find_filters(v.take)
- local fx
- if #existing>0 then
-  -- Delete only this tool's duplicate inserts, from the end to keep indices stable.
-  fx=existing[1].fx
-  for i=#existing,2,-1 do assert(R.TakeFX_Delete(v.take,existing[i].fx),'重複した専用フィルターを整理できません。') end
-
- else fx=R.TakeFX_AddByName(v.take,'JS: '..Core.FILTER_PATH,1) end
- if fx<0 then error('専用フィルターを読み込めません。FXブラウザーの再スキャン後に再生成してください。',0) end
- Core.hide_take_fx(v.take,fx)
- -- Remove previous automation even when the new cutoff is constant or disabled.
- for param=0,3 do
-  local env=R.TakeFX_GetEnvelope(v.take,fx,param,false)
-  if env then R.DeleteEnvelopePointRange(env,-1e20,1e20);R.Envelope_SortPoints(env) end
+-- Calibrate against the installed ReaEQ; no parameter writes or file I/O.
+-- The lookup is built only when applying/reading curves, never during drawing.
+function Core.filter_mapping(take,fx,param)
+ local values={}
+ for i=0,512 do
+  local ok,text=R.TakeFX_FormatParamValueNormalized(take,fx,param,i/512)
+  local hz=ok and tonumber(tostring(text):match('[-+]?%d+%.?%d*'))
+  if hz and tostring(text):lower():find('khz',1,true) then hz=hz*1000 end
+  assert(finite(hz) and hz>=0 and (i==0 or hz>=values[i]),'ReaEQの周波数範囲を取得できません。')
+  values[i+1]=hz
  end
- R.TakeFX_SetEnabled(v.take,fx,true)
- assert(R.TakeFX_SetParamNormalized(v.take,fx,2,layers.highpass.enabled and 1 or 0),'HPの有効状態を設定できません。')
- assert(R.TakeFX_SetParamNormalized(v.take,fx,3,layers.lowpass.enabled and 1 or 0),'LPの有効状態を設定できません。')
- return fx
+ assert(values[513]>values[1],'ReaEQの周波数範囲を取得できません。')
+ local function hz(n)
+  local x=clamp(n,0,1)*512;local i=min(511,floor(x));local f=x-i
+  return values[i+1]+(values[i+2]-values[i+1])*f
+ end
+ local function normalized(freq)
+  if freq<=values[1] then return 0 end;if freq>=values[513] then return 1 end
+  local lo,hi=1,513
+  while hi-lo>1 do local mid=floor((lo+hi)/2);if values[mid]<freq then lo=mid else hi=mid end end
+  return ((lo-1)+(freq-values[lo])/(values[hi]-values[lo]))/512
+ end
+ return {hz=hz,normalized=normalized,low=values[1],high=values[513]}
+end
+-- ReaEQ can apply a named setting while returning false from the setter.
+-- Verify the actual value instead of treating that return value as failure.
+function Core.set_filter_band(take,fx,key,value)
+ R.TakeFX_SetNamedConfigParm(take,fx,key,tostring(value))
+ local ok,actual=R.TakeFX_GetNamedConfigParm(take,fx,key)
+ assert(ok and tonumber(actual)==value,'ReaEQのバンドを設定できません。')
+end
+function Core.create_filter_eq(v,layers,existing)
+ existing=existing or Core.find_filters(v.take)
+ local legacy,managed={},{}
+ for _,f in ipairs(existing) do if f.legacy then legacy[#legacy+1]=f else managed[#managed+1]=f end end
+ -- A mixture or duplicate legacy insert has no unambiguous curve to replace.
+ assert(#legacy<=1 and (#legacy==0 or #managed==0),'BLTフィルターが重複しています。FXチェーンを確認してください。')
+ local channels=v.channels or 2
+ local mode=R.GetMediaItemTakeInfo_Value(v.take,'I_CHANMODE')
+ if mode>=2 then channels=mode>=67 and 2 or 1 end
+ local count=math.ceil(min(64,channels)/2)
+ local nch=R.GetMediaItemTakeInfo_Value(v.take,'I_TAKEFX_NCH')
+ if count*2>nch then assert(R.SetMediaItemTakeInfo_Value(v.take,'I_TAKEFX_NCH',count*2),'ReaEQのチャンネルを設定できません。') end
+ local result={}
+ for i=1,count do
+  local fx=managed[i] and managed[i].fx or R.TakeFX_AddByName(v.take,'ReaEQ (Cockos)',-1)
+  assert(fx and fx>=0,'ReaEQ (Cockos) を追加できません。')
+  Core.hide_take_fx(v.take,fx)
+  -- Discard automation only on this tool's managed EQ before rebuilding it.
+  for param=0,R.TakeFX_GetNumParams(v.take,fx)-1 do
+   local env=R.TakeFX_GetEnvelope(v.take,fx,param,false)
+   if env then R.DeleteEnvelopePointRange(env,-1e20,1e20);R.Envelope_SortPoints(env) end
+   for _,kind in ipairs({'lfo','acs','plink'}) do
+    R.TakeFX_SetNamedConfigParm(v.take,fx,'param.'..param..'.'..kind..'.active','0')
+   end
+  end
+  assert(R.TakeFX_SetPresetByIndex(v.take,fx,-2),'ReaEQの初期状態を設定できません。')
+  -- BANDTYPE uses ReaEQ's native enum, not TrackFX_GetEQParam's enum.
+  Core.set_filter_band(v.take,fx,'BANDTYPE0',4)
+  Core.set_filter_band(v.take,fx,'BANDTYPE1',3)
+  -- Current ReaEQ defaults include a fifth band. Disable every unused band.
+  for band=0,63 do
+   local exists=R.TakeFX_GetNamedConfigParm(v.take,fx,'BANDTYPE'..band)
+   if not exists then break end
+   local enabled=(band==0 and layers.highpass.enabled) or (band==1 and layers.lowpass.enabled)
+   Core.set_filter_band(v.take,fx,'BANDENABLED'..band,enabled and 1 or 0)
+  end
+  R.TakeFX_SetOffline(v.take,fx,false);R.TakeFX_SetEnabled(v.take,fx,true)
+  for pin=0,1 do
+   local channel=(i-1)*2+pin
+   local low=channel<32 and (1<<channel) or 0;local high=channel>=32 and (1<<(channel-32)) or 0
+   assert(R.TakeFX_SetPinMappings(v.take,fx,0,pin,low,high),'ReaEQのチャンネルを設定できません。')
+   assert(R.TakeFX_SetPinMappings(v.take,fx,1,pin,low,high),'ReaEQのチャンネルを設定できません。')
+  end
+  assert(R.TakeFX_SetNamedConfigParm(v.take,fx,'renamed_name',Core.FILTER_TAG),'ReaEQの識別情報を保存できません。')
+  result[#result+1]={fx=fx,guid=R.TakeFX_GetFXGUID(v.take,fx)}
+ end
+ -- Replace legacy FX at its original chain position; unrelated FX retain order.
+ if #legacy==1 then
+  local dest=legacy[1].fx
+  for i,f in ipairs(result) do
+   R.TakeFX_CopyToTake(v.take,f.fx,v.take,dest+i-1,true)
+  end
+  assert(R.TakeFX_Delete(v.take,dest+#result),'旧BLTフィルターを置換できません。')
+ end
+ -- Disable excess managed pairs rather than deleting user-visible instances.
+ for i=count+1,#managed do R.TakeFX_SetEnabled(v.take,managed[i].fx,false) end
+ local ids={};for _,f in ipairs(result) do assert(f.guid and f.guid~='','ReaEQの識別情報を保存できません。');ids[#ids+1]=f.guid end
+ for i=count+1,#managed do ids[#ids+1]=managed[i].guid end
+ assert(R.GetSetMediaItemTakeInfo_String(v.take,Core.FILTER_OWNER,table.concat(ids,'|'),true),'ReaEQの識別情報を保存できません。')
+ -- Resolve indices again after moving/removing FX.
+ local byid={};for fx=0,R.TakeFX_GetCount(v.take)-1 do byid[R.TakeFX_GetFXGUID(v.take,fx)]=fx end
+ for _,f in ipairs(result) do f.fx=assert(byid[f.guid]) end
+ return result
 end
 function Core.add_filters(v,layers,map,rate,limit,stats)
  local existing=Core.find_filters(v.take)
  if not (layers.highpass.enabled or layers.lowpass.enabled) and #existing==0 then return end
- local fx=Core.create_filter_eq(v,layers,existing)
+ local effects=Core.create_filter_eq(v,layers,existing)
  for band,key in ipairs({'highpass','lowpass'}) do
-  local c=layers[key];local param=band-1
+  local c=layers[key];local param=(band-1)*3
   if c.enabled then
-   local function normalized(u) return (Core.at(layers,key,u)+1)/2 end
-   local fixed=Core.constant(c)
-   assert(R.TakeFX_SetParamNormalized(v.take,fx,param,normalized(0)))
-   if fixed==nil then
-    local points=Core.sample_curve(layers,{key},map,v,rate,nil,normalized,.0002,limit)
-    local reduced;points,reduced=Core.limit_points(points,limit);stats.reduced=stats.reduced or reduced
-    local env=R.TakeFX_GetEnvelope(v.take,fx,param,true);assert(env,'フィルターのカーブを作成できません。')
-    R.DeleteEnvelopePointRange(env,-1e20,1e20)
-    for _,p in ipairs(points) do assert(R.InsertEnvelopePoint(env,p.x,p.y,0,0,false,true)) end
-    R.Envelope_SortPoints(env);stats[key]=#points
+   local mapping=Core.filter_mapping(v.take,effects[1].fx,param)
+   local function normalized(u)
+    local hz=Core.frequency(Core.at(layers,key,u))
+    if hz<mapping.low or hz>mapping.high then stats.filter_clipped=true end
+    return mapping.normalized(hz)
+   end
+   local initial=normalized(0);local points
+   if Core.constant(c)==nil then
+    points=Core.sample_curve(layers,{key},map,v,rate,nil,normalized,.0002,limit)
+    local reduced;points,reduced=Core.limit_points(points,limit);stats.reduced=stats.reduced or reduced;stats[key]=#points
+   end
+   for _,f in ipairs(effects) do
+    assert(R.TakeFX_SetParamNormalized(v.take,f.fx,param,initial),'ReaEQの周波数を設定できません。')
+    if points then
+     local env=R.TakeFX_GetEnvelope(v.take,f.fx,param,true);assert(env,'フィルターのカーブを作成できません。')
+     for _,p in ipairs(points) do assert(R.InsertEnvelopePoint(env,p.x,p.y,0,0,false,true)) end
+     R.Envelope_SortPoints(env)
+    end
    end
   end
  end
- R.TakeFX_SetNamedConfigParm(v.take,fx,'renamed_name','BLT Envelope Canvas HP / LP')
- Core.hide_take_fx(v.take,fx)
 end
+
 function Core.apply(v,layers,limit,joined)
  if not Core.valid(v.project,v.item,v.take) then error('対象のテイクが変更されています。再読み込みしてください。',0) end
  local map,len,timing,factor=Core.map(layers,v.len,limit)
@@ -1840,12 +1943,17 @@ function Core.read_curves(v,limit)
  if #filters>0 then
   local f=filters[1];local active=R.TakeFX_GetEnabled(v.take,f.fx) and not R.TakeFX_GetOffline(v.take,f.fx)
   for i,key in ipairs({'highpass','lowpass'}) do
-   local param=i-1;local env=R.TakeFX_GetEnvelope(v.take,f.fx,param,false)
+   local param=f.legacy and i-1 or (i-1)*3
+   local env=R.TakeFX_GetEnvelope(v.take,f.fx,param,false)
    local fixed=R.TakeFX_GetParamNormalized(v.take,f.fx,param)
-   layers[key].enabled=active and R.TakeFX_GetParamNormalized(v.take,f.fx,param+2)>=.5
+   local enabled
+   if f.legacy then enabled=R.TakeFX_GetParamNormalized(v.take,f.fx,i+1)>=.5
+   else local ok,text=R.TakeFX_GetNamedConfigParm(v.take,f.fx,'BANDENABLED'..(i-1));enabled=ok and tonumber(text)==1 end
+   layers[key].enabled=active and enabled
+   local mapping=not f.legacy and Core.filter_mapping(v.take,f.fx,param)
    read(key,env,function(t)
     local n=Core.evaluate(env,t,fixed)
-    return 2*n-1
+    return f.legacy and 2*n-1 or 2*math.log(max(20,mapping.hz(n))/20)/math.log(4800)-1
    end)
   end
  end
@@ -1891,7 +1999,7 @@ if ...=='core_test' then return Core end
 
 local SECTION=Core.SECTION
 local W,H=1120,838
-local A={layers=Core.new_layers(),layer='pitch',tool='free',direction=3,pattern=1,cycles=5,height=100,shape_envelope=1,history={},redo={},sessions={},
+local A={layers=Core.new_layers(),layer='pitch',tool='free',direction=3,pattern=1,period_percent=100,period_shape=1,height=100,shape_envelope=1,history={},redo={},sessions={},
  status='',warning=false,content_dirty=true,wave_dirty=true,view=0,span=1,wave={},wave_max=1,
  busy=false,closed=false,poll_at=0,active=true,selection_poll=0,point_limit=128,filter_link=false,
  ranges={pitch=48,tape=24,speed=4,volume=24,highpass=24000,lowpass=24000},session_order={}}
@@ -1908,7 +2016,7 @@ local C={
   hover={0.430,0.790,1.000}, warn={1.000,0.755,0.490}, red={1.000,0.230,0.300}, quiet={0.300,0.360,0.440}
 }
 local fonts={"Yu Gothic UI","Segoe UI","Consolas"}
-if R.GetOS():match("OSX") then fonts={"Hiragino Sans","Helvetica Neue","Menlo"} end
+if BLT_MAC then fonts={"Hiragino Sans","Helvetica Neue","Menlo"} end
 if R.GetOS():match("Linux") then fonts={"sans-serif","sans-serif","monospace"} end
 
 local scale,ox,oy=1,0,0
@@ -2051,7 +2159,7 @@ local Chrome={window=nil,mouseDown=false,drag=nil,resize=nil,mouseActive=false,r
   isWindows=R.GetOS():match("Win")~=nil,resizeEdge=6,resizeCornerBand=8,resizeCornerSpan=24,resizeTopLeftGuard=30,resizeTopRightGuard=110,
   tooltipHover=nil,tooltipSince=0,tooltipVisible=false,tooltipDelay=.70,
   cursorId={we=32644,ns=32645,nwse=32642,nesw=32643,arrow=32512}}
-Chrome.font=Chrome.isWindows and "Segoe UI" or (R.GetOS():match("OSX") and "Helvetica Neue" or "sans-serif")
+Chrome.font=Chrome.isWindows and "Segoe UI" or (BLT_MAC and "Helvetica Neue" or "sans-serif")
 local CHROME_DEFAULT={
   mint={Chrome.mint[1],Chrome.mint[2],Chrome.mint[3]},
   ice={Chrome.ice[1],Chrome.ice[2],Chrome.ice[3]},
@@ -2520,7 +2628,7 @@ end
 local function apply_custom_window_style(target_w,target_h)
   local hwnd=gfx_window_handle()
   if not hwnd then return false end
-  local ok,l,t=R.JS_Window_GetRect(hwnd)
+  local ok,l,t=WindowGeometry.JS_Window_GetRect(hwnd)
   if not R.JS_Window_SetStyle(hwnd,"POPUP") then return false end
   if ok then BLT.position(hwnd,l,t,target_w,target_h,"","") end
   return true
@@ -2529,7 +2637,7 @@ end
 local function reset_window_size()
   local hwnd=gfx_window_handle()
   if not hwnd then return end
-  local ok,l,t=R.JS_Window_GetRect(hwnd)
+  local ok,l,t=WindowGeometry.JS_Window_GetRect(hwnd)
   if ok then BLT.position(hwnd,l,t,W,H+Chrome.titleH,"","") end
   BLT.store(SECTION,"window_w",tostring(W),true)
   BLT.store(SECTION,"window_h",tostring(H+Chrome.titleH),true)
@@ -2595,9 +2703,9 @@ local function titlebar_cleanup() set_resize_cursor(nil) end
 local function begin_window_resize(mode)
   local hwnd=gfx_window_handle()
   if not hwnd or not mode then return false end
-  local ok,l,t,r,b=R.JS_Window_GetRect(hwnd)
+  local ok,l,t,r,b=WindowGeometry.JS_Window_GetRect(hwnd)
   if not ok then return false end
-  local sx,sy=R.GetMousePosition()
+  local sx,sy=WindowGeometry.GetMousePosition()
   Chrome.resize={mode=mode,mouseX=sx,mouseY=sy,left=l,top=t,right=r,bottom=b}
   Chrome.drag=nil
   return true
@@ -2608,7 +2716,7 @@ local function update_window_resize()
   if not d then return end
   local hwnd=gfx_window_handle()
   if not hwnd then Chrome.resize=nil; return end
-  local sx,sy=R.GetMousePosition()
+  local sx,sy=WindowGeometry.GetMousePosition()
   local dx,dy=sx-d.mouseX,sy-d.mouseY
   local l,t,r,b=d.left,d.top,d.right,d.bottom
   if d.mode:find("l",1,true) then l=math.min(d.left+dx,r-Chrome.minW) end
@@ -2644,8 +2752,29 @@ function UI.theme_sync()
   d.color=UI.theme_color(d.original_color)
  end
 end
-UI.pattern_names={'サイン波','ノコギリ波','矩形波','三角波','水平線'}
+UI.pattern_names={'サイン波','ノコギリ波','矩形波','三角波','水平線','ランダムステップ'}
+UI.pattern_kinds={'sine','saw','square','triangle','horizontal','random_step'}
+UI.period_names={'周期：一定','アッチェレランド','リタルダンド'}
 UI.envelope_names={'振幅：一定','クレッシェンド','デクレッシェンド'}
+-- Keep one lottery while the preview moves, then retire it after stamping.
+function UI.reset_line_preview(reset_random)
+ UI.preview_key=nil;UI.preview_points=nil;UI.preview_ua=nil;UI.preview_ub=nil
+ if reset_random then UI.random_step_state=nil end
+end
+function UI.random_step_levels(slot)
+ local target=tostring(A.v and A.v.item)
+ local state=UI.random_step_state
+ if not state or state.target~=target then state={target=target};UI.random_step_state=state end
+ local levels=state[slot]
+ if not levels then levels={};state[slot]=levels end
+ local count=max(1,ceil(100/A.period_percent-1e-12))
+ for i=#levels+1,count do levels[i]=math.random()*2-1 end
+ return levels
+end
+function UI.next_pattern()
+ A.pattern=A.pattern%#UI.pattern_names+1
+ UI.reset_line_preview(true);UI.dirty()
+end
 function UI.set_smoothness(amount,drag)
  if A.busy then return end
  local c=A.layers[A.layer];amount=clamp(amount,0,2)
@@ -2682,13 +2811,15 @@ function UI.generate_line(chaos)
  if A.busy then return end
  UI.history();local c=A.layers[A.layer]
  local points
- if chaos then points=Core.chaos(128) else points=Core.pattern(({'sine','saw','square','triangle','horizontal'})[A.pattern],A.cycles,A.height/100,A.shape_envelope) end
+ local kind=UI.pattern_kinds[A.pattern]
+ if chaos then points=Core.chaos(128) else points=Core.pattern(kind,100/A.period_percent,A.height/100,A.shape_envelope,kind=='random_step' and UI.random_step_levels('whole') or nil,A.period_shape) end
  for _,p in ipairs(points) do p.y=UI.from_axis(A.layer,p.y) end
  c.points=points;c.enabled=true;A.selection=nil;A.hover_node=nil
+ if kind=='random_step' then UI.reset_line_preview(true) end
  notice(chaos and '現在のカーブをランダム生成しました。' or '現在のカーブにラインを生成しました。');UI.dirty()
 end
 UI.graph={x=212,y=166,w=784,h=372}
-UI.range_steps={pitch={3,6,12,24,48},tape={3,6,12,24},speed={1.25,1.5,2,4},volume={6,12,24},highpass={24000,48000,96000},lowpass={24000,48000,96000}}
+UI.range_steps={pitch={3,6,12,24,48},tape={3,6,12,24},speed={1.25,1.5,2,4},volume={6,12,24},highpass={24000},lowpass={24000}}
 function UI.from_axis(key,y)
  local r=A.ranges[key]
  if key=='highpass' or key=='lowpass' then
@@ -2708,6 +2839,7 @@ function UI.to_axis(key,y)
  return y*24/r
 end
 function UI.cycle_range(key,delta)
+ if key=='highpass' or key=='lowpass' then return end
  local steps=UI.range_steps[key];local i=1
  for j,v in ipairs(steps) do if v==A.ranges[key] then i=j;break end end
  A.ranges[key]=steps[clamp(i+(delta or 1),1,#steps)];A.selection=nil;UI.dirty()
@@ -2721,14 +2853,16 @@ end
 function UI.link_write(key)
  local other=key=='highpass' and 'lowpass' or 'highpass'
  local src,dest=A.layers[key],A.layers[other]
+ -- An edited partner becomes the new driver; snapshots never reference each other.
+ src.link_source=nil;src.link_offset=nil
  local delta=2*(A.link_width or 1)*math.log(2)/math.log(4800)*(key=='highpass' and 1 or -1)
  local points={}
- for _,p in ipairs(src.points) do points[#points+1]={x=p.x,y=clamp(p.y+delta,-1,1)} end
+ for _,p in ipairs(src.points) do points[#points+1]={x=p.x,y=clamp(p.y+delta,dest.min_y,dest.max_y)} end
  dest.points=points;dest.kind=src.kind;dest.smoothness=src.smoothness;dest.enabled=src.enabled
- -- Display ranges remain under manual control, independently of linked cutoff values.
+ -- Evaluate the driver's interpolated frequency first, then offset in octaves.
+ dest.link_source=Core.copy(src);dest.link_offset=delta
 end
 function UI.link_sync()
- if not A.filter_link then A.link_snapshot=nil;return end
  if not A.link_snapshot then UI.link_prime();return end
  local function changed(key)
   local a,b=A.layers[key],A.link_snapshot[key]
@@ -2737,8 +2871,16 @@ function UI.link_sync()
   return false
  end
  local hp,lp=changed('highpass'),changed('lowpass')
- local key=hp and lp and (A.layer=='lowpass' and 'lowpass' or 'highpass') or hp and 'highpass' or lp and 'lowpass'
- if key then UI.link_write(key);UI.link_prime() end
+ if not hp and not lp then return end
+ if not A.filter_link then
+  for _,key in ipairs({'highpass','lowpass'}) do if (key=='highpass' and hp) or (key=='lowpass' and lp) then
+   A.layers[key].link_source=nil;A.layers[key].link_offset=nil
+  end end
+ else
+  local key=hp and lp and (A.layer=='lowpass' and 'lowpass' or 'highpass') or hp and 'highpass' or 'lowpass'
+  UI.link_write(key)
+ end
+ UI.link_prime()
 end
 function UI.link_toggle()
  if A.busy or A.drag then return end
@@ -2935,10 +3077,15 @@ function UI.read_curves()
  UI.dirty(true)
 end
 function UI.apply()
- if A.busy or not UI.check_current() then return end
+ if A.busy or A.drag or not UI.check_current() then return end
+ UI.number_commit();UI.link_sync()
  if A.wave_job then notice('波形の読み込み完了を待ってください。',true);return end
  if not A.record and not Core.any(A.layers) and #Core.find_filters(A.v.take)==0 then notice('カーブを描いてから適用してください。',true);return end
- if Core.signature(Core.chunk(A.v.item))~=Core.signature(A.record and A.record.after or A.baseline) then UI.adopt_current();return end
+ if Core.signature(Core.chunk(A.v.item))~=Core.signature(A.record and A.record.after or A.baseline) then
+  -- Adopt genuine external edits and continue this click using the same drawing.
+  UI.adopt_current()
+  if not UI.check_current() then return end
+ end
  A.busy=true;UI.stop_wave()
  local old=A.record
  local record,reason=Core.regenerate(A.v,A.layers,A.point_limit,old)
@@ -2948,12 +3095,13 @@ function UI.apply()
  A.record=record;A.record.layers=Core.copy(A.layers);A.v=Core.info(A.v.project,A.v.item)
  if old and old.source_wave then A.wave=old.source_wave;A.wave_max=old.source_wave_max end
  local st=record.stats;local total=st.markers+st.pitch+st.volume+st.highpass+st.lowpass
- notice(string.format('生成完了：時間 %d点 / エンベロープ %d点%s。',st.markers,total-st.markers,st.reduced and '（上限に合わせて近似）' or ''));UI.dirty(true)
+ notice(string.format('生成完了：時間 %d点 / エンベロープ %d点%s。',st.markers,total-st.markers,st.reduced and '（上限に合わせて近似）' or '')..(st.filter_clipped and ' ReaEQの周波数範囲に収めました。' or ''),st.filter_clipped);UI.dirty(true)
 end
 function UI.draft_changed()
  if not A.record or not A.record.layers then return false end
  if A.record.stats and A.record.stats.limit~=A.point_limit then return true end
  for key,c in pairs(A.layers) do local prev=A.record.layers[key]
+  if prev and (c.link_offset~=prev.link_offset or not BLT.same(c.link_source,prev.link_source)) then return true end
   if not prev or c.enabled~=prev.enabled or c.kind~=prev.kind or Core.smoothness(c)~=Core.smoothness(prev) or #c.points~=#prev.points then return true end
   for i,p in ipairs(c.points) do local q=prev.points[i];if p.x~=q.x or p.y~=q.y then return true end end
  end;return false
@@ -2968,7 +3116,7 @@ function UI.axis_label(key,y) return UI.format(key,UI.from_axis(key,y)) end
 function UI.available(id)
  local editing=not A.busy
  if id=='readcurves' then return editing and A.v~=nil and not A.wave_job and not A.drag end
- if id=='apply' then return editing and A.v~=nil and not A.wave_job and not A.conflict and (A.record~=nil or Core.any(A.layers) or #Core.find_filters(A.v.take)>0) end
+ if id=='apply' then return editing and not A.drag and A.v~=nil and not A.wave_job and not A.conflict and (A.record~=nil or Core.any(A.layers) or #Core.find_filters(A.v.take)>0) end
  if id=='drawundo' then return editing and #A.history>0 end
  if id=='drawredo' then return editing and #A.redo>0 end
  if id=='clear' or id:match('^tool_') or id:match('^enable_') then return editing end
@@ -2978,7 +3126,7 @@ function UI.fit_text(t,width,size,kind) font(size,kind,false);return BLT.ui.fit(
 function UI.generate_chaos() UI.generate_line(true) end
 function UI.button(id,title,sub,x,y,w,h,fn,enabled,selected,tone)
  enabled=enabled~=false;local hover=A.hit==id and enabled;local c=tone or C.accent2
- local key=id:match('^range_(.+)$');local child=id=='pattern' or id=='direction' or id=='shape_envelope'
+ local key=id:match('^range_(.+)$');local child=id=='pattern' or id=='direction' or id=='shape_envelope' or id=='period_shape'
  local dim=(key and not A.layers[key].enabled) or (child and A.tool~='line');if dim then c=C.muted end
  local dy=pressed==id and (gfx.mouse_cap&1)~=0 and 1.5 or 0;y=y+dy
  local a=animate('button_'..id,hover and 1 or 0)
@@ -3016,11 +3164,9 @@ function UI.canvas_surface()
   for i=0,8 do local x=g.x+g.w*i/8;line(x,g.y,x,g.y+g.h,C.edge,i%2==0 and .35 or .18) end
   for i=0,8 do local y=g.y+g.h*i/8;line(g.x,y,g.x+g.w,y,C.edge,(i==4 and not A.layers[A.layer].filter) and .56 or .21) end
   local n=#A.wave;local original=A.record and not A.record.imported
-  local total=A.record and A.record.len or (A.v and A.v.len or 1)
   if n>0 then
    for px=0,g.w-1 do
     local u=A.view+px/g.w*A.span;local u2=A.view+(px+1)/g.w*A.span
-    if original then u=Core.lookup(A.record.map,u*total,'t','u');u2=Core.lookup(A.record.map,u2*total,'t','u') end
     local a,b=clamp(floor(u*n)+1,1,n),clamp(ceil(u2*n),1,n);local pk=0
     for j=a,max(a,b) do pk=max(pk,A.wave[j] or 0) end
     local gain=original and 10^(Core.db(Core.at(A.record.layers or A.layers,'volume',u))/20) or 1
@@ -3033,10 +3179,12 @@ function UI.canvas_surface()
  end
  gfx.mode=0;gfx.a=1;gfx.blit(UI.WAVE,1,0,0,0,g.w,g.h,sx(g.x),sy(g.y),g.w*scale,g.h*scale)
 end
+function UI.output_time(u)
+ return A.record and Core.lookup(A.record.map,u,'u','t') or u*(A.v and A.v.len or 0)
+end
 function UI.curve_screen_u(u)
- if A.record then local m=A.record.map
-  if u<0 then return u*m[2].t/m[2].u/A.record.len elseif u>1 then local a,b=m[#m-1],m[#m];return 1+(u-1)*(b.t-a.t)/(b.u-a.u)/A.record.len end
-  return Core.lookup(m,u,'u','t')/A.record.len end;return u
+ -- Keep the editor on the source timeline; generation only maps output audio.
+ return u
 end
 function UI.display_curve(key)
  local c=A.layers[key];local d=A.drag
@@ -3055,7 +3203,6 @@ function UI.curves()
    local c=UI.display_curve(d.key);local prev
    for px=0,g.w,2 do
     local u=A.view+px/g.w*A.span
-    if A.record then u=Core.lookup(A.record.map,u*A.record.len,'t','u') end
     local y=g.y+g.h*(1-clamp(UI.to_axis(d.key,Core.value(c,u)),-1,1))/2
     if prev then
      if active then UI.thick_line(prev.x,prev.y,g.x+px,y,d.color,c.enabled and .94 or .32,3) end
@@ -3068,7 +3215,7 @@ function UI.curves()
      local screen_u=UI.curve_screen_u(p.x)
      if screen_u>=A.view and screen_u<=A.view+A.span then
       local ay=UI.to_axis(d.key,p.y);local x,y=g.x+(screen_u-A.view)/A.span*g.w,g.y+(1-ay)*g.h/2
-      if abs(ay)<=1 then disc(x,y,3.5,C.field,1);disc(x,y,2.4,d.color,.95) end
+      if abs(ay)<=1.000001 then disc(x,y,3.5,C.field,1);disc(x,y,2.4,d.color,.95) end
      end
     end
    end
@@ -3093,28 +3240,29 @@ function UI.static()
  end
  -- One aligned enclosure joins the mode header and its indented controls.
  local tone=UI.def().color;local selected=A.tool=='line'
- gradient(24,332,164,220,C.panel2,C.panel,.55,.95)
- rect(24,332,164,220,tone,selected and .065 or .022)
- line(24,332,24,552,tone,selected and .7 or .32);line(188,332,188,552,tone,selected and .55 or .25)
- line(24,552,188,552,tone,selected and .55 or .25)
+ gradient(24,332,164,252,C.panel2,C.panel,.55,.95)
+ rect(24,332,164,252,tone,selected and .065 or .022)
+ line(24,332,24,584,tone,selected and .7 or .32);line(188,332,188,584,tone,selected and .55 or .25)
+ line(24,584,188,584,tone,selected and .55 or .25)
  UI.button('mode_line','ライン生成',nil,24,332,164,32,function() UI.set_mode('line') end,not A.busy,selected,tone)
  local child_tone=selected and tone or C.muted
- line(32,364,32,512,child_tone,.3)
- for _,y in ipairs({384,416,448,480,512}) do line(32,y,39,y,child_tone,.3) end
- UI.button('pattern',UI.pattern_names[A.pattern],nil,40,370,140,28,function() A.pattern=A.pattern%#UI.pattern_names+1;UI.dirty() end,not A.busy)
+ line(32,364,32,544,child_tone,.3)
+ for _,y in ipairs({384,416,448,480,512,544}) do line(32,y,39,y,child_tone,.3) end
+ UI.button('pattern',UI.pattern_names[A.pattern],nil,40,370,140,28,UI.next_pattern,not A.busy)
  UI.button('direction','方向：'..({'左','両側','右'})[A.direction],nil,40,402,140,28,function() A.direction=A.direction%3+1;UI.dirty() end,not A.busy)
- UI.number_field('cycles','周期数',40,434,140,'回')
- UI.number_field('height','最大高さ',40,466,140,'%')
- UI.button('shape_envelope',UI.envelope_names[A.shape_envelope],nil,40,498,140,28,function() A.shape_envelope=A.shape_envelope%3+1;UI.dirty() end,not A.busy)
- label('Alt：位相反転',40,529,12,C.muted,1,140,20,0,false)
- UI.button('readcurves','波形からカーブ取得',nil,24,564,164,32,UI.read_curves,UI.available('readcurves'))
+ UI.number_field('period_percent','周期幅',40,434,140,'%')
+ UI.button('period_shape',UI.period_names[A.period_shape],nil,40,466,140,28,function() A.period_shape=A.period_shape%3+1;UI.dirty() end,not A.busy)
+ UI.number_field('height','最大高さ',40,498,140,'%')
+ UI.button('shape_envelope',UI.envelope_names[A.shape_envelope],nil,40,530,140,28,function() A.shape_envelope=A.shape_envelope%3+1;UI.dirty() end,not A.busy)
+ label('Alt：位相反転',40,561,12,C.muted,1,140,20,0,false)
+ UI.button('readcurves','波形の既存カーブ取得',nil,24,596,164,32,UI.read_curves,UI.available('readcurves'))
  local chaos_hot=A.hit=='chaos' and not A.busy
- BLT.chaosButton(24,608,164,50,not A.busy,chaos_hot,pressed=='chaos' and (gfx.mouse_cap&1)~=0,anim_time,animate('chaos_glow',chaos_hot and 1 or 0))
- register('chaos',24,608,164,50,UI.generate_chaos,'ランダム生成',not A.busy)
- UI.button('drawundo','戻す',nil,24,663,80,30,function() UI.undo_draw(false) end,not A.busy and #A.history>0)
- UI.button('drawredo','やり直す',nil,108,663,80,30,function() UI.undo_draw(true) end,not A.busy and #A.redo>0)
- UI.button('clear','現在のカーブを消去',nil,24,704,164,32,function() UI.clear_curves(false) end,not A.busy)
- UI.button('clear_all','全カーブを消去',nil,24,748,164,32,function() UI.clear_curves(true) end,not A.busy)
+ BLT.chaosButton(24,640,164,50,not A.busy,chaos_hot,pressed=='chaos' and (gfx.mouse_cap&1)~=0,anim_time,animate('chaos_glow',chaos_hot and 1 or 0))
+ register('chaos',24,640,164,50,UI.generate_chaos,'ランダム生成',not A.busy)
+ UI.button('drawundo','戻す',nil,24,695,80,30,function() UI.undo_draw(false) end,not A.busy and #A.history>0)
+ UI.button('drawredo','やり直す',nil,108,695,80,30,function() UI.undo_draw(true) end,not A.busy and #A.redo>0)
+ UI.button('clear','現在のカーブを消去',nil,24,736,164,32,function() UI.clear_curves(false) end,not A.busy)
+ UI.button('clear_all','全カーブを消去',nil,24,780,164,32,function() UI.clear_curves(true) end,not A.busy)
  local d=UI.def();label(d.code,212,141,12,d.color,3,130,21,0,true)
  label(d.sub,350,141,12,C.muted,1,230,21)
  right_label(UI.draft_changed() and 'EDITED / 生成で更新' or A.record and 'GENERATED / FX前の概形' or 'SOURCE / DRAW',996,141,11,C.muted,3,true)
@@ -3124,8 +3272,7 @@ function UI.static()
  for i=0,4 do
   local y=1-i*.5;right_label(UI.axis_label(A.layer,y),1100,g.y+i*g.h/4-7,13,d.color,3,false)
  end
- local duration=A.record and A.record.len or (A.v and A.v.len or 0)
- for i=0,4 do label(string.format('%.3f s',(A.view+A.span*i/4)*duration),g.x+g.w*i/4-(i==4 and 90 or 0),548,12,C.muted,3,120,20) end
+ for i=0,4 do label(string.format('%.3f s',UI.output_time(A.view+A.span*i/4)),g.x+g.w*i/4-(i==4 and 90 or 0),548,12,C.muted,3,120,20) end
  label(A.tool=='select' and 'ドラッグ：範囲選択  ·  辺／角：変形  ·  枠内：移動  ·  Delete／枠内右クリック：削除' or A.tool=='line' and '波形上をクリック：カーソル位置からライン生成' or 'ドラッグ：描画／点移動  ·  Shift：直線  ·  Alt：点をつかまず描画  ·  右クリック：点削除',212,573,13,C.muted,1,866,23)
  label('ホイール：ズーム  /  Shift＋ホイール：横移動',212,595,11,C.muted,1,800,18)
  for i,q in ipairs(UI.defs) do
@@ -3142,12 +3289,14 @@ function UI.static()
   local range=A.ranges[q.key];local range_text=q.key=='highpass' or q.key=='lowpass'
   range_text=range_text and string.format('20Hz–%gkHz',range/1000) or q.key=='speed' and string.format('MAX %.2fx',range) or q.key=='volume' and string.format('MAX +%d dB',range) or string.format('±%d st',range)
   UI.button('range_'..q.key,range_text,nil,x+8,cy+32,cw-70,26,function() end,true,false,tint)
+  if q.key~='highpass' and q.key~='lowpass' then
   for _,arrow in ipairs({{-1,x+8},{1,x+cw-86}}) do
    local ax=arrow[2];local delta=arrow[1];local hot=A.hit=='range_arrow_'..q.key..delta
    if hot then rect(ax,cy+32,24,26,tint,.14) end
    local cx=ax+12;local yy=cy+45
    line(cx+delta*3,yy,cx-delta*3,yy-4,tint,.85);line(cx+delta*3,yy,cx-delta*3,yy+4,tint,.85)
    register('range_arrow_'..q.key..delta,ax,cy+32,24,26,function() UI.cycle_range(q.key,delta) end,'',not A.busy)
+  end
   end
   UI.button('enable_'..q.key,enabled and 'ON' or 'OFF',nil,x+cw-52,cy+32,44,26,function() if not A.busy then UI.history();A.layers[q.key].enabled=not enabled;UI.dirty() end end,not A.busy,enabled,enabled and UI.theme_color({.35,.70,1},'accent2') or C.muted)
  end
@@ -3160,7 +3309,7 @@ function UI.static()
 
  elseif status=='' then status=A.v and '' or '音声アイテムを選択してください。' end
 
- BLT.footer(status,A.warning or A.conflict,W,H+22,'0.5.0')
+ BLT.footer(status,A.warning or A.conflict,W,H+22,Core.VERSION)
  flush_text_queue()
 end
 function UI.thick_line(x,y,x2,y2,c,a,width)
@@ -3248,7 +3397,7 @@ function UI.render(now)
  if inside(UI.graph.x,UI.graph.y,UI.graph.w,UI.graph.h) and A.v and A.active then
   local g=UI.graph;local u=A.view+(mouse_x-g.x)/g.w*A.span;local value=clamp(1-2*(mouse_y-g.y)/g.h,-1,1)
   line(mouse_x,g.y,mouse_x,g.y+g.h,C.accent2,.23);line(g.x,mouse_y,g.x+g.w,mouse_y,C.accent2,.12)
-  local s=string.format('%.3fs  /  %s',u*(A.record and A.record.len or A.v.len),UI.axis_label(A.layer,value))
+  local s=string.format('%.3fs  /  %s',UI.output_time(u),UI.axis_label(A.layer,value))
   local xx=mouse_x-112;local yy=mouse_y+18
   label(s,xx+7,yy+3,13,UI.def().color,3,210,21,1);flush_text_queue()
  end
@@ -3257,7 +3406,6 @@ end
 function UI.pointer_value(dx,dy)
  local g=UI.graph;local mx,my=mouse_x-(dx or 0),mouse_y-(dy or 0)
  local x=clamp(A.view+(mx-g.x)/g.w*A.span,0,1)
- if A.record then x=Core.lookup(A.record.map,x*A.record.len,'t','u') end
  local y=clamp(1-2*(my-g.y)/g.h,-1,1)
  -- Small, physical-pixel magnet with hysteresis: easy neutral values without
  -- oscillating between snapped/unsnapped positions on adjacent input samples.
@@ -3321,14 +3469,9 @@ function UI.line_anchor()
 end
 function UI.screen_to_point(x,y)
  local g=UI.graph;local u=A.view+(x-g.x)/g.w*A.span
- if A.record then
-  if u<0 then u=u*A.record.len/(A.record.map[2].t/A.record.map[2].u)
-  elseif u>1 then local m=A.record.map;local a,b=m[#m-1],m[#m];u=1+(u-1)*A.record.len*(b.u-a.u)/(b.t-a.t)
-  else u=Core.lookup(A.record.map,u*A.record.len,'t','u') end
- end
  return {x=u,y=UI.from_axis(A.layer,1-2*(y-g.y)/g.h)}
 end
-UI.number_limits={cycles={.01,24,1,2},height={0,200,1,0}}
+UI.number_limits={period_percent={1,200,1,0},height={0,200,1,0}}
 function UI.number_text(key,value)
  local digits=UI.number_limits[key][4] or 0
  local text=string.format('%.'..digits..'f',value)
@@ -3422,7 +3565,7 @@ end
 function UI.number_lights()
  for key,t in pairs(A.number_flash or {}) do
   local age=R.time_precise()-t;local q=clamp(age/1.35,0,1);local a=1-q*q*(3-2*q)
-  if a>0 then local y=key=='cycles' and 434 or 466
+  if a>0 then local y=key=='period_percent' and 434 or 498
    rect(35,y-5,150,38,UI.theme_color({1,.19,.16},'red'),.06*a);rect(40,y,140,28,UI.theme_color({1,.26,.20},'red'),.28*a)
   end
  end
@@ -3430,7 +3573,7 @@ end
 function UI.line_points()
  local g=UI.graph;local x,y=UI.line_anchor();local c=A.layers[A.layer]
  local invert=(gfx.mouse_cap&16)~=0 and -1 or 1
- local cachekey=table.concat({x,y,A.pattern,A.cycles,A.height,A.shape_envelope,A.direction,A.layer,A.ranges[A.layer],A.view,A.span,invert,tostring(A.record)},':')
+ local cachekey=table.concat({x,y,A.pattern,A.period_percent,A.period_shape,A.height,A.shape_envelope,A.direction,A.layer,A.ranges[A.layer],A.view,A.span,invert,tostring(A.v and A.v.item),tostring(A.record)},':')
  if UI.preview_key==cachekey then return UI.preview_points,UI.preview_ua,UI.preview_ub end
  local full_left=g.x-A.view/A.span*g.w
  local full_right=g.x+(1-A.view)/A.span*g.w
@@ -3439,24 +3582,25 @@ function UI.line_points()
  local out={}
  local joined=A.direction==2 and x>full_left+1e-7 and x<full_right-1e-7
  local omit_origin=joined and (A.pattern==2 or A.pattern==4 or (A.pattern==3 and A.shape_envelope==2))
- local square_jump=joined and A.pattern==3 and not omit_origin
- local single_square=A.pattern==3 and A.direction~=2
- if single_square then out[#out+1]=UI.screen_to_point(x,y) end
- local function side(edge,sign,skip_origin)
+ local origin_jump=joined and ((A.pattern==3 and not omit_origin) or A.pattern==6)
+ local single_jump=(A.pattern==3 or A.pattern==6) and A.direction~=2
+ if single_jump then out[#out+1]=UI.screen_to_point(x,y) end
+ local function side(edge,sign,skip_origin,slot)
   local width=abs(edge-x);if width<1e-7 then return end
-  local cycles=A.cycles
-  local pts=Core.pattern(({'sine','saw','square','triangle','horizontal'})[A.pattern],cycles,A.height/100,A.shape_envelope)
-  for _,p in ipairs(pts) do if not (skip_origin and p.x==0) and not (single_square and p.x==0 and abs(p.y)<1e-10) then
+  local cycles=100/A.period_percent*width/(full_right-full_left)
+  local levels=A.pattern==6 and UI.random_step_levels(slot) or nil
+  local pts=Core.pattern(UI.pattern_kinds[A.pattern],cycles,A.height/100,A.shape_envelope,levels,A.period_shape)
+  for _,p in ipairs(pts) do if not (skip_origin and p.x==0) and not (single_jump and p.x==0 and abs(p.y)<1e-10) then
    local u=p.x
-   -- Preserve both sides of the central square-wave jump. A left endpoint
+   -- Preserve both sides of a central step. A left endpoint
    -- at exactly the same x would otherwise be discarded by clean_points.
-   if u==0 and ((square_jump and edge<x) or single_square) then u=min(1e-5,.01/A.cycles) end
+   if u==0 and ((origin_jump and edge<x) or single_jump) then u=min(1e-5,.01/cycles) end
    local q=UI.screen_to_point(x+(edge-x)*u,y-p.y*sign*invert*g.h/2)
    q.y=clamp(q.y,c.min_y,c.max_y);out[#out+1]=q
   end end
  end
- if A.direction~=3 then side(left,A.direction==2 and -1 or 1,omit_origin or (joined and not square_jump)) end
- if A.direction~=1 then side(right,1,omit_origin) end
+ if A.direction~=3 then side(left,A.direction==2 and -1 or 1,omit_origin or (joined and not origin_jump),'left') end
+ if A.direction~=1 then side(right,1,omit_origin,'right') end
  local ua=UI.screen_to_point(left,y).x;local ub=UI.screen_to_point(right,y).x
  -- Remove collinear nodes introduced by clipping or envelope endpoints.
  local generated={points=UI.clean_points(out)};Core.simplify(generated,1e-8)
@@ -3469,6 +3613,7 @@ function UI.stamp_line()
  for _,p in ipairs(c.points) do if p.x<ua-1e-8 or p.x>ub+1e-8 then out[#out+1]=p end end
  for _,p in ipairs(pts) do out[#out+1]={x=p.x,y=p.y} end
  c.points=UI.clean_points(out);c.enabled=true;A.selection=nil;UI.dirty()
+ UI.reset_line_preview(A.pattern==6)
 end
 function UI.line_preview()
  if A.tool~='line' or not A.v or not A.active or A.busy then return end
@@ -3734,8 +3879,8 @@ function UI.settings_schema()
  if UI.preference_schema then return UI.preference_schema end
  local schema={
   tool={values={'select','free','line'}},layer={values={'pitch','tape','speed','volume','highpass','lowpass'}},
-  direction={values={1,2,3}},pattern={values={1,2,3,4,5}},cycles={min=.01,max=24},height={min=0,max=200},
-  shape_envelope={values={1,2,3}},point_limit={values={128,256,512,1024}},filter_link={boolean=true},link_width={min=.25,max=8}}
+  direction={values={1,2,3}},pattern={values={1,2,3,4,5,6}},period_percent={min=1,max=200},height={min=0,max=200},
+  period_shape={values={1,2,3}},shape_envelope={values={1,2,3}},point_limit={values={128,256,512,1024}},filter_link={boolean=true},link_width={min=.25,max=8}}
  for key,steps in pairs(UI.range_steps) do
   schema['ranges.'..key]={values=steps}
   schema['layers.'..key..'.enabled']={boolean=true}
@@ -3831,7 +3976,50 @@ function UI.loop()
  if A.closing then UI.close() else R.defer(UI.loop) end
 end
 function BLT.preferences() local p=BLT.preferenceView or {};BLT.preferenceView=p;for path in pairs(UI.settings_schema()) do local obj,k=UI.settings_slot(path);p[path]=obj[k];if p[path]==nil then p[path]=path=='link_width' and 1 or path:match('smoothness$') and 1 or nil end end;return p end;BLT.factoryPreferences=BLT.copy(BLT.preferences())
-function BLT.captureEnvelope() local c=BLT.curveView or {};BLT.curveView=c;for k,layer in pairs(A.layers) do c[k]=layer.points end;BLT.envelopeView=BLT.envelopeView or {};BLT.envelopeView.settings=BLT.preferences();BLT.envelopeView.curves=c;return BLT.envelopeView end;BLT.envelopeDefaults=BLT.copy(BLT.captureEnvelope())
+function BLT.captureEnvelope()
+ local c=BLT.curveView or {};BLT.curveView=c
+ for k,layer in pairs(A.layers) do c[k]=layer.points end
+ if not BLT.linkView then
+  BLT.emptyLinkPoints={{x=0,y=0}}
+  BLT.linkView={highpass={},lowpass={}}
+ end
+ for key,view in pairs(BLT.linkView) do
+  local layer=A.layers[key];local source=layer.link_source
+  view.active=source~=nil;view.offset=layer.link_offset or 0
+  view.points=source and source.points or BLT.emptyLinkPoints
+  view.kind=source and source.kind or 'linear';view.smoothness=source and Core.smoothness(source) or 0
+ end
+ BLT.envelopeView=BLT.envelopeView or {}
+ BLT.envelopeView.settings=BLT.preferences();BLT.envelopeView.curves=c;BLT.envelopeView.linked=BLT.linkView
+ return BLT.envelopeView
+end
+BLT.envelopeDefaults=BLT.copy(BLT.captureEnvelope())
+function BLT.validEnvelopeLinks(v)
+ for key,link in pairs(v.linked) do
+  if (key~='highpass' and key~='lowpass') or (link.kind~='linear' and link.kind~='smooth') or link.smoothness<0 or link.smoothness>2 then return false end
+  if math.abs(link.offset)>16*math.log(2)/math.log(4800) or (key=='highpass' and link.offset>0) or (key=='lowpass' and link.offset<0) then return false end
+  if link.active then
+   if #link.points<2 or #link.points>Core.MAX_POINTS then return false end
+   local last=-1
+   for _,p in ipairs(link.points) do
+    if p.x<0 or p.x>1 or p.x<=last or p.y< -1 or p.y>Core.FILTER_MAX_VALUE then return false end
+    last=p.x
+   end
+  end
+ end
+ return true
+end
+function BLT.restoreEnvelopeLinks(v)
+ for key,link in pairs(v.linked) do
+  local layer=A.layers[key];layer.link_source=nil;layer.link_offset=nil
+  if link.active then
+   layer.link_source={points=Core.copy(link.points),kind=link.kind,smoothness=link.smoothness,filter=true,enabled=true}
+   layer.link_offset=link.offset
+  end
+ end
+end
+
+
 function BLT.pick(obj,keys) local v=BLT.valueView or {};BLT.valueView=v;for k in pairs(keys) do v[k]=obj[k] end;return v end
 PrimaryButton.painter={C=C,gradient=gradient,line=line,rect=rect,corners=finish_corners,disc=disc,label=label}
 PrimaryButton.painter.motion=function(now) return (gfx.mouse_x-ox)/scale,(gfx.mouse_y-oy)/scale,visual_speed(now) end
@@ -3842,7 +4030,7 @@ BLT.attach({
  geometry=function() return scale,ox,oy end,active=function() local f=gfx.getchar(65536);return (f&1)==0 or (f&2)~=0 end,
  wake=function() A.content_dirty=true;redraw_dirty=true;next_draw_time=0;wake_visuals() end,
  defaults=BLT.envelopeDefaults,capture=function() return BLT.captureEnvelope() end,
- valid=function(v) local schema=UI.settings_schema();for path,x in pairs(v.settings) do local r=schema[path];if not r then return false end;if r.values then local found=false;for _,a in ipairs(r.values) do if a==x then found=true end end;if not found then return false end elseif not r.boolean and (x<r.min or x>r.max) then return false end end;for k,pts in pairs(v.curves) do local def=A.layers[k];if not def or #pts<2 or #pts>Core.MAX_POINTS then return false end;local last=-1;for _,p in ipairs(pts) do if p.x<0 or p.x>1 or p.x<=last or p.y<def.min_y or p.y>def.max_y then return false end;last=p.x end end;return true end,apply=function(v) UI.history();for path,x in pairs(v.settings) do local obj,k=UI.settings_slot(path);obj[k]=x end;for k,pts in pairs(v.curves) do A.layers[k].points=pts end;UI.link_prime();UI.save_settings();UI.dirty(true) end,
+ valid=function(v) if not BLT.validEnvelopeLinks(v) then return false end;local schema=UI.settings_schema();for path,x in pairs(v.settings) do local r=schema[path];if not r then return false end;if r.values then local found=false;for _,a in ipairs(r.values) do if a==x then found=true end end;if not found then return false end elseif not r.boolean and (x<r.min or x>r.max) then return false end end;for k,pts in pairs(v.curves) do local def=A.layers[k];if not def or #pts<2 or #pts>Core.MAX_POINTS then return false end;local last=-1;for _,p in ipairs(pts) do if p.x<0 or p.x>1 or p.x<=last or p.y<def.min_y or p.y>def.max_y then return false end;last=p.x end end;return true end,apply=function(v) UI.history();for path,x in pairs(v.settings) do local obj,k=UI.settings_slot(path);obj[k]=x end;for k,pts in pairs(v.curves) do A.layers[k].points=pts end;BLT.restoreEnvelopeLinks(v);UI.link_prime();UI.save_settings();UI.dirty(true) end,
  localUndo=true,
  busy=function() return A.busy end,commit=function() UI.number_commit();return true end,
  cancelEdit=function() A.number_edit=nil;A.number_drag=nil;A.selection=nil end,editing=function() return A.number_edit~=nil end,
@@ -3851,6 +4039,32 @@ BLT.attach({
  cursor=set_resize_cursor,beginResize=begin_window_resize,resize=update_window_resize,
 
 })
+-- Earlier presets contain independent curves and no linked interpolation snapshot.
+-- Add only the missing snapshot field; the normal decoder still validates all data.
+local decodeEnvelopePreset=BLT.presets.decode
+function BLT.presets.decode(data)
+ local preset=decodeEnvelopePreset(data);if preset then return preset end
+ local prefix=SECTION..'_PRESET_V1\n'
+ if type(data)~='string' or data:sub(1,#prefix)~=prefix then return nil end
+ local old=BLT.unpack(data:sub(#prefix+1))
+ if type(old)~='table' or type(old.values)~='table' or old.values.linked~=nil then return nil end
+ old.values.linked=BLT.copy(BLT.envelopeDefaults.linked)
+ return decodeEnvelopePreset(prefix..BLT.pack(old))
+end
+
+do
+ local presets=BLT.presets
+ local count=min(200,max(0,tonumber(R.GetExtState(SECTION,'preset_count')) or 0))
+ if count>#presets.items then
+  local names={};for _,p in ipairs(presets.items) do names[p.name]=true end
+  for i=1,count do
+   local raw=R.GetExtState(SECTION,'preset_'..i):gsub('%%0A','\n'):gsub('%%0D','\r'):gsub('%%25','%%')
+   local p=presets.decode(raw)
+   if p and not presets.isFactory(p) and not names[p.name] then presets.items[#presets.items+1]=p;names[p.name]=true end
+  end
+  table.sort(presets.items,function(a,b)return a.name<b.name end)
+ end
+end
 if ...=='blt_test' then function BLT.testDraw(now) UI.static(now or R.time_precise()) end end
 function BLT.drawIcon()
  flush_text_queue();
@@ -3868,7 +4082,8 @@ if not chrome_ok then Language.mb(BLT.publicError(chrome_err),'Envelope Canvas |
 local ww=tonumber(R.GetExtState(SECTION,'window_w')) or W;local wh=tonumber(R.GetExtState(SECTION,'window_h')) or H+Chrome.titleH
 ww=clamp(ww,Chrome.minW,2200);wh=clamp(wh,Chrome.minH,1800)
 local wx,wy=tonumber(R.GetExtState(SECTION,'window_x')),tonumber(R.GetExtState(SECTION,'window_y'))
-gfx.ext_retina=1
+-- Match native window/input coordinates in logical points on Mac.
+gfx.ext_retina=BLT_MAC and 0 or 1
 if finite(wx) and finite(wy) then gfx.init(Chrome.windowTitle,ww,wh,0,wx,wy) else gfx.init(Chrome.windowTitle,ww,wh,0) end
 if not apply_custom_window_style(ww,wh) then gfx.quit();Language.mb('カスタムアプリバーを初期化できません。','Envelope Canvas',0);return end
 if Chameleon.enabled then Chameleon.refresh(true) end

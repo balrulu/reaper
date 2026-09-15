@@ -1,10 +1,35 @@
 -- @description INTERVAL
--- @version 0.5.0
+-- @version 0.5.4
 -- @author Balrulu
 -- @changelog
---   Beta Test
+--   Keep separate folder blocks and later parent-track media in distinct alignment units.
 -- @about
 --   BLT SERIES Beta TEST UPLOAD
+
+-- BLT window geometry 1.0.0. Embedded; screen coordinates only.
+local function create_window_geometry(api,graphics)
+ local osname=api.GetOS() or ''
+ if not osname:match('OSX') and not osname:match('macOS') then return api end
+ local G=setmetatable({}, {__index=api})
+ -- Internal screen Y points downward. Client coordinates remain untouched.
+ function G.GetMousePosition()
+  local x,y=api.GetMousePosition();return x,-y
+ end
+ function G.JS_Window_GetRect(hwnd)
+  local ok,l,t,r,b=api.JS_Window_GetRect(hwnd)
+  if not ok then return ok,l,t,r,b end
+  return ok,l,-math.max(t,b),r,-math.min(t,b)
+ end
+ function G.JS_Window_SetPosition(hwnd,x,y,w,h,z,flags)
+  if graphics and graphics.dock and (graphics.dock(-1)&1)~=0 then return false end
+  -- SWELL SetWindowPos uses a bottom-left origin for floating macOS windows.
+  return api.JS_Window_SetPosition(hwnd,x,-y-h,w,h,z,flags)
+ end
+ return G
+end
+
+local WindowGeometry=create_window_geometry(reaper,gfx)
+local BLT_MAC=(reaper.GetOS() or ''):match('OSX')~=nil or (reaper.GetOS() or ''):match('macOS')~=nil
 
 -- BLT primary button 1.0.0. Embedded; no runtime file dependency.
 local PrimaryButton=(function()
@@ -129,7 +154,7 @@ end
 -- BLT PORTING CONFIGURATION: shared chrome metrics, app identity and title.
 -- Keep this script self-contained; no external module loading is required.
 local App={
-  version="0.5.0",section="BLT_INTERVAL",windowTitle="BLT Interval",
+  version="0.5.4",section="BLT_INTERVAL",windowTitle="BLT Interval",
   chromeTitle="I N T E R V A L",title="INTERVAL",
   subtitle="ITEM SPACING  アイテム間隔を整列",
 }
@@ -290,24 +315,73 @@ function Core.format(value,unit)
 end
 
 function Core.collect(project)
-  local items = {}
-  for i = 0, R.CountSelectedMediaItems(project) - 1 do
-    local item = R.GetSelectedMediaItem(project, i)
-    if item and R.ValidatePtr2(project, item, "MediaItem*") then
-      local track = R.GetMediaItemTrack(item)
-      items[#items + 1] = {
-        item = item, position = R.GetMediaItemInfo_Value(item, "D_POSITION"),
-        length = R.GetMediaItemInfo_Value(item, "D_LENGTH"),
-        locked = (math.floor(R.GetMediaItemInfo_Value(item, "C_LOCK")) & 1) ~= 0,
-        track = R.GetMediaTrackInfo_Value(track, "IP_TRACKNUMBER"),
-        index = R.GetMediaItemInfo_Value(item, "IP_ITEMNUMBER"),
-      }
+  local selected,records,folders={},{},{}
+  local function read(item)
+    if records[item] then return records[item] end
+    local track=R.GetMediaItemTrack(item)
+    local v={item=item,position=R.GetMediaItemInfo_Value(item,"D_POSITION"),
+      length=R.GetMediaItemInfo_Value(item,"D_LENGTH"),
+      locked=(math.floor(R.GetMediaItemInfo_Value(item,"C_LOCK"))&1)~=0,
+      track=R.GetMediaTrackInfo_Value(track,"IP_TRACKNUMBER"),
+      index=R.GetMediaItemInfo_Value(item,"IP_ITEMNUMBER")}
+    records[item]=v
+    if R.CountTracks and R.GetTrack and R.CountTrackMediaItems and R.GetTrackMediaItem
+      and R.GetMediaTrackInfo_Value(track,"I_FOLDERDEPTH")==1 then folders[v.track]=true end
+    return v
+  end
+  for i=0,R.CountSelectedMediaItems(project)-1 do
+    local item=R.GetSelectedMediaItem(project,i)
+    if item and R.ValidatePtr2(project,item,"MediaItem*") then selected[#selected+1]=read(item) end
+  end
+  local items,claimed={},{}
+  if next(folders) then
+    local tracks,ends,stack,depth,track_items={},{},{},0,{}
+    for i=1,R.CountTracks(project) do
+      while #stack>0 and depth<=stack[#stack].depth do ends[stack[#stack].index]=i-1;stack[#stack]=nil end
+      local track=R.GetTrack(project,i-1);tracks[i]=track
+      local delta=R.GetMediaTrackInfo_Value(track,"I_FOLDERDEPTH")
+      if delta==1 then stack[#stack+1]={index=i,depth=depth} end
+      depth=depth+delta
+    end
+    for _,entry in ipairs(stack) do ends[entry.index]=#tracks end
+    local ordered={};for i,v in ipairs(selected) do ordered[i]=v end
+    table.sort(ordered,function(a,b)
+      if a.track~=b.track then return a.track<b.track end
+      if a.position~=b.position then return a.position<b.position end
+      return a.index<b.index
+    end)
+    for _,parent in ipairs(ordered) do
+      if folders[parent.track] and not claimed[parent.item] then
+        local members={parent};local start,finish=parent.position,parent.position+parent.length
+        -- Ownership is determined from the original block's time range, before
+        -- any writes. Later media on the same folder track are separate units.
+        for ti=parent.track+1,ends[parent.track] or parent.track do
+          local list=track_items[ti]
+          if not list then
+            list={};track_items[ti]=list
+            for j=0,R.CountTrackMediaItems(tracks[ti])-1 do list[#list+1]=read(R.GetTrackMediaItem(tracks[ti],j)) end
+          end
+          for _,v in ipairs(list) do
+            if not claimed[v.item] and v.position<finish and v.position+v.length>start then members[#members+1]=v end
+          end
+        end
+        if #members>1 then
+          local unit={item={},members=members,position=start,length=parent.length,track=parent.track,index=parent.index,locked=false}
+          local ending=finish
+          for _,v in ipairs(members) do
+            claimed[v.item]=true;unit.position=math.min(unit.position,v.position)
+            ending=math.max(ending,v.position+v.length);unit.locked=unit.locked or v.locked
+          end
+          unit.length=ending-unit.position;items[#items+1]=unit
+        end
+      end
     end
   end
-  table.sort(items, function(a, b)
-    if a.position ~= b.position then return a.position < b.position end
-    if a.track ~= b.track then return a.track < b.track end
-    return a.index < b.index
+  for _,v in ipairs(selected) do if not claimed[v.item] then items[#items+1]=v end end
+  table.sort(items,function(a,b)
+    if a.position~=b.position then return a.position<b.position end
+    if a.track~=b.track then return a.track<b.track end
+    return a.index<b.index
   end)
   return items
 end
@@ -436,6 +510,20 @@ function Core.plan(project, items, interval, mode, unit, scope)
     if not ok then return nil, err end
   end
 
+  -- Expand rigid folder units only after planning every scope. All child
+  -- positions enter the existing single Undo block and failure rollback.
+  local units={};for _,v in ipairs(items) do if v.members then units[v.item]=v end end
+  if next(units) then
+    local expanded={}
+    for _,change in ipairs(changes) do
+      local unit=units[change.item]
+      if unit then
+        local delta=change.after-change.before
+        for _,v in ipairs(unit.members) do expanded[#expanded+1]={item=v.item,before=v.position,after=v.position+delta} end
+      else expanded[#expanded+1]=change end
+    end
+    changes=expanded
+  end
   return changes
 end
 
@@ -618,9 +706,9 @@ local function animate(key, target)
 end
 
 local fonts = {"Yu Gothic UI", "Segoe UI", "Consolas"}
-if R.GetOS():match("OSX") then fonts = {"Hiragino Sans", "Helvetica Neue", "Menlo"} end
+if BLT_MAC then fonts = {"Hiragino Sans", "Helvetica Neue", "Menlo"} end
 if R.GetOS():match("Linux") then fonts = {"sans-serif", "sans-serif", "monospace"} end
-fonts[4]=R.GetOS():match("Win") and "Segoe UI" or (R.GetOS():match("OSX") and "Helvetica Neue" or "sans-serif")
+fonts[4]=R.GetOS():match("Win") and "Segoe UI" or (BLT_MAC and "Helvetica Neue" or "sans-serif")
 
 local function sx(x) return ox + x * scale end
 local function sy(y) return oy + y * scale end
@@ -1729,11 +1817,11 @@ end
 local function apply_custom_window_style(target_w,target_h)
   local hwnd=gfx_window_handle()
   if not hwnd then return false end
-  local ok,l,t=R.JS_Window_GetRect(hwnd)
+  local ok,l,t=WindowGeometry.JS_Window_GetRect(hwnd)
   if not R.JS_Window_SetStyle(hwnd,"POPUP") then return false end
-  local after,x,y,r,b=R.JS_Window_GetRect(hwnd)
+  local after,x,y,r,b=WindowGeometry.JS_Window_GetRect(hwnd)
   if ok and (not after or x~=l or y~=t or r-x~=target_w or b-y~=target_h) then
-    if not R.JS_Window_SetPosition(hwnd,l,t,target_w,target_h,"","") then return false end
+    if not WindowGeometry.JS_Window_SetPosition(hwnd,l,t,target_w,target_h,"","") then return false end
   end
   return true
 end
@@ -1741,10 +1829,10 @@ end
 local function reset_window_size()
   local hwnd=gfx_window_handle()
   if not hwnd then return end
-  local ok,l,t,r,b=R.JS_Window_GetRect(hwnd)
+  local ok,l,t,r,b=WindowGeometry.JS_Window_GetRect(hwnd)
   if not ok then return end
   if r-l~=W or b-t~=H+Chrome.titleH then
-    if not R.JS_Window_SetPosition(hwnd,l,t,W,H+Chrome.titleH,"","") then return end
+    if not WindowGeometry.JS_Window_SetPosition(hwnd,l,t,W,H+Chrome.titleH,"","") then return end
     Chrome.geometryDirty=true
   end
   State.set("window_w",tostring(W),true)
@@ -1810,9 +1898,9 @@ local function titlebar_cleanup() set_resize_cursor(nil) end
 local function begin_window_resize(mode)
   local hwnd=gfx_window_handle()
   if not hwnd or not mode then return false end
-  local ok,l,t,r,b=R.JS_Window_GetRect(hwnd)
+  local ok,l,t,r,b=WindowGeometry.JS_Window_GetRect(hwnd)
   if not ok then return false end
-  local sx,sy=R.GetMousePosition()
+  local sx,sy=WindowGeometry.GetMousePosition()
   Chrome.resize={mode=mode,mouseX=sx,mouseY=sy,left=l,top=t,right=r,bottom=b,lastX=l,lastY=t,lastW=r-l,lastH=b-t}
   Chrome.drag=nil
   return true
@@ -1823,7 +1911,7 @@ local function update_window_resize()
   if not d then return end
   local hwnd=gfx_window_handle()
   if not hwnd then Chrome.resize=nil; return end
-  local sx,sy=R.GetMousePosition()
+  local sx,sy=WindowGeometry.GetMousePosition()
   local dx,dy=sx-d.mouseX,sy-d.mouseY
   local l,t,r,b=d.left,d.top,d.right,d.bottom
   if d.mode:find("l",1,true) then l=math.min(d.left+dx,r-Chrome.minW) end
@@ -1833,7 +1921,7 @@ local function update_window_resize()
   local width,height=math.max(Chrome.minW,math.floor(r-l+.5)),math.max(Chrome.minH,math.floor(b-t+.5))
   l,t=math.floor(l+.5),math.floor(t+.5)
   if d.lastX==l and d.lastY==t and d.lastW==width and d.lastH==height then return end
-  if R.JS_Window_SetPosition(hwnd,l,t,width,height,"","") then
+  if WindowGeometry.JS_Window_SetPosition(hwnd,l,t,width,height,"","") then
     d.lastX,d.lastY,d.lastW,d.lastH=l,t,width,height;Chrome.geometryDirty=true
   end
 end
@@ -2262,9 +2350,9 @@ local function custom_titlebar(blocked)
     elseif inBar then
       local hwnd=gfx_window_handle()
       if hwnd then
-        local ok,l,t,r,b=R.JS_Window_GetRect(hwnd)
+        local ok,l,t,r,b=WindowGeometry.JS_Window_GetRect(hwnd)
         if ok then
-          local sx,sy=R.GetMousePosition()
+          local sx,sy=WindowGeometry.GetMousePosition()
           Chrome.drag={mouseX=sx,mouseY=sy,left=l,top=t,width=r-l,height=b-t,lastX=l,lastY=t}
         end
       end
@@ -2273,10 +2361,10 @@ local function custom_titlebar(blocked)
 
   if down and Chrome.resize then update_window_resize() end
   if down and Chrome.drag and not Chrome.resize then
-    local d=Chrome.drag;local sx,sy=R.GetMousePosition()
+    local d=Chrome.drag;local sx,sy=WindowGeometry.GetMousePosition()
     local x,y=d.left+(sx-d.mouseX),d.top+(sy-d.mouseY)
     local hwnd=(x~=d.lastX or y~=d.lastY) and gfx_window_handle() or nil
-    if hwnd and R.JS_Window_SetPosition(hwnd,x,y,d.width,d.height,"","") then
+    if hwnd and WindowGeometry.JS_Window_SetPosition(hwnd,x,y,d.width,d.height,"","") then
       d.lastX,d.lastY=x,y;Chrome.geometryDirty=true
     end
   end
@@ -2564,7 +2652,8 @@ end
 if Chameleon.enabled then Chameleon.refresh(true) end
 local chrome_ok,chrome_err=titlebar_api_ready()
 if not chrome_ok then Language.mb(public_error(chrome_err),"Interval | エラー",0); return end
-gfx.ext_retina=1
+-- Match native window/input coordinates in logical points on Mac.
+gfx.ext_retina=BLT_MAC and 0 or 1
 local initial_w=(saved_window_w and saved_window_w==saved_window_w) and math.max(Layout.minWidth,math.min(Layout.maxWidth,saved_window_w)) or W
 local initial_h=(saved_window_h and saved_window_h==saved_window_h) and math.max(Layout.minHeight,math.min(Layout.maxHeight,saved_window_h)) or (H+Chrome.titleH)
 if saved_window_x and saved_window_y then
