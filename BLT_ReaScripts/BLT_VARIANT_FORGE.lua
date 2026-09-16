@@ -1,10 +1,19 @@
 -- @description VARIANT FORGE
--- @version 0.5.9
+-- @version 0.5.10
 -- @author Balrulu
+-- @provides
+--   . > ../
 -- @changelog
---   Unify Mac font and display scaling; fix floating TRACE collapse detection.
+--   Increase preset capacity and show shared overflow dialogs.
+--   Save texture references losslessly with a compact shared frequency grid.
 -- @about
 --   BLT SERIES Beta TEST UPLOAD
+
+-- BLT preset transfer limits 1.1.0. Embedded; no runtime dependency.
+local BLTPresetLimits={bytes=16777216,stringBytes=2097152,nodes=262144,entries=8192}
+function BLTPresetLimits.show(english)
+ reaper.MB(english and 'Preset capacity limit exceeded. Export presets individually instead of as a bundle.' or '容量上限オーバーです。一括ではなく個別に保存してください。','BLT PRESET',0)
+end
 
 -- BLT window geometry 1.0.0. Embedded; screen coordinates only.
 local function create_window_geometry(api,graphics)
@@ -562,25 +571,25 @@ function B.pack(v)
  return table.concat(p)
 end
 function B.unpack(data)
- if type(data)~='string' or #data>1048576 then return nil end
- local at,nodes=1,0
+ if type(data)~='string' or #data>BLTPresetLimits.bytes then return nil end
+ local at,nodes=1,0;local capacity=false
  local function read(depth)
-  nodes=nodes+1;assert(depth<14 and nodes<30000)
+  nodes=nodes+1;if nodes>BLTPresetLimits.nodes then capacity=true;error("preset capacity") end;assert(depth<14)
   local tag=data:sub(at,at);at=at+1
   if tag=='b' then local v=data:sub(at,at);at=at+1;assert(v=='0' or v=='1');return v=='1' end
   assert(tag=='s' or tag=='n' or tag=='t')
   local finish=data:find(':',at,true);assert(finish and finish-at<9)
   local raw=data:sub(at,finish-1);assert(raw:match('^%d+$'));local n=tonumber(raw);at=finish+1
   if tag=='t' then
-   assert(n<=4096);local v={}
+   if n>BLTPresetLimits.entries then capacity=true;error("preset capacity") end;local v={}
    for i=1,n do local k=read(depth+1);assert(type(k)=='string' or type(k)=='number');assert(v[k]==nil);v[k]=read(depth+1) end
    return v
   end
-  assert(n<=65536 and at+n-1<=#data);local v=data:sub(at,at+n-1);at=at+n
+  if n>BLTPresetLimits.stringBytes then capacity=true;error("preset capacity") end;assert(at+n-1<=#data);local v=data:sub(at,at+n-1);at=at+n
   if tag=='n' then v=tonumber(v);assert(v and v==v and math.abs(v)<math.huge) end
   return v
  end
- local ok,v=pcall(read,0);if ok and at==#data+1 then return v end
+ local ok,v=pcall(read,0);if capacity then BLTPresetLimits.show(Language.code=='EN') end;if ok and at==#data+1 then return v end
 end
 function B.cleanText(text)
  text=tostring(text);B.cleanCache=B.cleanCache or {};local v=B.cleanCache[text];if v then return v end
@@ -697,6 +706,7 @@ function Presets.decode(data)
  local prefix=host.section..'_PRESET_V1\n'
  if data:sub(1,#prefix)~=prefix then return nil end
  local p=B.unpack(data:sub(#prefix+1))
+ if type(p)=='table' and type(p.values)=='table' and p.values.texture==nil then p.values.texture=B.copy(host.defaults.texture) end
  if type(p)~='table' or not Presets.name(p.name) or not B.shape(p.values,host.defaults) or not host.valid(p.values) then return nil end
  return p
 end
@@ -750,11 +760,11 @@ function Presets.step(d)
  Presets.apply(n==1 and Presets.factory or Presets.items[n-1])
 end
 function Presets.encodeBundle(items)
- local rows={};for _,p in ipairs(items) do rows[#rows+1]=Presets.encode(p) end
+ local rows={};local size=128;for _,p in ipairs(items) do local row=Presets.encode(p);size=size+#row+32;if size>BLTPresetLimits.bytes then BLTPresetLimits.show(Language.code=='EN');return end;rows[#rows+1]=row end
  return host.section..'_PRESET_BUNDLE_V1\n'..B.pack(rows)
 end
 function Presets.decodeTransfer(data)
- if type(data)~='string' or #data>1048576 then return nil end
+ if type(data)~='string' or #data>BLTPresetLimits.bytes then return nil end
  local p=Presets.decode(data);if p then return not Presets.isFactory(p) and {p} or nil end
  local prefix=host.section..'_PRESET_BUNDLE_V1\n';if data:sub(1,#prefix)~=prefix then return nil end
  local rows=B.unpack(data:sub(#prefix+1));if type(rows)~='table' or #rows<1 or #rows>200 then return nil end
@@ -770,7 +780,7 @@ end
 function Presets.import()
  local ok,path=Language.open('','プリセットをインポート（個別／一覧）','bltpreset');if not ok then return end
  local f=io.open(path,'rb');if not f then notice('ファイルを開けません。',false);return end
- local data=f:read(1048577);f:close();local items=Presets.decodeTransfer(data)
+ local data=f:read(BLTPresetLimits.bytes+1);f:close();if #data>BLTPresetLimits.bytes then BLTPresetLimits.show(Language.code=='EN');return end;local items=Presets.decodeTransfer(data)
  if not items then notice('このアプリ用の有効なプリセットではありません。',false);return end
  local merged,index={},{};for i,p in ipairs(Presets.items) do merged[i]=p;index[p.name]=i end
  local conflicts=0
@@ -787,6 +797,7 @@ function Presets.export(all)
   local p=Presets.capture(Presets.current and Presets.current.name or '現在値');if not p then notice('設定値を確認してください。',false);return end
   data=Presets.encode(p);file=p.name:gsub('[\\/:*?"<>|]','_')..'.bltpreset'
  end
+ if not data then return end;if #data>BLTPresetLimits.bytes then BLTPresetLimits.show(Language.code=='EN');return end
  local title=all and 'プリセット一覧をエクスポート' or '現在値をエクスポート'
  local ok,path
  if R.JS_Dialog_BrowseForSaveFile then ok,path=Language.save(title,'',file,'BLT Preset (*.bltpreset)\0*.bltpreset\0')
@@ -1390,7 +1401,7 @@ end
 return B
 end)()
 
-local Core={VERSION='0.5.9',SOURCE_SR=48000,SOURCE_HOP=48,SOURCE_BLOCK=12000,SOURCE_PREVIEW_BINS=1400,SOURCE_MAX_REGIONS=16384,
+local Core={VERSION='0.5.10',SOURCE_SR=48000,SOURCE_HOP=48,SOURCE_BLOCK=12000,SOURCE_PREVIEW_BINS=1400,SOURCE_MAX_REGIONS=16384,
  GENERATED_TAG='P_EXT:BLT_VARIANT_FORGE',TEMP_TAG='P_EXT:BLT_VARIANT_FORGE_TEMP',SECTION='BLT_VARIANT_FORGE',EQ_FIXED_CACHE={}}
 Core.STALE_TEMP_PROJECTS={};Core.RUN_ID='';Core.TEMP_HEARTBEAT_TTL=8;Core.TEMP_HEARTBEAT_KEY='temp_live_registry_v1';Core.temp_heartbeat_at=0
 local abs,min,max,floor,ceil=math.abs,math.min,math.max,math.floor,math.ceil
@@ -5954,7 +5965,53 @@ function UI.close()
   BLT.logError(err)
  end
 end
-BLT.variantDefaults={settings=BLT.copy(Core.defaults),locks={}};for _,k in ipairs(Core.FEATURES) do BLT.variantDefaults.locks[k]=false end;function BLT.captureVariant() BLT.variantView=BLT.variantView or {};BLT.variantView.settings=S;BLT.variantView.locks=A.apply.lock;return BLT.variantView end
+-- Lossless IEEE-754 hex: 6 KiB per reference, shared frequency grid rebuilt on load.
+function BLT.emptyTexturePreset()
+ local v={format=1,count=0,refs={}}
+ for i=1,10 do v.refs[i]={name='',data=''} end
+ return v
+end
+function BLT.captureTexture()
+ local bank=A.texture_bank
+ if BLT.texturePresetBank==bank and BLT.texturePresetCache then return BLT.texturePresetCache end
+ local v=BLT.emptyTexturePreset();v.count=#(bank or {})
+ for i,entry in ipairs(bank or {}) do
+  local parts={};local spec=entry.spectrum
+  for j=1,Core.TEXTURE_SPECTRUM_BINS do parts[j]=string.pack('<dd',spec.db[j],spec.persistence[j]) end
+  local name=BLT.cleanText(entry.name or ('TEXTURE '..i))
+  while #name>512 do name=name:sub(1,(utf8.offset(name,-1) or #name)-1) end
+  v.refs[i]={name=name,data=(table.concat(parts):gsub('.',function(c)return string.format('%02x',c:byte())end))}
+ end
+ BLT.texturePresetBank=bank;BLT.texturePresetCache=v;return v
+end
+function BLT.decodeTexture(v)
+ if type(v)~='table' or v.format~=1 or type(v.count)~='number' or v.count%1~=0 or v.count<0 or v.count>10 or type(v.refs)~='table' or #v.refs~=10 then return end
+ local bank={};local bins=Core.TEXTURE_SPECTRUM_BINS
+ for i,ref in ipairs(v.refs) do
+  if type(ref.name)~='string' or #ref.name>512 or not utf8.len(ref.name) or type(ref.data)~='string' then return end
+  if i>v.count then if ref.name~='' or ref.data~='' then return end
+  else
+   if #ref.data~=bins*32 or ref.data:find('[^0-9a-f]') then return end
+   local bytes=ref.data:gsub('..',function(pair)return string.char(tonumber(pair,16))end)
+   local spec={freq={},db={},persistence={}};local pos=1
+   for j=1,bins do
+    local db,persist;db,persist,pos=string.unpack('<dd',bytes,pos)
+    if not finite(db) or db< -120 or db>0 or not finite(persist) or persist<0 or persist>1 then return end
+    spec.db[j]=db;spec.persistence[j]=persist
+    spec.freq[j]=Core.TEXTURE_FREQ_MIN*math.exp((j-1)/max(1,bins-1)*math.log(Core.TEXTURE_FREQ_MAX/Core.TEXTURE_FREQ_MIN))
+   end
+   bank[i]={name=ref.name,spectrum=spec}
+  end
+ end
+ return bank
+end
+function BLT.restoreTexture(v)
+ local bank=assert(BLT.decodeTexture(v),'Invalid texture reference data')
+ A.texture_bank=bank;A.texture_preview_index=1;A.texture_draw_cache=nil
+ BLT.texturePresetBank=bank;BLT.texturePresetCache=BLT.copy(v)
+end
+
+BLT.variantDefaults={settings=BLT.copy(Core.defaults),locks={},texture=BLT.emptyTexturePreset()};for _,k in ipairs(Core.FEATURES) do BLT.variantDefaults.locks[k]=false end;function BLT.captureVariant() BLT.variantView=BLT.variantView or {};BLT.variantView.settings=S;BLT.variantView.locks=A.apply.lock;BLT.variantView.texture=BLT.captureTexture();return BLT.variantView end
 function BLT.pick(obj,keys) local v=BLT.valueView or {};BLT.valueView=v;for k in pairs(keys) do v[k]=obj[k] end;return v end
 Chrome.titleH=Chrome.title_h;Chrome.titleText=Chrome.title_text or "V A R I A N T   F O R G E";Chrome.windowTitle=Chrome.title
 PrimaryButton.painter={C=C,gradient=gradient,line=line,rect=rect,corners=finish_corners,disc=disc,label=label}
@@ -5965,7 +6022,7 @@ BLT.attach({
  geometry=function() return scale,ox,oy end,active=function() local f=gfx.getchar(65536);return (f&1)==0 or (f&2)~=0 end,
  wake=function() A.content_dirty=true;redraw_dirty=true;next_draw_time=0;wake_visuals() end,
  defaults=BLT.variantDefaults,capture=function() return BLT.captureVariant() end,
- valid=function(v) return Core.validate(v.settings)~=nil end,apply=function(v) for k,x in pairs(v.settings) do S[k]=x end;A.apply.lock=v.locks;UI.changed();UI.persist_now() end,
+ valid=function(v) return Core.validate(v.settings)~=nil and BLT.decodeTexture(v.texture)~=nil end,apply=function(v) for k,x in pairs(v.settings) do S[k]=x end;A.apply.lock=v.locks;BLT.restoreTexture(v.texture);UI.changed();UI.persist_now() end,
  undoRefresh=function() UI.refresh() end,
  busy=function() return A.job~=nil or A.source_job~=nil end,commit=function() return UI.commit_edit() end,
  cancelEdit=function() edit=nil;A.field_drag=nil;A.curve_drag=nil end,editing=function() return edit~=nil end,

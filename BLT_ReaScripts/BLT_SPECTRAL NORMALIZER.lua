@@ -1,10 +1,18 @@
 -- @description SPECTRAL NORMALIZER
--- @version 0.2.0
+-- @version 0.2.2
 -- @author Balrulu
+-- @provides
+--   . > ../
 -- @changelog
---   Consolidate settings; cache text metrics and overlapping audio reads.
+--   Increase preset capacity and show shared overflow dialogs.
 -- @about
 --   BLT SERIES Beta TEST UPLOAD
+
+-- BLT preset transfer limits 1.1.0. Embedded; no runtime dependency.
+local BLTPresetLimits={bytes=16777216,stringBytes=2097152,nodes=262144,entries=8192}
+function BLTPresetLimits.show(english)
+ reaper.MB(english and 'Preset capacity limit exceeded. Export presets individually instead of as a bundle.' or '容量上限オーバーです。一括ではなく個別に保存してください。','BLT PRESET',0)
+end
 
 -- BLT window geometry 1.0.0. Embedded; screen coordinates only.
 local function create_window_geometry(api,graphics)
@@ -31,7 +39,7 @@ end
 local WindowGeometry=create_window_geometry(reaper,gfx)
 local BLT_MAC=(reaper.GetOS() or ''):match('OSX')~=nil or (reaper.GetOS() or ''):match('macOS')~=nil
 
-local Core={VERSION='0.2.0',SECTION='BLT_SPECTRAL_NORMALIZER',MAX_POINTS=1024}
+local Core={VERSION='0.2.2',SECTION='BLT_SPECTRAL_NORMALIZER',MAX_POINTS=1024}
 local abs,min,max,sqrt,log,pi,floor,ceil=math.abs,math.min,math.max,math.sqrt,math.log,math.pi,math.floor,math.ceil
 local function clamp(x,a,b) return min(b,max(a,x)) end
 local function finite(x) return type(x)=='number' and x==x and abs(x)<math.huge end
@@ -336,7 +344,7 @@ function Core.encode(s)
  t[#t+1]='curve='..table.concat(points,',');return table.concat(t,'\n')
 end
 function Core.decode(text)
- assert(type(text)=='string' and #text<100000,'プリセットが大きすぎます。')
+ assert(type(text)=='string' and #text<=BLTPresetLimits.stringBytes,'プリセットが大きすぎます。')
  text=text:gsub('\r\n','\n')
  assert(text:match('^BLT_SPECTRAL_NORMALIZER_V1\n'),'このアプリのプリセットではありません。')
  local s=Core.defaults();local seen,raw_curve={}
@@ -478,6 +486,14 @@ local L={code=R.GetExtState(SECTION,'ui_language')=='EN' and 'EN' or 'JP',en={
  ['32-bit floatで保存できない音声値です。']='A sample cannot be stored as 32-bit float.',['作業WAVが破損しています。']='The working WAV is damaged.',
  ['書き込みサンプル数が一致しません。']='The written sample count does not match.',
 }}
+L.en["戻る"]="Back"
+L.en["現在: "]="Current: "
+L.en["未選択"]="None"
+L.en["プリセット一覧をエクスポート"]="Export preset list"
+L.en["同名のプリセットを上書きしますか？"]="Overwrite presets with matching names?"
+L.en["未保存の変更を破棄して読み込みますか？"]="Discard unsaved changes and load?"
+L.en["インポートしました。一覧から選択してください。"]="Imported. Select from the preset list."
+L.en["プリセットは200個まで保存できます。"]="Up to 200 presets can be saved."
 function L.text(value) local s=tostring(value or '');return L.code=='EN' and (L.en[s] or s) or s end
 function L.toggle() L.code=L.code=='JP' and 'EN' or 'JP';App.store(SECTION,'ui_language',L.code,true) end
 
@@ -514,7 +530,9 @@ function App.safe(fn,...)
 end
 function App.persist()
  for key in pairs(Core.DRAW_LIMITS) do A.settings[key]=A[key] end
- App.store(SECTION,'settings',Core.encode(A.settings),true)
+ local encoded=Core.encode(A.settings)
+ App.store(SECTION,'settings',encoded,true)
+ if Presets.current_entry then local p=Presets.current_entry();if p then A.preset_dirty=encoded~=p.data end end
  App.store(SECTION,'draw_tool',A.tool,true)
 end
 function App.changed(message)
@@ -1070,93 +1088,313 @@ function UI.field(key,x,y,w,h,enabled,dim)
  UI.register('field_'..key,x,y,w,h,UI.noop,enabled)
 end
 
-Presets.items={};Presets.factory={name='ファクトリーデフォルト',data=Core.encode(Core.defaults()),factory=true}
+Presets.items={};Presets.revision=0
+Presets.factory={name='ファクトリーデフォルト',data=Core.encode(Core.defaults()),factory=true}
+Presets.header='BLT_SPECTRAL_NORMALIZER_PRESET_V1\n'
+Presets.bundleHeader='BLT_SPECTRAL_NORMALIZER_PRESET_BUNDLE_V1\n'
 function Presets.valid_name(name)
- name=tostring(name or ''):match('^%s*(.-)%s*$') or ''
- return name~='' and #name<=80 and not name:find('[\r\n=]') and name
+ if type(name)~='string' then return end
+ name=name:match('^%s*(.-)%s*$')
+ return utf8.len(name) and name~='' and #name<=120 and not name:find('[%c|<>!#]') and name
+end
+function Presets.isFactory(p) return p and (p.factory or p.name==Presets.factory.name) end
+function Presets.find(name) for i,p in ipairs(Presets.items) do if p.name==name then return i,p end end end
+function Presets.current_entry()
+ if A.preset_name==Presets.factory.name then return Presets.factory end
+ local _,p=Presets.find(A.preset_name);return p
+end
+function Presets.dirty()
+ local p=Presets.current_entry()
+ return p and Core.encode(A.settings)~=p.data or not p and A.preset_dirty or false
+end
+function Presets.capture(name)
+ UI.commit_edit();App.persist()
+ assert(Presets.valid_name(name),'有効なプリセット名を入力してください。')
+ return {name=name,data=Core.encode(A.settings)}
+end
+function Presets.encode(p) return Presets.header..p.name..'\n'..p.data end
+function Presets.decode(data)
+ if type(data)~='string' or #data>BLTPresetLimits.stringBytes or data:sub(1,#Presets.header)~=Presets.header then return end
+ local name,body=data:sub(#Presets.header+1):match('^([^\n]+)\n(.*)$')
+ if not Presets.valid_name(name) or name==Presets.factory.name then return end
+ local ok,s=pcall(Core.decode,body);if not ok then return end
+ local canonical=Core.encode(s);if body~=canonical then return end
+ return {name=name,data=canonical}
+end
+function Presets.encodeBundle(items)
+ local out={Presets.bundleHeader,tostring(#items),'\n'}
+ local size=128;for _,p in ipairs(items) do local data=Presets.encode(p);size=size+#data+32;if size>BLTPresetLimits.bytes then BLTPresetLimits.show(L.code=='EN');return end;out[#out+1]=#data..'\n'..data end
+ return table.concat(out)
+end
+function Presets.decodeTransfer(data)
+ if type(data)~='string' or #data>BLTPresetLimits.bytes then return end
+ local p=Presets.decode(data);if p then return {p} end
+ if data:sub(1,#Presets.bundleHeader)~=Presets.bundleHeader then return end
+ local cursor=#Presets.bundleHeader+1
+ local function number()
+  local stop=data:find('\n',cursor,true);if not stop then return end
+  local text=data:sub(cursor,stop-1);cursor=stop+1
+  if not text:match('^%d+$') then return end;return tonumber(text)
+ end
+ local count=number();if not count or count<1 or count>200 then return end
+ local items,names={},{}
+ for i=1,count do
+  local size=number();if not size or size<1 or size>BLTPresetLimits.stringBytes or cursor+size-1>#data then return end
+  local entry=Presets.decode(data:sub(cursor,cursor+size-1));cursor=cursor+size
+  if not entry or names[entry.name] then return end;names[entry.name]=true;items[i]=entry
+ end
+ if cursor~=#data+1 then return end;return items
 end
 function Presets.load()
- Presets.items={};local count=clamp(tonumber(R.GetExtState(SECTION,'preset_count')) or 0,0,50)
+ Presets.items={};local names={};local count=clamp(floor(tonumber(R.GetExtState(SECTION,'preset_count')) or 0),0,200)
  for i=1,count do
   local name=Presets.valid_name(R.GetExtState(SECTION,'preset_name_'..i));local data=R.GetExtState(SECTION,'preset_data_'..i)
-  if name and data~='' then local ok=pcall(Core.decode,data);if ok then Presets.items[#Presets.items+1]={name=name,data=data} end end
+  local ok,s=pcall(Core.decode,data)
+  if name and name~=Presets.factory.name and not names[name] and ok then names[name]=true;Presets.items[#Presets.items+1]={name=name,data=Core.encode(s)} end
  end
- table.sort(Presets.items,function(a,b)return a.name:lower()<b.name:lower() end)
- local current=R.GetExtState(SECTION,'current_preset');local encoded=Core.encode(A.settings);local matched
- if current=='__factory__' then matched=Presets.factory
- elseif current~='' then for _,p in ipairs(Presets.items) do if p.name==current then matched=p;break end end end
- A.preset_name=matched and (matched.factory and 'ファクトリーデフォルト' or matched.name) or nil
- A.preset_dirty=matched and matched.data~=encoded or (not matched and R.GetExtState(SECTION,'settings')~='')
+ table.sort(Presets.items,function(a,b)return a.name<b.name end)
+ local current=R.GetExtState(SECTION,'current_preset')
+ A.preset_name=current=='__factory__' and Presets.factory.name or (Presets.find(current) and current or nil)
+ Presets.current=Presets.current_entry();A.preset_dirty=Presets.dirty();Presets.revision=Presets.revision+1
 end
 function Presets.store()
- local previous=tonumber(R.GetExtState(SECTION,'preset_count')) or 0
+ local previous=clamp(floor(tonumber(R.GetExtState(SECTION,'preset_count')) or 0),0,200)
  App.store(SECTION,'preset_count',tostring(#Presets.items),true)
  for i,p in ipairs(Presets.items) do App.store(SECTION,'preset_name_'..i,p.name,true);App.store(SECTION,'preset_data_'..i,p.data,true) end
- for i=#Presets.items+1,previous do R.DeleteExtState(SECTION,'preset_name_'..i,true);R.DeleteExtState(SECTION,'preset_data_'..i,true) end
+ for i=#Presets.items+1,previous do App.store(SECTION,'preset_name_'..i,'',true);App.store(SECTION,'preset_data_'..i,'',true) end
+ Presets.revision=Presets.revision+1;A.dirty=true
 end
-function Presets.find(name) for i,p in ipairs(Presets.items) do if p.name==name then return i,p end end end
+function Presets.put(p)
+ if Presets.isFactory(p) then return false end
+ local index=Presets.find(p.name)
+ if index and R.MB(L.text('同名のプリセットを上書きしますか？'),L.text('プリセット'),4)~=6 then return false end
+ assert(index or #Presets.items<200,'プリセットは200個まで保存できます。')
+ if index then Presets.items[index]=p else Presets.items[#Presets.items+1]=p;table.sort(Presets.items,function(a,b)return a.name<b.name end) end
+ Presets.store();return true
+end
+function Presets.save(as_new)
+ if A.job or A.modal then return end
+ if not as_new and Presets.isFactory(Presets.current_entry()) then return end
+ local name=A.preset_name
+ if as_new or not name then
+  local ok,text=R.GetUserInputs(L.text('名前を付けて保存…'),1,L.text('プリセット')..':,extrawidth=180',Presets.isFactory(Presets.current_entry()) and '' or name or '')
+  if not ok then return end;name=Presets.valid_name(text);assert(name and name~=Presets.factory.name,'有効なプリセット名を入力してください。')
+ end
+ local p=Presets.capture(name)
+ if Presets.put(p) then A.preset_name=name;Presets.current=p;A.preset_dirty=false;App.store(SECTION,'current_preset',name,true);App.notice('プリセットを保存しました。',false) end
+end
 function Presets.apply(p)
- A.edit=nil;A.number_drag=nil;A.drag=nil;A.selection=nil;A.settings=Core.decode(p.data);for key in pairs(Core.DRAW_LIMITS) do A[key]=A.settings[key] end;UI.reset_line_preview(true);A.pointer_capture=nil;A.preset_name=p.factory and 'ファクトリーデフォルト' or p.name;A.preset_dirty=false;A.history={};A.redo={};App.persist()
- App.store(SECTION,'current_preset',p.factory and '__factory__' or p.name,true)
- App.notice(p.factory and 'ファクトリーデフォルトを読み込みました。' or 'プリセットを読み込みました。',false)
+ if A.job or A.modal then return end
+ UI.commit_edit()
+ local settings=Core.decode(p.data)
+ if Presets.dirty() and R.MB(L.text('未保存の変更を破棄して読み込みますか？'),L.text('プリセット'),4)~=6 then return end
+ UI.release_capture();A.edit=nil;A.selection=nil;A.hover_node=nil;A.settings=settings
+ for key in pairs(Core.DRAW_LIMITS) do A[key]=settings[key] end
+ UI.reset_line_preview(true);A.history={};A.redo={};A.preset_name=p.name;Presets.current=p;A.preset_dirty=false
+ App.persist();App.store(SECTION,'current_preset',Presets.isFactory(p) and '__factory__' or p.name,true)
+ App.notice('プリセットを読み込みました。',false)
 end
-function Presets.ask_name(default)
- local ok,name=R.GetUserInputs(L.text('名前を付けて保存…'),1,L.text('プリセット')..':,extrawidth=180',default or '')
- if not ok then return end;name=Presets.valid_name(name);assert(name,'有効なプリセット名を入力してください。');return name
-end
-function Presets.save_as()
- local name=Presets.ask_name(A.preset_name~='ファクトリーデフォルト' and A.preset_name or '')
- if not name then return end
- local index=Presets.find(name)
- assert(index or #Presets.items<50,'プリセットは50個まで保存できます。')
- if index and R.MB(string.format('「%s」を上書きしますか？',name),L.text('プリセット'),4)~=6 then return end
- local entry={name=name,data=Core.encode(A.settings)}
- if index then Presets.items[index]=entry else Presets.items[#Presets.items+1]=entry;table.sort(Presets.items,function(a,b)return a.name:lower()<b.name:lower() end) end
- Presets.store();A.preset_name=name;A.preset_dirty=false;App.store(SECTION,'current_preset',name,true);App.notice('プリセットを保存しました。',false)
-end
-function Presets.overwrite()
- if not A.preset_name or A.preset_name=='ファクトリーデフォルト' then return Presets.save_as() end
- local index=Presets.find(A.preset_name);if not index then return Presets.save_as() end
- if R.MB(string.format('「%s」を上書きしますか？',A.preset_name),L.text('プリセット'),4)~=6 then return end
- Presets.items[index].data=Core.encode(A.settings);Presets.store();A.preset_dirty=false;App.store(SECTION,'current_preset',A.preset_name,true);App.notice('プリセットを保存しました。',false)
-end
-function Presets.delete()
- if not A.preset_name or A.preset_name=='ファクトリーデフォルト' then return end
- local index=Presets.find(A.preset_name);if not index then return end
- if R.MB(string.format('「%s」を削除しますか？',A.preset_name),L.text('プリセット'),4)~=6 then return end
- table.remove(Presets.items,index);Presets.store();A.preset_name=nil;A.preset_dirty=true;R.DeleteExtState(SECTION,'current_preset',true);App.notice('プリセットを削除しました。',false)
+function Presets.merge(items)
+ local merged,index={},{};local conflicts=false
+ for i,p in ipairs(Presets.items) do merged[i]=p;index[p.name]=i end
+ for _,p in ipairs(items) do
+  if index[p.name] then conflicts=true;merged[index[p.name]]=p else merged[#merged+1]=p;index[p.name]=#merged end
+ end
+ assert(#merged<=200,'プリセットは200個まで保存できます。')
+ if conflicts and R.MB(L.text('同名のプリセットを上書きしますか？'),L.text('プリセット'),4)~=6 then return false end
+ table.sort(merged,function(a,b)return a.name<b.name end);Presets.items=merged;Presets.store();Presets.current=Presets.current_entry();A.preset_dirty=Presets.dirty();return true
 end
 function Presets.import()
+ if A.job or A.modal then return end
  local ok,path=R.GetUserFileNameForRead('',L.text('インポート…'),'.bltpreset');if not ok then return end
- local file=assert(io.open(path,'rb'),'プリセットファイルを開けません。');local data=file:read(100001);file:close()
- A.edit=nil;A.number_drag=nil;A.drag=nil;A.selection=nil;A.settings=Core.decode(data);A.preset_name=nil;A.preset_dirty=true;A.history={};A.redo={};R.DeleteExtState(SECTION,'current_preset',true);App.persist();App.notice('プリセットをインポートしました。',false)
+ local file=assert(io.open(path,'rb'),'プリセットファイルを開けません。');local data=file:read(BLTPresetLimits.bytes+1);file:close()
+ if #data>BLTPresetLimits.bytes then BLTPresetLimits.show(L.code=='EN');return end
+ local items=Presets.decodeTransfer(data);assert(items,'このアプリのプリセットではありません。')
+ if Presets.merge(items) then App.notice('インポートしました。一覧から選択してください。',false) end
 end
-function Presets.export()
- local ok,path=R.JS_Dialog_BrowseForSaveFile(L.text('現在値をエクスポート'),R.GetProjectPath(''),'Spectral.bltpreset','BLT preset (*.bltpreset)\0*.bltpreset\0')
- if not ok or not path or path=='' then return end
+function Presets.export(all)
+ if A.job or A.modal then return end
+ local data,filename,title
+ if all then
+  if #Presets.items==0 then return end;data=Presets.encodeBundle(Presets.items);filename='SPECTRAL_NORMALIZER_presets.bltpreset';title='プリセット一覧をエクスポート'
+ else
+  if Presets.isFactory(Presets.current_entry()) then return end
+  data=Presets.encode(Presets.capture(A.preset_name or '現在値'));filename='Spectral.bltpreset';title='現在値をエクスポート'
+ end
+ if not data then return end;if #data>BLTPresetLimits.bytes then BLTPresetLimits.show(L.code=='EN');return end
+ local ok,path=R.JS_Dialog_BrowseForSaveFile(L.text(title),R.GetProjectPath(''),filename,'BLT preset (*.bltpreset)\0*.bltpreset\0')
+ if not ok or ok==0 or not path or path=='' then return end
  if not path:lower():match('%.bltpreset$') then path=path..'.bltpreset' end
- local exists=io.open(path,'rb');if exists then exists:close();if R.MB('同名ファイルを上書きしますか？',L.text('プリセット'),4)~=6 then return end end
- local file=assert(io.open(path,'wb'),'保存先を開けません。');local wrote,err=file:write(Core.encode(A.settings));local closed=file:close();assert(wrote and closed,err or '保存に失敗しました。')
+ local exists=io.open(path,'rb');if exists then exists:close();if R.MB(L.text('同名ファイルを上書きしますか？'),L.text('プリセット'),4)~=6 then return end end
+ local file=assert(io.open(path,'wb'),'保存先を開けません。');local wrote,err=file:write(data);local closed=file:close();assert(wrote and closed,err or '保存に失敗しました。')
  App.notice('プリセットをエクスポートしました。',false)
 end
 function Presets.step(delta)
  if A.job or A.modal then return end
- local list={Presets.factory};for _,p in ipairs(Presets.items) do list[#list+1]=p end
- local index=1;for i,p in ipairs(list) do if (p.factory and A.preset_name=='ファクトリーデフォルト') or p.name==A.preset_name then index=i;break end end
- index=((index-1+delta)%#list)+1;Presets.apply(list[index])
+ local index=A.preset_name==Presets.factory.name and 1 or nil
+ for i,p in ipairs(Presets.items) do if p.name==A.preset_name then index=i+1;break end end
+ index=index and ((index-1+delta)%(#Presets.items+1))+1 or 1
+ Presets.apply(index==1 and Presets.factory or Presets.items[index-1])
 end
-function Presets.menu()
- if A.job or A.modal then return end;UI.commit_edit();local entries,actions={},{}
- local function add(text,fn,disabled,checked)
-  entries[#entries+1]=(checked and '!' or '')..(disabled and '#' or '')..text;if not disabled then actions[#entries]=fn end
+
+Presets.popup={width=286,rowHeight=29,headerHeight=34,visiblePresets=7,hoverDelay=1}
+function Presets.fit(text,width)
+ local cache=Presets.fitCache or {};Presets.fitCache=cache
+ local key=width..':'..text;local hit=cache[key];if hit then return hit end
+ local shown=text
+ if gfx.measurestr(shown)>width then
+  local lo,hi=0,utf8.len(text) or 0
+  while lo<hi do local mid=(lo+hi+1)//2;local stop=utf8.offset(text,mid+1) or #text+1
+   if gfx.measurestr(text:sub(1,stop-1)..'…')<=width then lo=mid else hi=mid-1 end
+  end
+  shown=text:sub(1,(utf8.offset(text,lo+1) or #text+1)-1)..'…'
  end
- add(L.text('ファクトリーデフォルト'),function()Presets.apply(Presets.factory)end,false,A.preset_name=='ファクトリーデフォルト')
- for _,p in ipairs(Presets.items) do local item=p;add(item.name,function()Presets.apply(item)end,false,A.preset_name==item.name) end
- add('────────',nil,true);add(L.text('上書き保存'),Presets.overwrite,A.preset_name==nil or A.preset_name=='ファクトリーデフォルト')
- add(L.text('名前を付けて保存…'),Presets.save_as,false);add(L.text('削除'),Presets.delete,A.preset_name==nil or A.preset_name=='ファクトリーデフォルト')
- add(L.text('インポート…'),Presets.import,false);add(L.text('現在値をエクスポート'),Presets.export,false)
- gfx.x,gfx.y=gfx.mouse_x,gfx.mouse_y;local chosen=gfx.showmenu(table.concat(entries,'|'));local fn=actions[chosen];if fn then App.safe(fn) end;A.dirty=true
+ if (Presets.fitCount or 0)>=512 then cache={};Presets.fitCache=cache;Presets.fitCount=0 end
+ cache[key]=shown;Presets.fitCount=(Presets.fitCount or 0)+1;return shown
 end
+function Presets.menu(x,y)
+  if A.job or A.modal then return end;UI.commit_edit();UI.release_capture();Presets.current=Presets.current_entry()
+  Presets.open=true;Presets.page="main";Presets.offset=0;Presets.selected=1
+  Presets.down=false;Presets.pressed=nil;Presets.mx=nil;Presets.my=nil;Presets.hoverSince=nil
+  A.dirty=true
+end
+function Presets.dismiss()
+  Presets.swallow=((gfx.mouse_cap or 0)&1)~=0
+  Presets.open=false;Presets.hoverSince=nil;Presets.pressed=nil;A.dirty=true
+end
+function Presets.buildRows()
+  if Presets.page=="load" then
+    local rows={{text="戻る",icon="back",action=function() Presets.page="main";Presets.selected=1 end}}
+    local count=math.min(Presets.popup.visiblePresets,#Presets.items-Presets.offset)
+    for i=1,count do
+      local p=Presets.items[i+Presets.offset]
+      rows[#rows+1]={text=p.name,literal=true,icon=Presets.current and Presets.current.name==p.name and "check" or "cards",action=function() Presets.dismiss();Presets.apply(p) end}
+    end
+    return rows
+  end
+  return {
+    {text=Presets.factory.name,icon=Presets.isFactory(Presets.current) and "check" or "cards",action=function() Presets.dismiss();Presets.apply(Presets.factory) end},
+    {text="プリセット",disabled=#Presets.items==0,icon="folder",arrow=true,action=function() Presets.page="load";Presets.offset=0;Presets.selected=nil;Presets.hoverSince=nil;Presets.pressed=nil end},
+    {text="上書き保存",icon="save",disabled=Presets.isFactory(Presets.current),action=function() Presets.dismiss();Presets.save(false) end},
+    {text="名前を付けて保存…",icon="plus",action=function() Presets.dismiss();Presets.save(true) end},
+    {text="インポート…",icon="import",gap=true,action=function() Presets.dismiss();Presets.import() end},
+    {text="現在値をエクスポート",icon="export",disabled=Presets.isFactory(Presets.current),action=function() Presets.dismiss();Presets.export(false) end},
+    {text="プリセット一覧をエクスポート",icon="export",disabled=#Presets.items==0,action=function() Presets.dismiss();Presets.export(true) end},
+  }
+end
+function Presets.rows()
+  local c=Presets.rowCache
+  local current=Presets.current and Presets.current.name or ""
+  if c and c.page==Presets.page and c.offset==Presets.offset and c.items==Presets.items
+    and c.count==#Presets.items and c.revision==Presets.revision and c.current==current then return c.rows end
+  local rows=Presets.buildRows()
+  Presets.rowCache={page=Presets.page,offset=Presets.offset,items=Presets.items,count=#Presets.items,
+    revision=Presets.revision,current=current,rows=rows}
+  return rows
+end
+function Presets.layout()
+  local rows=Presets.rows()
+  local cached=Presets.layoutCache
+  if cached and cached.rows==rows and cached.windowWidth==gfx.w then return cached.x,cached.y,cached.w,cached.h,rows end
+  local w=math.min(Presets.popup.width,gfx.w-12)
+  local x=math.max(6,gfx.w-w-6);local y=TITLE_H+2
+  local top=y+Presets.popup.headerHeight
+  for _,r in ipairs(rows) do if r.gap then top=top+9 end;r.y=top;top=top+Presets.popup.rowHeight end
+  local h=top-y+8+(Presets.page=="load" and #Presets.items>Presets.popup.visiblePresets and 18 or 0)
+  Presets.layoutCache={rows=rows,windowWidth=gfx.w,x=x,y=y,w=w,h=h}
+  return x,y,w,h,rows
+end
+function Presets.activate(i)
+  local rows=Presets.rows();local row=rows[i]
+  if row and not row.disabled then row.action();A.dirty=true end
+end
+function Presets.key(k)
+  if k==27 then Presets.dismiss()
+  elseif k==13 then Presets.activate(Presets.selected or 1)
+  elseif k==1818584692 and Presets.page=="load" then Presets.page="main";Presets.selected=1
+  elseif k==30064 or k==1685026670 then
+    local delta=k==30064 and -1 or 1
+    local rows=Presets.rows();local n=(Presets.selected or 1)+delta
+    if Presets.page=="load" and n>#rows and Presets.offset+Presets.popup.visiblePresets<#Presets.items then Presets.offset=Presets.offset+1;n=#rows
+    elseif Presets.page=="load" and n<2 and Presets.offset>0 then Presets.offset=Presets.offset-1;n=2 end
+    Presets.selected=math.max(1,math.min(#rows,n))
+  end
+  A.dirty=true
+end
+function Presets.update(active)
+  if Presets.swallow and ((gfx.mouse_cap or 0)&1)==0 then Presets.swallow=false end
+  if not Presets.open then return end
+  if not active or A.job or A.modal then Presets.dismiss();return end
+  local x,y,w,h,rows=Presets.layout()
+  local mx,my=gfx.mouse_x,gfx.mouse_y;local down=(gfx.mouse_cap&1)~=0
+  local inside=mx>=x and mx<x+w and my>=y and my<y+h
+  local hit=nil
+  if inside then for i,r in ipairs(rows) do if my>=r.y and my<r.y+Presets.popup.rowHeight then hit=i end end end
+  if mx~=Presets.mx or my~=Presets.my then Presets.selected=hit;Presets.mx=mx;Presets.my=my end
+  local wheel=gfx.mouse_wheel or 0
+  if wheel~=0 then
+    if inside and Presets.page=="load" then Presets.offset=math.max(0,math.min(math.max(0,#Presets.items-Presets.popup.visiblePresets),Presets.offset+(wheel>0 and -1 or 1)));Presets.selected=nil end
+    gfx.mouse_wheel=0
+  end
+  -- Hover only opens the preset list, never applies a preset automatically.
+  if Presets.page=="main" and hit==2 and #Presets.items>0 and not down then
+    Presets.hoverSince=Presets.hoverSince or R.time_precise()
+    if R.time_precise()-Presets.hoverSince>=Presets.popup.hoverDelay then Presets.activate(2);Presets.down=down;return end
+  else Presets.hoverSince=nil end
+  if down and not Presets.down then
+    if not inside then Presets.dismiss() else Presets.pressed=hit end
+  elseif not down and Presets.down then
+    if hit and hit==Presets.pressed then Presets.activate(hit) end
+    Presets.pressed=nil
+  end
+  Presets.down=down
+end
+function Presets.icon(kind,x,y)
+  local function l(a,b,c,d) gfx.line(x+a,y+b,x+c,y+d,1) end
+  local function box(a,b,w,h) gfx.roundrect(x+a,y+b,w,h,1,1) end
+  if kind=="cards" then box(0,0,8,9);box(3,3,8,9)
+  elseif kind=="folder" then l(0,2,4,2);l(4,2,6,4);l(6,4,12,4);l(12,4,12,12);l(12,12,0,12);l(0,12,0,2)
+  elseif kind=="save" or kind=="plus" then
+    box(0,0,12,12);box(3,0,5,4);box(3,7,6,5)
+    if kind=="plus" then l(10,6,10,12);l(7,9,13,9) end
+  elseif kind=="import" or kind=="export" then
+    l(0,9,0,13);l(0,13,12,13);l(12,13,12,9)
+    if kind=="import" then l(6,0,6,9);l(2,5,6,9);l(6,9,10,5)
+    else l(6,9,6,0);l(2,4,6,0);l(6,0,10,4) end
+  elseif kind=="check" then l(0,6,4,10);l(4,10,12,1)
+  elseif kind=="back" then l(11,6,0,6);l(0,6,4,2);l(0,6,4,10) end
+end
+function Presets.draw()
+  if not Presets.open then return end
+  local x,y,w,h,rows=Presets.layout()
+  gfx.set(0,0,0,.22);gfx.rect(x+3,y+4,w,h,1)
+  gfx.set(C.panel[1],C.panel[2],C.panel[3],1);gfx.rect(x,y,w,h,1)
+  gfx.set(C.edge2[1],C.edge2[2],C.edge2[3],.65);gfx.roundrect(x,y,w,h,3,1)
+  UI.font(12/scale,1,false)
+  gfx.set(C.muted[1],C.muted[2],C.muted[3],.9);gfx.x=x+12;gfx.y=y+9
+  local title=Presets.page=="load" and L.text("プリセット") or (L.text("現在: ")..(Presets.current and (Presets.isFactory(Presets.current) and L.text(Presets.current.name) or Presets.current.name) or L.text("未選択"))..(Presets.dirty() and " *" or ""))
+  gfx.drawstr(Presets.fit(title,w-24))
+  gfx.set(C.edge[1],C.edge[2],C.edge[3],.65);gfx.line(x+10,y+30,x+w-10,y+30)
+  UI.font(13/scale,1,false)
+  for i,r in ipairs(rows) do
+    if r.gap then gfx.set(C.edge[1],C.edge[2],C.edge[3],.65);gfx.line(x+10,r.y-5,x+w-10,r.y-5) end
+    if i==Presets.selected and not r.disabled then
+      gfx.set(C.accent2[1],C.accent2[2],C.accent2[3],.18);gfx.rect(x+1,r.y,w-2,Presets.popup.rowHeight,1)
+      gfx.set(C.accent2[1],C.accent2[2],C.accent2[3],.8);gfx.rect(x+1,r.y,2,Presets.popup.rowHeight,1)
+    end
+    gfx.set(C.text[1],C.text[2],C.text[3],r.disabled and .3 or .94)
+    Presets.icon(r.icon,x+13,r.y+8)
+    gfx.x=x+39;gfx.y=r.y+7;gfx.drawstr(Presets.fit(r.literal and r.text or L.text(r.text),w-65))
+    if r.arrow then gfx.line(x+w-18,r.y+10,x+w-14,r.y+14);gfx.line(x+w-14,r.y+14,x+w-18,r.y+18) end
+  end
+  if Presets.page=="load" and #Presets.items>Presets.popup.visiblePresets then
+    UI.font(10/scale,1,false)
+    gfx.set(C.muted[1],C.muted[2],C.muted[3],.8);gfx.x=x+12;gfx.y=y+h-19
+    gfx.drawstr(string.format(L.code=='EN' and "%d–%d / %d   Scroll to select" or "%d–%d / %d   スクロールで選択",Presets.offset+1,math.min(Presets.offset+Presets.popup.visiblePresets,#Presets.items),#Presets.items))
+  end
+end
+
+
 Presets.load()
 
 Chrome.title='BLT Spectral Normalizer';Chrome.text='S P E C T R A L   N O R M A L I Z E R';Chrome.window=nil;Chrome.minW=1000;Chrome.minH=740
@@ -1459,7 +1697,7 @@ function UI.draw(now)
  local status=A.status;if A.job then local progress=A.job.kind=='analysis' and A.job.progress or ((A.job.index-1)+(A.job.progress or 0))/#A.job.plans;status=string.format(L.text('処理中 %d / %d   %.1f%%  — 対象素材の編集は避けてください。'),min(A.job.index,#A.job.plans),#A.job.plans,progress*100)
  elseif R.time_precise()>A.status_until then status='音声アイテムを選択し、目標カーブを描いてください。' end
  UI.line(24,H-22,W-24,H-22,C.edge,.34);UI.label(status,24,H-17,10,A.warning and C.warn or C.muted,1,false,850)
- UI.label('v'..Core.VERSION,W-100,H-17,9,C.faint,3,true,76,'right');UI.draw_modal();Chrome.draw();gfx.update()
+ UI.label('v'..Core.VERSION,W-100,H-17,9,C.faint,3,true,76,'right');UI.draw_modal();Chrome.draw();Presets.draw();gfx.update()
 end
 function UI.pointer_value(dx,dy)
  local g=UI.graph;local px,py=mx-(dx or 0),my-(dy or 0);local f=Core.from_axis(clamp((px-g.x)/g.w,0,1),A.settings.scale,A.settings.maxfreq);local value=clamp(-(py-g.y)/g.h*120,-120,0)
@@ -1632,7 +1870,15 @@ function UI.release_capture()
  Chrome.drag=nil;Chrome.resize=nil;Chrome.press=nil;A.dirty=true
 end
 function UI.input()
- UI.geometry();local cap=gfx.mouse_cap or 0;local down=(cap&1)~=0;local pressed=down and (A.last_mouse_cap&1)==0;local released=not down and (A.last_mouse_cap&1)~=0
+ UI.geometry()
+ local popup_blocked=Presets.open or Presets.swallow
+ local before_selected,before_offset,before_page=Presets.selected,Presets.offset,Presets.page
+ Presets.update(A.active)
+ if before_selected~=Presets.selected or before_offset~=Presets.offset or before_page~=Presets.page then A.dirty=true end
+ if popup_blocked then
+  A.last_mouse_cap=gfx.mouse_cap or 0;A.last_right=((gfx.mouse_cap or 0)&2)~=0;A.pressed=nil;gfx.mouse_wheel=0;return
+ end
+ local cap=gfx.mouse_cap or 0;local down=(cap&1)~=0;local pressed=down and (A.last_mouse_cap&1)==0;local released=not down and (A.last_mouse_cap&1)~=0
  local right=(cap&2)~=0;local right_pressed=right and not A.last_right
  local moved=gfx.mouse_x~=A.last_mouse_x or gfx.mouse_y~=A.last_mouse_y;local wheel=gfx.mouse_wheel or 0
  if moved or pressed or released or right_pressed or wheel~=0 then A.dirty=true;A.effect_until=R.time_precise()+2.5 end
@@ -1665,6 +1911,7 @@ function UI.input()
  A.last_mouse_cap=cap;A.last_right=right;A.last_mouse_x=gfx.mouse_x;A.last_mouse_y=gfx.mouse_y
 end
 function UI.key(k)
+ if Presets.open then Presets.key(k);return end
  if A.edit then
   local edit=A.edit
   if k==13 or k==9 then UI.commit_edit()
@@ -1724,7 +1971,7 @@ function App.tick()
   if not A.closed then R.defer(App.tick) else pcall(gfx.quit) end
  end
 end
-if ... == 'blt_test' then return {Core=Core,A=A,UI=UI,App=App,Chrome=Chrome,Theme=Theme,L=L,BLT={testDraw=UI.draw},Geometry=WindowGeometry} end
+if ... == 'blt_test' then return {Presets=Presets,Core=Core,A=A,UI=UI,App=App,Chrome=Chrome,Theme=Theme,L=L,BLT={testDraw=UI.draw},Geometry=WindowGeometry} end
 local required={'JS_Window_Find' ,'JS_Window_IsWindow','JS_Window_GetRect','JS_Window_SetPosition','JS_Window_SetStyle','JS_Dialog_BrowseForSaveFile'}
 if Chrome.isWindows then required[#required+1]='JS_Mouse_LoadCursor';required[#required+1]='JS_Mouse_SetCursor' end
 for _,name in ipairs(required) do if type(R[name])~='function' then R.MB(L.text('カスタムアプリバーには js_ReaScriptAPI が必要です。\nReaPack から js_ReaScriptAPI をインストールしてください。'),'BLT Spectral Normalizer',0);return end end

@@ -1,10 +1,18 @@
 -- @description CR MINIM
--- @version 0.5.5
+-- @version 0.5.6
 -- @author Balrulu
+-- @provides
+--   . > ../
 -- @changelog
---   Unify Mac font and display scaling; fix floating TRACE collapse detection.
+--   Increase preset capacity and show shared overflow dialogs.
 -- @about
 --   BLT SERIES Beta TEST UPLOAD
+
+-- BLT preset transfer limits 1.1.0. Embedded; no runtime dependency.
+local BLTPresetLimits={bytes=16777216,stringBytes=2097152,nodes=262144,entries=8192}
+function BLTPresetLimits.show(english)
+ reaper.MB(english and 'Preset capacity limit exceeded. Export presets individually instead of as a bundle.' or '容量上限オーバーです。一括ではなく個別に保存してください。','BLT PRESET',0)
+end
 
 -- BLT window geometry 1.0.0. Embedded; screen coordinates only.
 local function create_window_geometry(api,graphics)
@@ -397,25 +405,25 @@ function B.pack(v)
  return table.concat(p)
 end
 function B.unpack(data)
- if type(data)~='string' or #data>1048576 then return nil end
- local at,nodes=1,0
+ if type(data)~='string' or #data>BLTPresetLimits.bytes then return nil end
+ local at,nodes=1,0;local capacity=false
  local function read(depth)
-  nodes=nodes+1;assert(depth<14 and nodes<30000)
+  nodes=nodes+1;if nodes>BLTPresetLimits.nodes then capacity=true;error("preset capacity") end;assert(depth<14)
   local tag=data:sub(at,at);at=at+1
   if tag=='b' then local v=data:sub(at,at);at=at+1;assert(v=='0' or v=='1');return v=='1' end
   assert(tag=='s' or tag=='n' or tag=='t')
   local finish=data:find(':',at,true);assert(finish and finish-at<9)
   local raw=data:sub(at,finish-1);assert(raw:match('^%d+$'));local n=tonumber(raw);at=finish+1
   if tag=='t' then
-   assert(n<=4096);local v={}
+   if n>BLTPresetLimits.entries then capacity=true;error("preset capacity") end;local v={}
    for i=1,n do local k=read(depth+1);assert(type(k)=='string' or type(k)=='number');assert(v[k]==nil);v[k]=read(depth+1) end
    return v
   end
-  assert(n<=65536 and at+n-1<=#data);local v=data:sub(at,at+n-1);at=at+n
+  if n>BLTPresetLimits.stringBytes then capacity=true;error("preset capacity") end;assert(at+n-1<=#data);local v=data:sub(at,at+n-1);at=at+n
   if tag=='n' then v=tonumber(v);assert(v and v==v and math.abs(v)<math.huge) end
   return v
  end
- local ok,v=pcall(read,0);if ok and at==#data+1 then return v end
+ local ok,v=pcall(read,0);if capacity then BLTPresetLimits.show(Language.code=='EN') end;if ok and at==#data+1 then return v end
 end
 function B.cleanText(text)
  text=tostring(text);B.cleanCache=B.cleanCache or {};local v=B.cleanCache[text];if v then return v end
@@ -585,11 +593,11 @@ function Presets.step(d)
  Presets.apply(n==1 and Presets.factory or Presets.items[n-1])
 end
 function Presets.encodeBundle(items)
- local rows={};for _,p in ipairs(items) do rows[#rows+1]=Presets.encode(p) end
+ local rows={};local size=128;for _,p in ipairs(items) do local row=Presets.encode(p);size=size+#row+32;if size>BLTPresetLimits.bytes then BLTPresetLimits.show(Language.code=='EN');return end;rows[#rows+1]=row end
  return host.section..'_PRESET_BUNDLE_V1\n'..B.pack(rows)
 end
 function Presets.decodeTransfer(data)
- if type(data)~='string' or #data>1048576 then return nil end
+ if type(data)~='string' or #data>BLTPresetLimits.bytes then return nil end
  local p=Presets.decode(data);if p then return not Presets.isFactory(p) and {p} or nil end
  local prefix=host.section..'_PRESET_BUNDLE_V1\n';if data:sub(1,#prefix)~=prefix then return nil end
  local rows=B.unpack(data:sub(#prefix+1));if type(rows)~='table' or #rows<1 or #rows>200 then return nil end
@@ -605,7 +613,7 @@ end
 function Presets.import()
  local ok,path=Language.open('','プリセットをインポート（個別／一覧）','bltpreset');if not ok then return end
  local f=io.open(path,'rb');if not f then notice('ファイルを開けません。',false);return end
- local data=f:read(1048577);f:close();local items=Presets.decodeTransfer(data)
+ local data=f:read(BLTPresetLimits.bytes+1);f:close();if #data>BLTPresetLimits.bytes then BLTPresetLimits.show(Language.code=='EN');return end;local items=Presets.decodeTransfer(data)
  if not items then notice('このアプリ用の有効なプリセットではありません。',false);return end
  local merged,index={},{};for i,p in ipairs(Presets.items) do merged[i]=p;index[p.name]=i end
  local conflicts=0
@@ -622,6 +630,7 @@ function Presets.export(all)
   local p=Presets.capture(Presets.current and Presets.current.name or '現在値');if not p then notice('設定値を確認してください。',false);return end
   data=Presets.encode(p);file=p.name:gsub('[\\/:*?"<>|]','_')..'.bltpreset'
  end
+ if not data then return end;if #data>BLTPresetLimits.bytes then BLTPresetLimits.show(Language.code=='EN');return end
  local title=all and 'プリセット一覧をエクスポート' or '現在値をエクスポート'
  local ok,path
  if R.JS_Dialog_BrowseForSaveFile then ok,path=Language.save(title,'',file,'BLT Preset (*.bltpreset)\0*.bltpreset\0')
@@ -1228,7 +1237,7 @@ end)()
 local min,max,abs,floor=math.min,math.max,math.abs,math.floor
 local function finite(n) return type(n)=='number' and n==n and abs(n)<math.huge end
 local function clamp(n,a,b) return max(a,min(b,n)) end
-local Core={VERSION='0.5.5',SECTION='BLT_CR_MINIM'}
+local Core={VERSION='0.5.6',SECTION='BLT_CR_MINIM'}
 -- Presentation only: show message content without source locations or filenames.
 function Core.display_message(value)
  local text=tostring(value or '')

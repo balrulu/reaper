@@ -1,10 +1,18 @@
 -- @description LOUDNESS TRACE
--- @version 0.5.2
+-- @version 0.5.6
 -- @author Balrulu
+-- @provides
+--   . > ../
 -- @changelog
---   Unify Mac font and display scaling; fix floating TRACE collapse detection.
+--   Increase preset capacity and show shared overflow dialogs.
 -- @about
 --   BLT SERIES Beta TEST UPLOAD
+
+-- BLT preset transfer limits 1.1.0. Embedded; no runtime dependency.
+local BLTPresetLimits={bytes=16777216,stringBytes=2097152,nodes=262144,entries=8192}
+function BLTPresetLimits.show(english)
+ reaper.MB(english and 'Preset capacity limit exceeded. Export presets individually instead of as a bundle.' or '容量上限オーバーです。一括ではなく個別に保存してください。','BLT PRESET',0)
+end
 
 -- BLT window geometry 1.0.0. Embedded; screen coordinates only.
 local function create_window_geometry(api,graphics)
@@ -824,25 +832,25 @@ function B.pack(v)
  return table.concat(p)
 end
 function B.unpack(data)
- if type(data)~='string' or #data>1048576 then return nil end
- local at,nodes=1,0
+ if type(data)~='string' or #data>BLTPresetLimits.bytes then return nil end
+ local at,nodes=1,0;local capacity=false
  local function read(depth)
-  nodes=nodes+1;assert(depth<14 and nodes<30000)
+  nodes=nodes+1;if nodes>BLTPresetLimits.nodes then capacity=true;error("preset capacity") end;assert(depth<14)
   local tag=data:sub(at,at);at=at+1
   if tag=='b' then local v=data:sub(at,at);at=at+1;assert(v=='0' or v=='1');return v=='1' end
   assert(tag=='s' or tag=='n' or tag=='t')
   local finish=data:find(':',at,true);assert(finish and finish-at<9)
   local raw=data:sub(at,finish-1);assert(raw:match('^%d+$'));local n=tonumber(raw);at=finish+1
   if tag=='t' then
-   assert(n<=4096);local v={}
+   if n>BLTPresetLimits.entries then capacity=true;error("preset capacity") end;local v={}
    for i=1,n do local k=read(depth+1);assert(type(k)=='string' or type(k)=='number');assert(v[k]==nil);v[k]=read(depth+1) end
    return v
   end
-  assert(n<=65536 and at+n-1<=#data);local v=data:sub(at,at+n-1);at=at+n
+  if n>BLTPresetLimits.stringBytes then capacity=true;error("preset capacity") end;assert(at+n-1<=#data);local v=data:sub(at,at+n-1);at=at+n
   if tag=='n' then v=tonumber(v);assert(v and v==v and math.abs(v)<math.huge) end
   return v
  end
- local ok,v=pcall(read,0);if ok and at==#data+1 then return v end
+ local ok,v=pcall(read,0);if capacity then BLTPresetLimits.show(Language.code=='EN') end;if ok and at==#data+1 then return v end
 end
 function B.cleanText(text)
  text=tostring(text);B.cleanCache=B.cleanCache or {};local v=B.cleanCache[text];if v then return v end
@@ -1012,11 +1020,11 @@ function Presets.step(d)
  Presets.apply(n==1 and Presets.factory or Presets.items[n-1])
 end
 function Presets.encodeBundle(items)
- local rows={};for _,p in ipairs(items) do rows[#rows+1]=Presets.encode(p) end
+ local rows={};local size=128;for _,p in ipairs(items) do local row=Presets.encode(p);size=size+#row+32;if size>BLTPresetLimits.bytes then BLTPresetLimits.show(Language.code=='EN');return end;rows[#rows+1]=row end
  return host.section..'_PRESET_BUNDLE_V1\n'..B.pack(rows)
 end
 function Presets.decodeTransfer(data)
- if type(data)~='string' or #data>1048576 then return nil end
+ if type(data)~='string' or #data>BLTPresetLimits.bytes then return nil end
  local p=Presets.decode(data);if p then return not Presets.isFactory(p) and {p} or nil end
  local prefix=host.section..'_PRESET_BUNDLE_V1\n';if data:sub(1,#prefix)~=prefix then return nil end
  local rows=B.unpack(data:sub(#prefix+1));if type(rows)~='table' or #rows<1 or #rows>200 then return nil end
@@ -1032,7 +1040,7 @@ end
 function Presets.import()
  local ok,path=Language.open('','プリセットをインポート（個別／一覧）','bltpreset');if not ok then return end
  local f=io.open(path,'rb');if not f then notice('ファイルを開けません。',false);return end
- local data=f:read(1048577);f:close();local items=Presets.decodeTransfer(data)
+ local data=f:read(BLTPresetLimits.bytes+1);f:close();if #data>BLTPresetLimits.bytes then BLTPresetLimits.show(Language.code=='EN');return end;local items=Presets.decodeTransfer(data)
  if not items then notice('このアプリ用の有効なプリセットではありません。',false);return end
  local merged,index={},{};for i,p in ipairs(Presets.items) do merged[i]=p;index[p.name]=i end
  local conflicts=0
@@ -1049,6 +1057,7 @@ function Presets.export(all)
   local p=Presets.capture(Presets.current and Presets.current.name or '現在値');if not p then notice('設定値を確認してください。',false);return end
   data=Presets.encode(p);file=p.name:gsub('[\\/:*?"<>|]','_')..'.bltpreset'
  end
+ if not data then return end;if #data>BLTPresetLimits.bytes then BLTPresetLimits.show(Language.code=='EN');return end
  local title=all and 'プリセット一覧をエクスポート' or '現在値をエクスポート'
  local ok,path
  if R.JS_Dialog_BrowseForSaveFile then ok,path=Language.save(title,'',file,'BLT Preset (*.bltpreset)\0*.bltpreset\0')
@@ -1669,7 +1678,7 @@ local C={bg={.018,.030,.055},panel={.040,.068,.110},field={.018,.040,.080},
 local S={lo=-60,hi=0,visible=true,height=280,
   show={s=true,m=true,i=true,rms=false,peak=false},
   targets={s={-23,3},m={-23,3},i={-23,1}},source="master",
-  alertUpper=true,alertLower=true,alertPeak=false}
+  alertUpper=false,alertLower=false,alertPeak=false}
 local function target_alert(v,target)
   if not v or not target then return false end
   if S.alertUpper and v>target[1]+target[2] then return true end
@@ -1777,7 +1786,7 @@ local function unlink()
     if R.JS_Window_IsWindow(A.arrange) then R.JS_Composite_Unlink(A.arrange,A.bitmap,true) end
   end
   restore_composite_delay()
-  A.linked=false; A.cache=""; A.hover=nil; A.lastArrangeMouseX=nil; A.mouseRepairQueue={}; A.mouseSweepMin=nil; A.mouseSweepMax=nil; A.lastMouseMoveAt=nil
+  A.linked=false; A.cache=""; A.layoutCache=nil; A.hover=nil; A.lastArrangeMouseX=nil; A.mouseRepairQueue={}; A.mouseSweepMin=nil; A.mouseSweepMax=nil; A.lastMouseMoveAt=nil
 end
 local function dispose_bitmap()
   unlink()
@@ -1808,7 +1817,7 @@ local function load_settings()
   S.source='master';S.height=280;S.lo=-60;S.hi=0
   S.show={s=true,m=true,i=true,rms=false,peak=false}
   S.targets={s={-23,3},m={-23,3},i={-23,1}}
-  S.alertUpper=true;S.alertLower=true;S.alertPeak=false
+  S.alertUpper=false;S.alertLower=false;S.alertPeak=false
   local _,raw=R.GetProjExtState(A.project,SECTION,'settings')
   local f={};for v in raw:gmatch('[^;]+') do f[#f+1]=v end
   if #f<18 then return end
@@ -2064,7 +2073,7 @@ local function chart(width,height,first,last,mx)
             if low==false then low=nil end;if high==false then high=nil end
             local time=data.origin+((i-1)*span+min(span,#data.rows-(i-1)*span)*.5+.5)*.1
             local x=xx(time)
-            if low and x>=ax and x<=bx then
+            if low then
               local bad
               if key=='peak' then bad=peak_bucket_alert(low,high)
               elseif S.targets[key] then bad=bucket_alert(low,high,S.targets[key])
@@ -2072,8 +2081,16 @@ local function chart(width,height,first,last,mx)
               local y=yy((low+high)*.5); local color=bad and C.red or colors[key]
               local pathColor=(bad or pbad) and C.red or colors[key]
               local pathAlpha=(key=='s' and .98 or .78)
-              if px then lline(px,py,x,y,pathColor,pathAlpha) end
-              lline(x,yy(low),x,yy(high),color,.85)
+              -- Retain neighbouring offscreen samples, then clip the connecting line.
+              -- A zoomed viewport can lie entirely between two samples.
+              if px and x>=ax and px<=bx and x>px then
+                local left,right=max(ax,px),min(bx,x)
+                if right>left then
+                  local slope=(y-py)/(x-px)
+                  lline(left,py+(left-px)*slope,right,py+(right-px)*slope,pathColor,pathAlpha)
+                end
+              end
+              if x>=ax and x<=bx then lline(x,yy(low),x,yy(high),color,.85) end
               px,py,pbad=x,y,bad
             else px=nil end
           end
@@ -2225,24 +2242,22 @@ local function overlay(now)
     A.mouseSweepMin=nil; A.mouseSweepMax=nil; A.lastMouseMoveAt=nil
   end
 
-  local key=table.concat({width,height,y,visible,first,last,A.revision,tostring(A.stale),mx or -1,cursorPixel},":")
-  local redraw=key~=A.cache
+  local key=table.concat({width,height,first,last,A.revision,tostring(A.stale),mx or -1,cursorPixel},":")
+  local layout=table.concat({width,height,destY,visible,sourceY},":")
+  -- Position and clipping must follow scrolling even inside the content frame limit.
+  local redraw=key~=A.cache and (A.cache=="" or now-A.lastPaint>=.05)
   if redraw then
-    if now-A.lastPaint<.05 then return end
     A.drawBitmap=A.backBitmap
     chart(width,height,first,last,mx)
     A.drawBitmap=nil
     R.JS_LICE_Blit(A.bitmap,0,0,A.backBitmap,0,0,width,height,1,"COPY")
     A.cache=key; A.lastPaint=now
-    -- Keep the composite static unless graph content or geometry changes.
+  end
+  if redraw or not A.linked or layout~=A.layoutCache then
     local code=R.JS_Composite(hwnd,0,destY,width,visible,A.bitmap,0,sourceY,width,visible,true)
     if code~=1 then error("JS_Composite failed: "..tostring(code)) end
-    A.linked=true
+    A.linked=true; A.layoutCache=layout
     if Platform.mac then R.JS_Window_InvalidateRect(hwnd,0,destY,width,destY+visible,false) end
-  elseif not A.linked then
-    local code=R.JS_Composite(hwnd,0,destY,width,visible,A.bitmap,0,sourceY,width,visible,true)
-    if code~=1 then error("JS_Composite failed: "..tostring(code)) end
-    A.linked=true
   end
 
   -- Repair due swept ranges.  Do not assume the queue is sorted: delayed second passes
@@ -3844,11 +3859,11 @@ local function controller()
   if A.job then rect(250,594,276*A.job.progress,2,C.ice,.8) end
   fold_control('collapse',(W-64)*.5,603,64,18,true,function() A.requestFold=true end)
 
-  BLT.footer(A.job and string.format('解析中 %d%%',math.floor(A.job.progress*100)) or (A.stale and 'プロジェクトが変更されています。再解析してください。' or (A.data and '解析結果を表示しています。' or '時間範囲を選択してください。')),A.stale,W,H+22,'0.5.2')
+  BLT.footer(A.job and string.format('解析中 %d%%',math.floor(A.job.progress*100)) or (A.stale and 'プロジェクトが変更されています。再解析してください。' or (A.data and '解析結果を表示しています。' or '時間範囲を選択してください。')),A.stale,W,H+22,'0.5.6')
   inputs_mouse();custom_titlebar()
 end
 
-BLT.factorySettings={lo=-60,hi=0,visible=true,height=280,show={s=true,m=true,i=true,rms=false,peak=false},targets={s={-23,3},m={-23,3},i={-23,1}},source="master",alertUpper=true,alertLower=true,alertPeak=false}
+BLT.factorySettings={lo=-60,hi=0,visible=true,height=280,show={s=true,m=true,i=true,rms=false,peak=false},targets={s={-23,3},m={-23,3},i={-23,1}},source="master",alertUpper=false,alertLower=false,alertPeak=false}
 BLT.warningCompute=warning_durations;warning_durations=function(data) local c=BLT.warningCache;local a,b=S.targets.s,S.targets.m;if c and c.data==data and c.rows==(data and data.rows) and c.count==(data and #data.rows or 0) and c.a==a[1] and c.b==a[2] and c.c==b[1] and c.d==b[2] then return c[1],c[2],c[3] end;local x,y,z=BLT.warningCompute(data);BLT.warningCache={x,y,z,data=data,rows=data and data.rows,count=data and #data.rows or 0,a=a[1],b=a[2],c=b[1],d=b[2]};return x,y,z end
 function BLT.pick(obj,keys) local v=BLT.valueView or {};BLT.valueView=v;for k in pairs(keys) do v[k]=obj[k] end;return v end
 BLT.chrome=setmetatable({font=Platform.chromeFont,mint=C.mint,red=C.red,titleText='L O U D N E S S   T R A C E'}, {

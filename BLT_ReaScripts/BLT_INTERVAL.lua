@@ -1,10 +1,18 @@
 -- @description INTERVAL
--- @version 0.5.4
+-- @version 0.5.5
 -- @author Balrulu
+-- @provides
+--   . > ../
 -- @changelog
---   Keep separate folder blocks and later parent-track media in distinct alignment units.
+--   Increase preset capacity and show shared overflow dialogs.
 -- @about
 --   BLT SERIES Beta TEST UPLOAD
+
+-- BLT preset transfer limits 1.1.0. Embedded; no runtime dependency.
+local BLTPresetLimits={bytes=16777216,stringBytes=2097152,nodes=262144,entries=8192}
+function BLTPresetLimits.show(english)
+ reaper.MB(english and 'Preset capacity limit exceeded. Export presets individually instead of as a bundle.' or '容量上限オーバーです。一括ではなく個別に保存してください。','BLT PRESET',0)
+end
 
 -- BLT window geometry 1.0.0. Embedded; screen coordinates only.
 local function create_window_geometry(api,graphics)
@@ -154,7 +162,7 @@ end
 -- BLT PORTING CONFIGURATION: shared chrome metrics, app identity and title.
 -- Keep this script self-contained; no external module loading is required.
 local App={
-  version="0.5.4",section="BLT_INTERVAL",windowTitle="BLT Interval",
+  version="0.5.5",section="BLT_INTERVAL",windowTitle="BLT Interval",
   chromeTitle="I N T E R V A L",title="INTERVAL",
   subtitle="ITEM SPACING  アイテム間隔を整列",
 }
@@ -976,7 +984,7 @@ function Presets.encode(p)
   return table.concat({Presets.header,p.name,p.mode,p.scope,p.unit,p.seconds,p.grid,p.close and "1" or "0",p.remember and "1" or "0"},"\n")
 end
 function Presets.decode(s)
-  if type(s)~="string" or #s>4096 then return nil end
+  if type(s)~="string" or #s>BLTPresetLimits.stringBytes then return nil end
   s=s:gsub("\r\n","\n")
   local a={}; for line in (s.."\n"):gmatch("(.-)\n") do a[#a+1]=line end
   if #a~=9 or a[1]~=Presets.header or not Presets.name(a[2]) then return nil end
@@ -1074,11 +1082,11 @@ function Presets.step(direction)
 end
 function Presets.encodeBundle(items)
   local parts={Presets.bundleHeader,tostring(#items)}
-  for _,p in ipairs(items) do parts[#parts+1]=Presets.encode(p) end
+  local size=128;for _,p in ipairs(items) do local row=Presets.encode(p);size=size+#row+1;if size>BLTPresetLimits.bytes then BLTPresetLimits.show(Language.code=='EN');return end;parts[#parts+1]=row end
   return table.concat(parts,"\n")
 end
 function Presets.decodeTransfer(data)
-  if type(data)~="string" or #data>1048576 then return nil end
+  if type(data)~="string" or #data>BLTPresetLimits.bytes then return nil end
   data=data:gsub("\r\n","\n")
   local single=Presets.decode(data)
   if single then return not Presets.isFactory(single) and {single} or nil end
@@ -1112,7 +1120,8 @@ function Presets.import()
   if not ok then return end
   local f=io.open(path,"rb")
   if not f then notice("ファイルを開けません。",false);return end
-  local data=f:read(1048577);f:close()
+  local data=f:read(BLTPresetLimits.bytes+1);f:close()
+  if #data>BLTPresetLimits.bytes then BLTPresetLimits.show(Language.code=='EN');return end
   local items=Presets.decodeTransfer(data)
   if not items then notice("INTERVAL用の有効なプリセットファイルではありません。",false);return end
   if Presets.merge(items) then notice(string.format("%d個インポートしました。プリセット一覧から選択できます。",#items),true) end
@@ -1128,6 +1137,7 @@ function Presets.export(all)
     if not p then notice("間隔の値を有効な範囲で入力してください。",false);return end
     data=Presets.encode(p);file=p.name:gsub('[\\/:*?"<>|]','_')..".bltpreset";title="現在値をエクスポート"
   end
+  if not data then return end;if #data>BLTPresetLimits.bytes then BLTPresetLimits.show(Language.code=='EN');return end
   local ok,path
   if R.JS_Dialog_BrowseForSaveFile then
     ok,path=Language.save(title,"",file,"BLT Preset (*.bltpreset)\0*.bltpreset\0")
