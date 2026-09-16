@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<index version="1" name="BLT ReaScripts" commit="232bfbe18defd4cb939f67af38739a0388c6c826">
+<index version="1" name="BLT ReaScripts" commit="1e20ba783e3ee777924ecfab577d5187bb09e2a3">
   <category name="BLT_ReaScripts">
     <reapack name="BLT_AUTO_TRIM_SPLIT.lua" type="script" desc="AUTO TRIM / SPLIT">
       <metadata>
@@ -18,6 +18,10 @@
       <version name="0.5.2" author="Balrulu" time="2026-09-15T20:44:16Z">
         <changelog><![CDATA[Unify Mac font and display scaling; fix floating TRACE collapse detection.]]></changelog>
         <source main="main">https://github.com/balrulu/reaper/raw/232bfbe18defd4cb939f67af38739a0388c6c826/BLT_ReaScripts/BLT_AUTO_TRIM_SPLIT.lua</source>
+      </version>
+      <version name="0.5.3" author="Balrulu" time="2026-09-16T07:33:37Z">
+        <changelog><![CDATA[Increase preset capacity and show shared overflow dialogs.]]></changelog>
+        <source main="main" file="../BLT_AUTO_TRIM_SPLIT.lua">https://github.com/balrulu/reaper/raw/1e20ba783e3ee777924ecfab577d5187bb09e2a3/BLT_ReaScripts/BLT_AUTO_TRIM_SPLIT.lua</source>
       </version>
     </reapack>
     <reapack name="BLT_BATCH_RENAME.lua" type="script" desc="BATCH RENAME">
@@ -38,6 +42,10 @@
         <changelog><![CDATA[Unify Mac font and display scaling; fix floating TRACE collapse detection.]]></changelog>
         <source main="main">https://github.com/balrulu/reaper/raw/232bfbe18defd4cb939f67af38739a0388c6c826/BLT_ReaScripts/BLT_BATCH_RENAME.lua</source>
       </version>
+      <version name="0.5.4" author="Balrulu" time="2026-09-16T07:33:37Z">
+        <changelog><![CDATA[Increase preset capacity and show shared overflow dialogs.]]></changelog>
+        <source main="main" file="../BLT_BATCH_RENAME.lua">https://github.com/balrulu/reaper/raw/1e20ba783e3ee777924ecfab577d5187bb09e2a3/BLT_ReaScripts/BLT_BATCH_RENAME.lua</source>
+      </version>
     </reapack>
     <reapack name="BLT_CR_MINIM.lua" type="script" desc="CR MINIM">
       <metadata>
@@ -56,6 +64,10 @@
       <version name="0.5.5" author="Balrulu" time="2026-09-15T20:44:16Z">
         <changelog><![CDATA[Unify Mac font and display scaling; fix floating TRACE collapse detection.]]></changelog>
         <source main="main">https://github.com/balrulu/reaper/raw/232bfbe18defd4cb939f67af38739a0388c6c826/BLT_ReaScripts/BLT_CR_MINIM.lua</source>
+      </version>
+      <version name="0.5.6" author="Balrulu" time="2026-09-16T07:33:37Z">
+        <changelog><![CDATA[Increase preset capacity and show shared overflow dialogs.]]></changelog>
+        <source main="main" file="../BLT_CR_MINIM.lua">https://github.com/balrulu/reaper/raw/1e20ba783e3ee777924ecfab577d5187bb09e2a3/BLT_ReaScripts/BLT_CR_MINIM.lua</source>
       </version>
     </reapack>
     <reapack name="BLT_ENVELOPE_CANVAS.lua" type="script" desc="ENVELOPE CANVAS">
@@ -76,6 +88,10 @@
         <changelog><![CDATA[Unify Mac font and display scaling; fix floating TRACE collapse detection.]]></changelog>
         <source main="main">https://github.com/balrulu/reaper/raw/232bfbe18defd4cb939f67af38739a0388c6c826/BLT_ReaScripts/BLT_ENVELOPE_CANVAS.lua</source>
       </version>
+      <version name="0.5.11" author="Balrulu" time="2026-09-16T07:33:37Z">
+        <changelog><![CDATA[Increase preset capacity and show shared overflow dialogs.]]></changelog>
+        <source main="main" file="../BLT_ENVELOPE_CANVAS.lua">https://github.com/balrulu/reaper/raw/1e20ba783e3ee777924ecfab577d5187bb09e2a3/BLT_ReaScripts/BLT_ENVELOPE_CANVAS.lua</source>
+      </version>
     </reapack>
     <reapack name="BLT_INTERVAL.lua" type="script" desc="INTERVAL">
       <metadata>
@@ -94,6 +110,10 @@
       <version name="0.5.4" author="Balrulu" time="2026-09-15T20:44:16Z">
         <changelog><![CDATA[Keep separate folder blocks and later parent-track media in distinct alignment units.]]></changelog>
         <source main="main">https://github.com/balrulu/reaper/raw/232bfbe18defd4cb939f67af38739a0388c6c826/BLT_ReaScripts/BLT_INTERVAL.lua</source>
+      </version>
+      <version name="0.5.5" author="Balrulu" time="2026-09-16T07:33:37Z">
+        <changelog><![CDATA[Increase preset capacity and show shared overflow dialogs.]]></changelog>
+        <source main="main" file="../BLT_INTERVAL.lua">https://github.com/balrulu/reaper/raw/1e20ba783e3ee777924ecfab577d5187bb09e2a3/BLT_ReaScripts/BLT_INTERVAL.lua</source>
       </version>
     </reapack>
     <reapack name="BLT_LOOP_RM_STUDIO.lua" type="script" desc="LOOP RM STUDIO">
@@ -114,6 +134,10 @@
         <changelog><![CDATA[Unify Mac font and display scaling; fix floating TRACE collapse detection.]]></changelog>
         <source main="main">https://github.com/balrulu/reaper/raw/232bfbe18defd4cb939f67af38739a0388c6c826/BLT_ReaScripts/BLT_LOOP_RM_STUDIO.lua</source>
       </version>
+      <version name="0.5.6" author="Balrulu" time="2026-09-16T07:33:37Z">
+        <changelog><![CDATA[Increase preset capacity and show shared overflow dialogs.]]></changelog>
+        <source main="main" file="../BLT_LOOP_RM_STUDIO.lua">https://github.com/balrulu/reaper/raw/1e20ba783e3ee777924ecfab577d5187bb09e2a3/BLT_ReaScripts/BLT_LOOP_RM_STUDIO.lua</source>
+      </version>
     </reapack>
     <reapack name="BLT_LOUDNESS_TRACE.lua" type="script" desc="LOUDNESS TRACE">
       <metadata>
@@ -132,6 +156,10 @@
       <version name="0.5.2" author="Balrulu" time="2026-09-15T20:44:16Z">
         <changelog><![CDATA[Unify Mac font and display scaling; fix floating TRACE collapse detection.]]></changelog>
         <source main="main">https://github.com/balrulu/reaper/raw/232bfbe18defd4cb939f67af38739a0388c6c826/BLT_ReaScripts/BLT_LOUDNESS_TRACE.lua</source>
+      </version>
+      <version name="0.5.6" author="Balrulu" time="2026-09-16T07:33:37Z">
+        <changelog><![CDATA[Increase preset capacity and show shared overflow dialogs.]]></changelog>
+        <source main="main" file="../BLT_LOUDNESS_TRACE.lua">https://github.com/balrulu/reaper/raw/1e20ba783e3ee777924ecfab577d5187bb09e2a3/BLT_ReaScripts/BLT_LOUDNESS_TRACE.lua</source>
       </version>
     </reapack>
     <reapack name="BLT_MARKER_REGION_DESK.lua" type="script" desc="MARKER REGION DESK">
@@ -152,6 +180,10 @@
         <changelog><![CDATA[Unify Mac font and display scaling; fix floating TRACE collapse detection.]]></changelog>
         <source main="main">https://github.com/balrulu/reaper/raw/232bfbe18defd4cb939f67af38739a0388c6c826/BLT_ReaScripts/BLT_MARKER_REGION_DESK.lua</source>
       </version>
+      <version name="0.5.4" author="Balrulu" time="2026-09-16T07:33:37Z">
+        <changelog><![CDATA[Increase preset capacity and show shared overflow dialogs.]]></changelog>
+        <source main="main" file="../BLT_MARKER_REGION_DESK.lua">https://github.com/balrulu/reaper/raw/1e20ba783e3ee777924ecfab577d5187bb09e2a3/BLT_ReaScripts/BLT_MARKER_REGION_DESK.lua</source>
+      </version>
     </reapack>
     <reapack name="BLT_SIMPLE_NORMALIZER.lua" type="script" desc="SIMPLE NORMALIZER">
       <metadata>
@@ -171,6 +203,10 @@
         <changelog><![CDATA[Unify Mac font and display scaling; fix floating TRACE collapse detection.]]></changelog>
         <source main="main">https://github.com/balrulu/reaper/raw/232bfbe18defd4cb939f67af38739a0388c6c826/BLT_ReaScripts/BLT_SIMPLE_NORMALIZER.lua</source>
       </version>
+      <version name="0.5.3" author="Balrulu" time="2026-09-16T07:33:37Z">
+        <changelog><![CDATA[Increase preset capacity and show shared overflow dialogs.]]></changelog>
+        <source main="main" file="../BLT_SIMPLE_NORMALIZER.lua">https://github.com/balrulu/reaper/raw/1e20ba783e3ee777924ecfab577d5187bb09e2a3/BLT_ReaScripts/BLT_SIMPLE_NORMALIZER.lua</source>
+      </version>
     </reapack>
     <reapack name="BLT_SPECTRAL NORMALIZER.lua" type="script" desc="SPECTRAL NORMALIZER">
       <metadata>
@@ -185,6 +221,10 @@
       <version name="0.2.0" author="Balrulu" time="2026-09-15T20:44:16Z">
         <changelog><![CDATA[Consolidate settings; cache text metrics and overlapping audio reads.]]></changelog>
         <source main="main">https://github.com/balrulu/reaper/raw/232bfbe18defd4cb939f67af38739a0388c6c826/BLT_ReaScripts/BLT_SPECTRAL%20NORMALIZER.lua</source>
+      </version>
+      <version name="0.2.2" author="Balrulu" time="2026-09-16T07:33:37Z">
+        <changelog><![CDATA[Increase preset capacity and show shared overflow dialogs.]]></changelog>
+        <source main="main" file="../BLT_SPECTRAL NORMALIZER.lua">https://github.com/balrulu/reaper/raw/1e20ba783e3ee777924ecfab577d5187bb09e2a3/BLT_ReaScripts/BLT_SPECTRAL%20NORMALIZER.lua</source>
       </version>
     </reapack>
     <reapack name="BLT_VARIANT_FORGE.lua" type="script" desc="VARIANT FORGE">
@@ -204,6 +244,11 @@
       <version name="0.5.9" author="Balrulu" time="2026-09-15T20:44:16Z">
         <changelog><![CDATA[Unify Mac font and display scaling; fix floating TRACE collapse detection.]]></changelog>
         <source main="main">https://github.com/balrulu/reaper/raw/232bfbe18defd4cb939f67af38739a0388c6c826/BLT_ReaScripts/BLT_VARIANT_FORGE.lua</source>
+      </version>
+      <version name="0.5.10" author="Balrulu" time="2026-09-16T07:33:37Z">
+        <changelog><![CDATA[Increase preset capacity and show shared overflow dialogs.
+Save texture references losslessly with a compact shared frequency grid.]]></changelog>
+        <source main="main" file="../BLT_VARIANT_FORGE.lua">https://github.com/balrulu/reaper/raw/1e20ba783e3ee777924ecfab577d5187bb09e2a3/BLT_ReaScripts/BLT_VARIANT_FORGE.lua</source>
       </version>
     </reapack>
   </category>
