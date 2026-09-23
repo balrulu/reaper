@@ -2,6 +2,8 @@ desc:BLT SPATIAL FIELD
 author:Balrulu
 version:0.5.0
 changelog:BLT SERIES Beta TEST UPLOAD
+provides:
+  [script main=main] BLT_SPATIAL_FIELD_THEME_BRIDGE.lua > BLT ReaScripts/BLT_SPATIAL_FIELD_THEME_BRIDGE.lua
 // v0.5.0 — horizontal binaural position and distance processor.
 // SADIE II v2-1 D1 / KU100: Copyright 2018, University of York.
 // Cal Armstrong, Lewis Thresh, Gavin Kearney. Apache-2.0 (see About).
@@ -372,7 +374,7 @@ file_var(0,fontmode);
 file_var(0,chameleon);
 file_var(0,ui_lang);
 
-@gfx 700 630
+@gfx 700 614
 !about_text_ready ? (
 90000[0]="BLT SPATIAL FIELD v0.5.0 - Third-party notices";
 90000[1]="";
@@ -748,7 +750,7 @@ bg_r=gmem[1];bg_g=gmem[2];bg_b=gmem[3];
 tx_r=gmem[4];tx_g=gmem[5];tx_b=gmem[6];
 ac_r=gmem[7];ac_g=gmem[8];ac_b=gmem[9]; down=mouse_cap&1; shift=mouse_cap&8;ctrl=mouse_cap&4;
 clicked=down && !wasdown; released=!down && wasdown;
-scale=max(.01,min(gfx_w/700,gfx_h/630)); ox=(gfx_w-700*scale)*.5; oy=(gfx_h-630*scale)*.5+26*scale;
+scale=max(.01,min(gfx_w/700,gfx_h/614)); ox=(gfx_w-700*scale)*.5; oy=(gfx_h-614*scale)*.5+26*scale;
 mx=(mouse_x-ox)/scale; my=(mouse_y-oy)/scale;
 gfx_dest=-1;
 ink(.027,.036,.055,1);gfx_rect(0,0,gfx_w,gfx_h);
@@ -903,8 +905,22 @@ hit(449,180,239,42) ? strcpy(#hint,tr("回転オフセット：+1で右へ1周�
 hit(449,228,239,42) ? strcpy(#hint,tr("後方強調：0%で無加工 / 背後の高域を意図的に抑える味付け","Rear emphasis: 0% bypass / Artistic high-frequency attenuation behind you"));
 hit(449,369,239,29) ? strcpy(#hint,tr("伝搬モードを選択 / 初期値は相対分散","Select propagation mode / Default: relative dispersion"));
 editing ? strcpy(#hint,tr("入力中：Enterで確定 / Escで取消 / Ctrl+Aで全選択","EDITING: Enter to apply / Esc to cancel / Ctrl+A to select all"));
-label(14,577,#hint,10,.46,.64,.79);
-right_label(688,593,"BLT / SADIE II - KU100 / v0.5.0",9,.40,.57,.71);
+// Share one footer row; reserve the measured credits width before fitting help.
+right_label(688,577,"BLT / SADIE II - KU100 / v0.5.0",9,.40,.57,.71);
+gfx_measurestr("BLT / SADIE II - KU100 / v0.5.0",footer_credit_w,footer_credit_h);
+footer_help_w=max(0,660*scale-footer_credit_w);
+gfx_setfont(1,ui_lang ? latinfont : jpfont,max(8,floor(10*scale+.5)),0);
+strcpy(#footer_help,#hint);strcpy(#footer_display,#hint);
+gfx_measurestr(#footer_display,footer_help_tw,footer_help_th);
+while(footer_help_tw>footer_help_w && strlen(#footer_help)>0) (
+ footer_cut=strlen(#footer_help)-1;
+ while(footer_cut>0 && (str_getchar(#footer_help,footer_cut)&192)==128) (footer_cut-=1;);
+ strcpy_substr(#footer_help,#footer_help,0,footer_cut);
+ sprintf(#footer_display,"%s…",#footer_help);
+ gfx_measurestr(#footer_display,footer_help_tw,footer_help_th);
+);
+ink(.46,.64,.79,1);gfx_x=ox+14*scale;gfx_y=oy+577*scale;
+gfx_drawstr(#footer_display,0,ox+14*scale+footer_help_w,oy+588*scale);
 about_open ? (
  ink(.027,.036,.055,1);rect(16,76,668,505);ink(.14,.21,.29,1);roundrect(16,76,668,505,8,1);
  label(32,88,"ABOUT / LICENSE",18,.90,.95,1);label(651,91,"X",16,.62,.83,.91);
@@ -919,7 +935,7 @@ about_open ? (
  (key==27 || (clicked && rawhit(640,84,36,30))) ? about_open=0;
 );
 lua_popup ? (
- gfx_set(.02,.03,.05,.85);rect(0,0,700,604);
+ gfx_set(.02,.03,.05,.85);rect(0,0,700,588);
  gfx_set(.045,.065,.095,1);rect(78,177,544,219);
  gfx_set(.25,.6,.85,1);roundrect(78,177,544,219,8,1);
  label(100,194,tr("カメレオン：Luaを起動してください","CHAMELEON: Start the Lua bridge"),18,.9,.95,1);

@@ -17,7 +17,7 @@ local function luminance(c)
   return .2126*lin(c[1])+.7152*lin(c[2])+.0722*lin(c[3])
 end
 local function contrast(a,b)
-  local x,y=luminance(a),luminance(b)
+  local x,y=a,luminance(b)
   return (math.max(x,y)+.05)/(math.min(x,y)+.05)
 end
 local nextPoll=0
@@ -26,13 +26,14 @@ local function tick()
   if now>=nextPoll then
     nextPoll=now+.25
     local bg=color('col_main_bg2',{.027,.036,.055})
+    local bg_luminance=luminance(bg)
     local tx=color('col_main_text2',{.90,.95,1})
     local light,dark={.96,.97,.98},{.025,.03,.04}
-    local readable=contrast(bg,light)>contrast(bg,dark) and light or dark
-    if contrast(bg,tx)<4.5 then tx=readable end
+    local readable=contrast(bg_luminance,light)>contrast(bg_luminance,dark) and light or dark
+    if contrast(bg_luminance,tx)<4.5 then tx=readable end
     local ac=color('col_seltrack2',{.20,.70,.92})
     for _=1,8 do
-      if contrast(bg,ac)>=3 then break end
+      if contrast(bg_luminance,ac)>=3 then break end
       for i=1,3 do ac[i]=ac[i]+(readable[i]-ac[i])*.2 end
     end
     for i=1,3 do R.gmem_write(i,bg[i]);R.gmem_write(i+3,tx[i]);R.gmem_write(i+6,ac[i]) end
