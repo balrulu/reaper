@@ -9,14 +9,19 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: reapack-index-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   reapack-index:
     runs-on: ubuntu-latest
 
     steps:
       - name: Fetch repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
+          ref: ${{ github.ref_name }}
           fetch-depth: 0
 
       - name: Install Pandoc
