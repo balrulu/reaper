@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<index version="1" name="BLT ReaScripts" commit="458c8802c959b92e3da36b62100724bb871939c3">
+<index version="1" name="BLT ReaScripts" commit="eaf8627a99f3ed6f853e4da93347bbdcac789d03">
   <category name="BLT">
     <reapack name="BLT_SPATIAL_FIELD.jsfx" type="effect" desc="BLT SPATIAL FIELD">
       <version name="0.5.0" author="Balrulu" time="2026-09-22T19:24:46Z">
@@ -9,6 +9,21 @@
     </reapack>
   </category>
   <category name="BLT_ReaScripts">
+    <reapack name="BLT_ACTION_Move_Cursor_to_Selected_Item_Taking_playback_status.lua" type="script" desc="ACTION_Move_Cursor_to_Selected_Item_Taking_playback_status">
+      <metadata>
+        <description><![CDATA[{\rtf1\ansi\deff0{\fonttbl{\f0 \fswiss Helvetica;}{\f1 \fmodern Courier;}}
+{\colortbl;\red255\green0\blue0;\red0\green0\blue255;}
+\widowctrl\hyphauto
+
+{\pard \ql \f0 \sa180 \li0 \fi0 BLT SERIES Beta TEST UPLOAD\par}
+}
+]]></description>
+      </metadata>
+      <version name="1.0.0" author="Balrulu" time="2026-09-23T22:15:08Z">
+        <changelog><![CDATA[BLT SERIES ACTIONS]]></changelog>
+        <source main="main" file="../BLT_ACTION_Move_Cursor_to_Selected_Item_Taking_playback_status.lua">https://github.com/balrulu/reaper/raw/b7345ec365df7a36b1d6d152b9ecd42931eb30b4/BLT_ReaScripts/BLT_ACTION_Move_Cursor_to_Selected_Item_Taking_playback_status.lua</source>
+      </version>
+    </reapack>
     <reapack name="BLT_AUTO_TRIM_SPLIT.lua" type="script" desc="AUTO TRIM / SPLIT">
       <metadata>
         <description><![CDATA[{\rtf1\ansi\deff0{\fonttbl{\f0 \fswiss Helvetica;}{\f1 \fmodern Courier;}}
@@ -30,6 +45,10 @@
       <version name="0.5.3" author="Balrulu" time="2026-09-16T07:33:37Z">
         <changelog><![CDATA[Increase preset capacity and show shared overflow dialogs.]]></changelog>
         <source main="main" file="../BLT_AUTO_TRIM_SPLIT.lua">https://github.com/balrulu/reaper/raw/1e20ba783e3ee777924ecfab577d5187bb09e2a3/BLT_ReaScripts/BLT_AUTO_TRIM_SPLIT.lua</source>
+      </version>
+      <version name="0.5.7" author="Balrulu" time="2026-09-23T22:15:08Z">
+        <changelog><![CDATA[BLT SERIES Beta TEST UPLOAD]]></changelog>
+        <source main="main" file="../BLT_AUTO_TRIM_SPLIT.lua">https://github.com/balrulu/reaper/raw/b7345ec365df7a36b1d6d152b9ecd42931eb30b4/BLT_ReaScripts/BLT_AUTO_TRIM_SPLIT.lua</source>
       </version>
     </reapack>
     <reapack name="BLT_BATCH_RENAME.lua" type="script" desc="BATCH RENAME">
@@ -54,6 +73,25 @@
         <changelog><![CDATA[Increase preset capacity and show shared overflow dialogs.]]></changelog>
         <source main="main" file="../BLT_BATCH_RENAME.lua">https://github.com/balrulu/reaper/raw/1e20ba783e3ee777924ecfab577d5187bb09e2a3/BLT_ReaScripts/BLT_BATCH_RENAME.lua</source>
       </version>
+      <version name="0.5.6" author="Balrulu" time="2026-09-23T22:15:08Z">
+        <changelog><![CDATA[BLT SERIES Beta TEST UPLOAD]]></changelog>
+        <source main="main" file="../BLT_BATCH_RENAME.lua">https://github.com/balrulu/reaper/raw/b7345ec365df7a36b1d6d152b9ecd42931eb30b4/BLT_ReaScripts/BLT_BATCH_RENAME.lua</source>
+      </version>
+    </reapack>
+    <reapack name="BLT_COLOR_PALETTE.lua" type="script" desc="BLT COLOR PALETTE">
+      <metadata>
+        <description><![CDATA[{\rtf1\ansi\deff0{\fonttbl{\f0 \fswiss Helvetica;}{\f1 \fmodern Courier;}}
+{\colortbl;\red255\green0\blue0;\red0\green0\blue255;}
+\widowctrl\hyphauto
+
+{\pard \ql \f0 \sa180 \li0 \fi0 BLT SERIES Beta TEST UPLOAD\par}
+}
+]]></description>
+      </metadata>
+      <version name="0.1.12" author="Balrulu" time="2026-09-23T22:15:08Z">
+        <changelog><![CDATA[BLT SERIES Beta TEST UPLOAD]]></changelog>
+        <source main="main" file="../BLT_COLOR_PALETTE.lua">https://github.com/balrulu/reaper/raw/b7345ec365df7a36b1d6d152b9ecd42931eb30b4/BLT_ReaScripts/BLT_COLOR_PALETTE.lua</source>
+      </version>
     </reapack>
     <reapack name="BLT_CR_MINIM.lua" type="script" desc="CR MINIM">
       <metadata>
@@ -77,8 +115,12 @@
         <changelog><![CDATA[Increase preset capacity and show shared overflow dialogs.]]></changelog>
         <source main="main" file="../BLT_CR_MINIM.lua">https://github.com/balrulu/reaper/raw/1e20ba783e3ee777924ecfab577d5187bb09e2a3/BLT_ReaScripts/BLT_CR_MINIM.lua</source>
       </version>
+      <version name="0.5.10" author="Balrulu" time="2026-09-23T22:15:08Z">
+        <changelog><![CDATA[BLT SERIES Beta TEST UPLOAD]]></changelog>
+        <source main="main" file="../BLT_CR_MINIM.lua">https://github.com/balrulu/reaper/raw/b7345ec365df7a36b1d6d152b9ecd42931eb30b4/BLT_ReaScripts/BLT_CR_MINIM.lua</source>
+      </version>
     </reapack>
-    <reapack name="BLT_ENVELOPE_CANVAS.lua" type="script" desc="ENVELOPE CANVAS">
+    <reapack name="BLT_ENVELOPE_CANVAS_ITEM.lua" type="script" desc="ENVELOPE CANVAS ITEM">
       <metadata>
         <description><![CDATA[{\rtf1\ansi\deff0{\fonttbl{\f0 \fswiss Helvetica;}{\f1 \fmodern Courier;}}
 {\colortbl;\red255\green0\blue0;\red0\green0\blue255;}
@@ -88,17 +130,24 @@
 }
 ]]></description>
       </metadata>
-      <version name="0.5.0" author="Balrulu" time="2026-09-14T20:13:45Z">
-        <changelog><![CDATA[Beta Test]]></changelog>
-        <source main="main">https://github.com/balrulu/reaper/raw/d26af680cda9db0f45e5c4d4de6510f4d13ae5db/BLT_ReaScripts/BLT_ENVELOPE_CANVAS.lua</source>
+      <version name="0.5.21" author="Balrulu" time="2026-09-23T22:15:08Z">
+        <changelog><![CDATA[BLT SERIES Beta TEST UPLOAD]]></changelog>
+        <source main="main" file="../BLT_ENVELOPE_CANVAS_ITEM.lua">https://github.com/balrulu/reaper/raw/b7345ec365df7a36b1d6d152b9ecd42931eb30b4/BLT_ReaScripts/BLT_ENVELOPE_CANVAS_ITEM.lua</source>
       </version>
-      <version name="0.5.10" author="Balrulu" time="2026-09-15T20:44:16Z">
-        <changelog><![CDATA[Unify Mac font and display scaling; fix floating TRACE collapse detection.]]></changelog>
-        <source main="main">https://github.com/balrulu/reaper/raw/232bfbe18defd4cb939f67af38739a0388c6c826/BLT_ReaScripts/BLT_ENVELOPE_CANVAS.lua</source>
-      </version>
-      <version name="0.5.11" author="Balrulu" time="2026-09-16T07:33:37Z">
-        <changelog><![CDATA[Increase preset capacity and show shared overflow dialogs.]]></changelog>
-        <source main="main" file="../BLT_ENVELOPE_CANVAS.lua">https://github.com/balrulu/reaper/raw/1e20ba783e3ee777924ecfab577d5187bb09e2a3/BLT_ReaScripts/BLT_ENVELOPE_CANVAS.lua</source>
+    </reapack>
+    <reapack name="BLT_ENVELOPE_CANVAS_TRACK.lua" type="script" desc="ENVELOPE CANVAS TRACK">
+      <metadata>
+        <description><![CDATA[{\rtf1\ansi\deff0{\fonttbl{\f0 \fswiss Helvetica;}{\f1 \fmodern Courier;}}
+{\colortbl;\red255\green0\blue0;\red0\green0\blue255;}
+\widowctrl\hyphauto
+
+{\pard \ql \f0 \sa180 \li0 \fi0 BLT SERIES Beta TEST UPLOAD\par}
+}
+]]></description>
+      </metadata>
+      <version name="0.0.22" author="Balrulu" time="2026-09-23T22:15:08Z">
+        <changelog><![CDATA[BLT SERIES Beta TEST UPLOAD]]></changelog>
+        <source main="main" file="../BLT_ENVELOPE_CANVAS_TRACK.lua">https://github.com/balrulu/reaper/raw/b7345ec365df7a36b1d6d152b9ecd42931eb30b4/BLT_ReaScripts/BLT_ENVELOPE_CANVAS_TRACK.lua</source>
       </version>
     </reapack>
     <reapack name="BLT_INTERVAL.lua" type="script" desc="INTERVAL">
@@ -123,6 +172,10 @@
         <changelog><![CDATA[Increase preset capacity and show shared overflow dialogs.]]></changelog>
         <source main="main" file="../BLT_INTERVAL.lua">https://github.com/balrulu/reaper/raw/1e20ba783e3ee777924ecfab577d5187bb09e2a3/BLT_ReaScripts/BLT_INTERVAL.lua</source>
       </version>
+      <version name="0.5.9" author="Balrulu" time="2026-09-23T22:15:08Z">
+        <changelog><![CDATA[BLT SERIES Beta TEST UPLOAD]]></changelog>
+        <source main="main" file="../BLT_INTERVAL.lua">https://github.com/balrulu/reaper/raw/b7345ec365df7a36b1d6d152b9ecd42931eb30b4/BLT_ReaScripts/BLT_INTERVAL.lua</source>
+      </version>
     </reapack>
     <reapack name="BLT_LOOP_RM_STUDIO.lua" type="script" desc="LOOP RM STUDIO">
       <metadata>
@@ -145,6 +198,10 @@
       <version name="0.5.6" author="Balrulu" time="2026-09-16T07:33:37Z">
         <changelog><![CDATA[Increase preset capacity and show shared overflow dialogs.]]></changelog>
         <source main="main" file="../BLT_LOOP_RM_STUDIO.lua">https://github.com/balrulu/reaper/raw/1e20ba783e3ee777924ecfab577d5187bb09e2a3/BLT_ReaScripts/BLT_LOOP_RM_STUDIO.lua</source>
+      </version>
+      <version name="0.5.20" author="Balrulu" time="2026-09-23T22:15:08Z">
+        <changelog><![CDATA[BLT SERIES Beta TEST UPLOAD]]></changelog>
+        <source main="main" file="../BLT_LOOP_RM_STUDIO.lua">https://github.com/balrulu/reaper/raw/b7345ec365df7a36b1d6d152b9ecd42931eb30b4/BLT_ReaScripts/BLT_LOOP_RM_STUDIO.lua</source>
       </version>
     </reapack>
     <reapack name="BLT_LOUDNESS_TRACE.lua" type="script" desc="LOUDNESS TRACE">
@@ -169,6 +226,10 @@
         <changelog><![CDATA[Increase preset capacity and show shared overflow dialogs.]]></changelog>
         <source main="main" file="../BLT_LOUDNESS_TRACE.lua">https://github.com/balrulu/reaper/raw/1e20ba783e3ee777924ecfab577d5187bb09e2a3/BLT_ReaScripts/BLT_LOUDNESS_TRACE.lua</source>
       </version>
+      <version name="0.5.18" author="Balrulu" time="2026-09-23T22:15:08Z">
+        <changelog><![CDATA[BLT SERIES Beta TEST UPLOAD]]></changelog>
+        <source main="main" file="../BLT_LOUDNESS_TRACE.lua">https://github.com/balrulu/reaper/raw/b7345ec365df7a36b1d6d152b9ecd42931eb30b4/BLT_ReaScripts/BLT_LOUDNESS_TRACE.lua</source>
+      </version>
     </reapack>
     <reapack name="BLT_MARKER_REGION_DESK.lua" type="script" desc="MARKER REGION DESK">
       <metadata>
@@ -191,6 +252,25 @@
       <version name="0.5.4" author="Balrulu" time="2026-09-16T07:33:37Z">
         <changelog><![CDATA[Increase preset capacity and show shared overflow dialogs.]]></changelog>
         <source main="main" file="../BLT_MARKER_REGION_DESK.lua">https://github.com/balrulu/reaper/raw/1e20ba783e3ee777924ecfab577d5187bb09e2a3/BLT_ReaScripts/BLT_MARKER_REGION_DESK.lua</source>
+      </version>
+      <version name="0.5.6" author="Balrulu" time="2026-09-23T22:15:08Z">
+        <changelog><![CDATA[BLT SERIES Beta TEST UPLOAD]]></changelog>
+        <source main="main" file="../BLT_MARKER_REGION_DESK.lua">https://github.com/balrulu/reaper/raw/b7345ec365df7a36b1d6d152b9ecd42931eb30b4/BLT_ReaScripts/BLT_MARKER_REGION_DESK.lua</source>
+      </version>
+    </reapack>
+    <reapack name="BLT_MINIMAL_INFO_PANEL.lua" type="script" desc="BLT MINIMAL INFO PANEL">
+      <metadata>
+        <description><![CDATA[{\rtf1\ansi\deff0{\fonttbl{\f0 \fswiss Helvetica;}{\f1 \fmodern Courier;}}
+{\colortbl;\red255\green0\blue0;\red0\green0\blue255;}
+\widowctrl\hyphauto
+
+{\pard \ql \f0 \sa180 \li0 \fi0 BLT SERIES Beta TEST UPLOAD\par}
+}
+]]></description>
+      </metadata>
+      <version name="0.1.30" author="Balrulu" time="2026-09-23T22:15:08Z">
+        <changelog><![CDATA[BLT SERIES Beta TEST UPLOAD]]></changelog>
+        <source main="main" file="../BLT_MINIMAL_INFO_PANEL.lua">https://github.com/balrulu/reaper/raw/b7345ec365df7a36b1d6d152b9ecd42931eb30b4/BLT_ReaScripts/BLT_MINIMAL_INFO_PANEL.lua</source>
       </version>
     </reapack>
     <reapack name="BLT_SIMPLE_NORMALIZER.lua" type="script" desc="SIMPLE NORMALIZER">
@@ -215,6 +295,10 @@
         <changelog><![CDATA[Increase preset capacity and show shared overflow dialogs.]]></changelog>
         <source main="main" file="../BLT_SIMPLE_NORMALIZER.lua">https://github.com/balrulu/reaper/raw/1e20ba783e3ee777924ecfab577d5187bb09e2a3/BLT_ReaScripts/BLT_SIMPLE_NORMALIZER.lua</source>
       </version>
+      <version name="0.5.16" author="Balrulu" time="2026-09-23T22:15:08Z">
+        <changelog><![CDATA[BLT SERIES Beta TEST UPLOAD]]></changelog>
+        <source main="main" file="../BLT_SIMPLE_NORMALIZER.lua">https://github.com/balrulu/reaper/raw/b7345ec365df7a36b1d6d152b9ecd42931eb30b4/BLT_ReaScripts/BLT_SIMPLE_NORMALIZER.lua</source>
+      </version>
     </reapack>
     <reapack name="BLT_SPECTRAL NORMALIZER.lua" type="script" desc="SPECTRAL NORMALIZER">
       <metadata>
@@ -233,6 +317,10 @@
       <version name="0.2.2" author="Balrulu" time="2026-09-16T07:33:37Z">
         <changelog><![CDATA[Increase preset capacity and show shared overflow dialogs.]]></changelog>
         <source main="main" file="../BLT_SPECTRAL NORMALIZER.lua">https://github.com/balrulu/reaper/raw/1e20ba783e3ee777924ecfab577d5187bb09e2a3/BLT_ReaScripts/BLT_SPECTRAL%20NORMALIZER.lua</source>
+      </version>
+      <version name="0.2.10" author="Balrulu" time="2026-09-23T22:15:08Z">
+        <changelog><![CDATA[BLT SERIES Beta TEST UPLOAD]]></changelog>
+        <source main="main" file="../BLT_SPECTRAL NORMALIZER.lua">https://github.com/balrulu/reaper/raw/b7345ec365df7a36b1d6d152b9ecd42931eb30b4/BLT_ReaScripts/BLT_SPECTRAL%20NORMALIZER.lua</source>
       </version>
     </reapack>
     <reapack name="BLT_VARIANT_FORGE.lua" type="script" desc="VARIANT FORGE">
@@ -257,6 +345,18 @@
         <changelog><![CDATA[Increase preset capacity and show shared overflow dialogs.
 Save texture references losslessly with a compact shared frequency grid.]]></changelog>
         <source main="main" file="../BLT_VARIANT_FORGE.lua">https://github.com/balrulu/reaper/raw/1e20ba783e3ee777924ecfab577d5187bb09e2a3/BLT_ReaScripts/BLT_VARIANT_FORGE.lua</source>
+      </version>
+      <version name="0.5.30" author="Balrulu" time="2026-09-23T22:15:08Z">
+        <changelog><![CDATA[BLT SERIES Beta TEST UPLOAD]]></changelog>
+        <source main="main" file="../BLT_VARIANT_FORGE.lua">https://github.com/balrulu/reaper/raw/b7345ec365df7a36b1d6d152b9ecd42931eb30b4/BLT_ReaScripts/BLT_VARIANT_FORGE.lua</source>
+      </version>
+    </reapack>
+  </category>
+  <category name="LangPacks">
+    <reapack name="Japanese_add_SWS_kb_edit.ReaperLangPack" type="langpack" desc="日本語 [JP] - For v7.80 + SWS">
+      <version name="7.80.1" author="Balrulu" time="2026-09-23T22:16:07Z">
+        <changelog><![CDATA[Japanese translation for REAPER v7.80 + SWS]]></changelog>
+        <source>https://github.com/balrulu/reaper/raw/eaf8627a99f3ed6f853e4da93347bbdcac789d03/LangPacks/Japanese_add_SWS_kb_edit.ReaperLangPack</source>
       </version>
     </reapack>
   </category>
