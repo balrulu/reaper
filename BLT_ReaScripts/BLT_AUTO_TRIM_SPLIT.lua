@@ -1,10 +1,10 @@
 -- @description AUTO TRIM / SPLIT
--- @version 0.5.3
+-- @version 0.5.7
 -- @author Balrulu
 -- @provides
 --   . > ../
 -- @changelog
---   Increase preset capacity and show shared overflow dialogs.
+--   BLT SERIES Beta TEST UPLOAD
 -- @about
 --   BLT SERIES Beta TEST UPLOAD
 
@@ -13,6 +13,157 @@ local BLTPresetLimits={bytes=16777216,stringBytes=2097152,nodes=262144,entries=8
 function BLTPresetLimits.show(english)
  reaper.MB(english and 'Preset capacity limit exceeded. Export presets individually instead of as a bundle.' or '容量上限オーバーです。一括ではなく個別に保存してください。','BLT PRESET',0)
 end
+
+-- BLT media availability 1.0.2. Pause audio work, never the UI defer loop.
+local function create_media_gate(api,graphics)
+ local M={waiting=false,epoch=0};local P=setmetatable({}, {__index=api})
+ local accessors={};local next_check=0;local ready=true;local settle=0;local last_active
+ local function valid(project,p,kind)
+  return p and (not api.ValidatePtr2 or api.ValidatePtr2(project,p,kind))
+ end
+ local function application_active()
+  if graphics and graphics.getchar then
+   local flags=graphics.getchar(65537)
+   if flags>=0 and ((flags&1)==0 or (flags&2)~=0) then return true end
+  end
+  if not (api.JS_Window_GetForeground and api.GetMainHwnd and api.JS_Window_GetParent) then return nil end
+  local foreground=api.JS_Window_GetForeground();local main=api.GetMainHwnd()
+  for _=1,32 do
+   if not foreground then return false end
+   if foreground==main then return true end
+   local parent=api.JS_Window_GetParent(foreground)
+   if parent==foreground then return nil end;foreground=parent
+  end
+  return nil
+ end
+ local function offline(project,take)
+  -- targets() resolves or validates each pointer in this same defer pass.
+  if not take then return false end
+  if api.TakeIsMIDI and api.TakeIsMIDI(take) then return false end
+  if not api.GetMediaItemTake_Source then return false end
+  local source=api.GetMediaItemTake_Source(take);local seen={}
+  for _=1,32 do
+   if not source or seen[source] then break end;seen[source]=true
+   local is_offline=false
+   if api.CF_GetMediaSourceOnline then
+    is_offline=not api.CF_GetMediaSourceOnline(source)
+   elseif api.GetMediaSourceSampleRate and api.GetMediaSourceNumChannels then
+    is_offline=api.GetMediaSourceSampleRate(source)<=0 or api.GetMediaSourceNumChannels(source)<=0
+   end
+   if is_offline then
+    local file=api.GetMediaSourceFileName and api.GetMediaSourceFileName(source,'') or ''
+    if file~='' and (not api.file_exists or api.file_exists(file)) then return true end
+   end
+   source=api.GetMediaSourceParent and api.GetMediaSourceParent(source) or nil
+  end
+  return false
+ end
+ local fields={'info','v','source','snapshot','plans','items','list','queue','entries','reader','data','p','left','right','parts','sources','source_items'}
+ local function targets(project,all_items)
+  local takes,seen,items={},{},{};local invalid=false
+  local function item(p,fresh)
+   if p and items[p] then return end
+   if not p or (not fresh and not valid(project,p,'MediaItem*')) then invalid=true;return end
+   items[p]=true
+   local take=api.GetActiveTake and api.GetActiveTake(p)
+   if take then takes[take]=true end
+  end
+  local function visit(v,depth)
+   if type(v)~='table' or seen[v] or depth>12 then return end;seen[v]=true
+   if v.project and v.project~=project then invalid=true;return end
+   if v.item then item(v.item) end
+   if v.take then
+    if takes[v.take] or valid(project,v.take,'MediaItem_Take*') then takes[v.take]=true else invalid=true end
+   end
+   if v.temp_take and (takes[v.temp_take] or valid(project,v.temp_take,'MediaItem_Take*')) then takes[v.temp_take]=true end
+   for _,key in ipairs(fields) do visit(v[key],depth+1) end
+   for _,entry in ipairs(v) do if type(entry)=='table' then visit(entry,depth+1) end end
+  end
+  if api.CountSelectedMediaItems and api.GetSelectedMediaItem then
+   for i=0,api.CountSelectedMediaItems(project)-1 do item(api.GetSelectedMediaItem(project,i),true) end
+  end
+  local a=M.state
+  if a then
+   for _,key in ipairs({'job','analysis','batch','source_job','wave_job','pjob','xjob','ajob'}) do visit(a[key],0) end
+   if a.job or a.batch or a.source_job then visit(a.items,0);visit(a.queue,0) end
+  end
+  if (all_items or (M.all_items and M.state and M.state.job)) and api.CountMediaItems and api.GetMediaItem then
+   for i=0,api.CountMediaItems(project)-1 do item(api.GetMediaItem(project,i),true) end
+  end
+  return takes,invalid
+ end
+ function M.ready(force,all_items)
+  local now=api.time_precise()
+  if not force and now<next_check then return ready end
+  next_check=now+.10
+  local project=api.EnumProjects(-1,'')
+  local takes,invalid=targets(project,all_items);local blocked=false
+  if M.state and M.state.project and M.state.project~=project then invalid=true end
+  if not invalid then
+   if next(takes) and not api.CF_GetMediaSourceOnline and application_active()==false then blocked=true
+   else for take in pairs(takes) do if offline(project,take) then blocked=true;break end end end
+  end
+  if invalid or not next(takes) then settle=0 end
+  if blocked then settle=now+.25 end
+  local waiting=not invalid and (blocked or now<settle)
+  ready=not waiting
+  if waiting~=M.waiting then
+   M.waiting=waiting;if not waiting then M.epoch=M.epoch+1 end
+   if M.onchange then M.onchange() end
+  end
+  return ready
+ end
+ function M.tick()
+  local active=application_active()
+  if active~=last_active then next_check=0;last_active=active end
+  return M.ready()
+ end
+ function M.message(section)
+  return api.GetExtState(section,'ui_language')=='EN' and 'Waiting for media to come online…' or 'メディアのオンライン復帰を待っています…'
+ end
+ local function signature(take)
+  if not (api.GetMediaItemTake_Item and api.GetItemStateChunk) then return nil end
+  local item=api.GetMediaItemTake_Item(take);if not item then return nil end
+  local ok,chunk=api.GetItemStateChunk(item,'',false)
+  return ok and chunk or nil
+ end
+ if api.CreateTakeAudioAccessor then
+  function P.CreateTakeAudioAccessor(take)
+   local aa=api.CreateTakeAudioAccessor(take)
+   if aa then accessors[aa]={take=take,project=api.EnumProjects(-1,''),signature=signature(take),revision=api.GetProjectStateChangeCount and api.GetProjectStateChangeCount(api.EnumProjects(-1,'')),epoch=M.epoch} end
+   return aa
+  end
+ end
+ if api.CreateTrackAudioAccessor then
+  function P.CreateTrackAudioAccessor(track)
+   local aa=api.CreateTrackAudioAccessor(track);local project=api.EnumProjects(-1,'')
+   if aa then accessors[aa]={track=track,project=project,revision=api.GetProjectStateChangeCount(project),epoch=M.epoch} end
+   return aa
+  end
+ end
+ local function resume(aa)
+  local state=accessors[aa]
+  if not state or state.epoch==M.epoch or M.waiting then return end
+  state.epoch=M.epoch
+  if api.EnumProjects(-1,'')~=state.project then return end
+  local unchanged=state.take and valid(state.project,state.take,'MediaItem_Take*') and state.signature and signature(state.take)==state.signature
+  if state.take and state.revision and api.GetProjectStateChangeCount(state.project)~=state.revision then unchanged=false end
+  if state.track then unchanged=valid(state.project,state.track,'MediaTrack*') and api.GetProjectStateChangeCount(state.project)==state.revision end
+  if unchanged and api.AudioAccessorUpdate then api.AudioAccessorUpdate(aa) end
+ end
+ if api.AudioAccessorStateChanged then
+  function P.AudioAccessorStateChanged(aa) resume(aa);return api.AudioAccessorStateChanged(aa) end
+ end
+ if api.GetAudioAccessorSamples then
+  function P.GetAudioAccessorSamples(...) local aa=...;resume(aa);return api.GetAudioAccessorSamples(...) end
+ end
+ if api.DestroyAudioAccessor then
+  function P.DestroyAudioAccessor(aa) accessors[aa]=nil;return api.DestroyAudioAccessor(aa) end
+ end
+ return M,P
+end
+local Media,reaper=create_media_gate(reaper,gfx)
+
 
 -- BLT window geometry 1.0.0. Embedded; screen coordinates only.
 local function create_window_geometry(api,graphics)
@@ -460,12 +611,7 @@ function B.unpack(data)
  end
  local ok,v=pcall(read,0);if capacity then BLTPresetLimits.show(Language.code=='EN') end;if ok and at==#data+1 then return v end
 end
-function B.cleanText(text)
- text=tostring(text);B.cleanCache=B.cleanCache or {};local v=B.cleanCache[text];if v then return v end
- v=text:gsub('[%z\1-\31\127]',' ')
- B.cleanCount=(B.cleanCount or 0)+1;if B.cleanCount>512 then B.cleanCache={};B.cleanCount=1 end
- B.cleanCache[text]=v;return v
-end
+
 function B.publicError(value,fallback)
  local text=tostring(value or '')
  text=text:match('^(.-)\nstack traceback:') or text
@@ -693,18 +839,8 @@ local function update_window_resize() host.resize() end
 local function clear_chrome_tooltip() B.popupUntil=nil;if R.TrackCtl_SetToolTip then R.TrackCtl_SetToolTip('',0,0,true) end end
 B.clearTooltip=clear_chrome_tooltip
 -- Non-modal dependency hint. Uses the existing tick, with no extra defer loop.
-function B.inputNotice()
- local x,y=gfx.clienttoscreen(gfx.mouse_x,gfx.mouse_y+18)
- R.TrackCtl_SetToolTip(Language.message('ReaImGui 0.10以降が必要です。ReaPackで導入・更新してください。'),x,y,true)
- B.popupUntil=R.time_precise()+1;B.tip=nil;B.tipVisible=false
-end
-function B.requireInput(ime)
- if ime.api then return true end
- if type(R.ImGui_GetBuiltinPath)~='function' then B.inputNotice();return false end
- local ok,api=pcall(function() return dofile(R.ImGui_GetBuiltinPath()..'/imgui.lua')('0.10') end)
- if not ok or type(api)~='table' then B.inputNotice();return false end
- ime.api=api;return true
-end
+
+
 function B.switch(x,y,state,enabled)
  local s,bx,by=host.geometry();local cy=by+(y+12)*s;local cx=bx+(x+7+12*state)*s
  local c=C.edge2;gfx.set(c[1],c[2],c[3],enabled and .45 or .2);gfx.line(bx+(x+3)*s,cy,bx+(x+23)*s,cy,1)
@@ -995,8 +1131,6 @@ local function custom_titlebar(blocked)
   end
   local rcx,rcy=resetX+resetW*.5,Chrome.titleH*.5
   local rcol=hoverReset and Chrome.mint or C.muted
-
-  -- Reference-style outlined window; arrow explicitly points LOWER LEFT.
   gfx.set(rcol[1],rcol[2],rcol[3],hoverReset and .98 or .82)
   gfx.roundrect(rcx-6,rcy-6,12,12,1,1)
   gfx.line(rcx+3,rcy-3,rcx-3,rcy+3,1)
@@ -1126,6 +1260,7 @@ local project_undo=create_project_undo(R,{
  after=function(project) if host.undoRefresh then host.undoRefresh(project) end;wake_visuals() end,
 })
 function B.key(k)
+ if k<0 then return k end
  if Presets.open then Presets.key(k);return 0 end
  if host and not host.localUndo then
   if host.undoAction then
@@ -1139,6 +1274,7 @@ function B.key(k)
  return k
 end
 function B.tick(now)
+ Media.tick()
  if not host then return end
  if B.windowW~=gfx.w or B.windowH~=gfx.h then B.windowW,B.windowH=gfx.w,gfx.h;B.lastRect=nil;wake_visuals() end
  B.viewport(host.geometry(),gfx.ext_retina or 1)
@@ -1192,13 +1328,26 @@ function B.cleanup(fn,...)
 end
 function B.recoverInput(state,err)
  gfx.dest=-1;gfx.mode=0;gfx.a=1
- for _,key in ipairs({'drag','number_drag','pointer_capture','field_drag','fieldDrag','curve_drag','scroll_drag','seam_drag','seam_hold','pressed','popup','name_dialog','duplicate_modal'}) do state[key]=nil end
+ for _,key in ipairs({'drag','number_drag','pointer_capture','field_drag','fieldDrag','scrollDrag','source_wave_drag','curve_drag','scroll_drag','seam_drag','seam_hold','pressed','popup','name_dialog','duplicate_modal'}) do state[key]=nil end
  if host.cancelEdit then B.cleanup(host.cancelEdit) end
- Presets.open=false;Presets.swallow=false
+ Presets.open=false;Presets.swallow=false;Presets.pressed=nil;Presets.hoverSince=nil
+ Chrome.drag=nil;Chrome.resize=nil
+ if host.cursor then B.cleanup(host.cursor,nil) end
  B.recoveryMode=true
  local ok,why=pcall(B.bar)
  B.recoveryMode=nil
- if not ok then B.logError(why) end
+ if not ok then
+  B.logError(why)
+  -- A failed font, preset or theme draw must still allow closing the window.
+  local down=((gfx.mouse_cap or 0)&1)~=0
+  local hit=gfx.mouse_y>=0 and gfx.mouse_y<26 and gfx.mouse_x>=gfx.w-38 and gfx.mouse_x<gfx.w
+  if down and not B.emergencyDown then B.emergencyClose=hit end
+  if not down and B.emergencyDown then
+   if B.emergencyClose and hit then Chrome.requestClose=true end
+   B.emergencyClose=nil
+  end
+  B.emergencyDown=down
+ else B.emergencyDown=nil;B.emergencyClose=nil end
  pcall(B.footer,B.publicError(err),true,gfx.w,0,B.footerVersion or '')
  pcall(gfx.update)
  if Chrome.requestClose then state.closing=true end
@@ -1213,33 +1362,10 @@ function B.title(title,subtitle,width,divider)
  B.font(10,1,false,scale,host.faces);gfx.set(C.accent2[1],C.accent2[2],C.accent2[3],1);gfx.x=ox+26*scale;gfx.y=origin+44*scale;gfx.drawstr(UI.fit(Language.text(subtitle),(width-155)*scale))
  if divider~=false then gfx.set(C.edge2[1],C.edge2[2],C.edge2[3],.26);gfx.line(ox+24*scale,origin+62*scale,ox+(width-24)*scale,origin+62*scale,1) end
 end
-function B.chaosButton(cx,cy,cw,ch,enabled,hot,pushed,time,glow)
- local d=host.chaosPainter
- local violet=Chameleon.enabled and C.accent2 or B.chaosViolet
- local ember=Chameleon.enabled and C.accent or B.chaosEmber
- local pale=Chameleon.enabled and C.text or B.chaosPale
- local surface=Chameleon.enabled and C.field or B.chaosSurface
- local alive=enabled and 1 or .25
- local breath=(.5+.5*math.sin(time*.85))*alive
- local y=cy+(pushed and 1 or 0);local center=ch/2
- -- Keep both the outer glow and the pressed face inside the registered bounds.
- d.cut(cx,cy,cw,ch,11,violet,.025*alive,violet,.10+.07*breath)
- d.cut(cx,y+2,cw,ch-4,9,surface,1,violet,(.45+.3*glow)*alive)
- d.gradient(cx+2,y+4,cw-4,ch-8,violet,C.bg,.12+.15*glow,.015,true)
- for i=1,6 do
-  local phase=time*.3+i*1.7;local px=cx+12+(i-1)*(cw-29)/5
-  local py=y+center+math.sin(phase)*(center-6)
-  local alpha=(.18+.22*math.sin(phase*.7)^2)*alive
-  if px<cx+36 or px>cx+cw-36 or math.abs(py-y-center)>11 then
-   d.disc(px,py,3,violet,alpha*.08);d.disc(px,py,.7,i%2==0 and ember or pale,alpha)
-  end
- end
- d.line(cx+cw*.335,y+ch-5,cx+cw*.665,y+ch-5,violet,(.18+.22*breath+.2*glow)*alive)
- d.label('C H A O S',cx+24,y+center-9,17,enabled and pale or C.faint,2,cw-48,22,1,true)
-end
-B.chaosViolet={.62,.23,.94};B.chaosEmber={.92,.27,.65};B.chaosPale={.87,.69,1};B.chaosSurface={.038,.014,.068}
+
 
 function B.footer(message,bad,width,height,version,progress)
+ if Media.waiting then message=Media.message(host.section);bad=false;progress=nil end
  if version~='' then B.footerVersion=version end
  scale,ox,oy=host.geometry();message=Language.message(B.notice or tostring(message or ''))
  if B.notice then bad=B.noticeBad end
@@ -1689,9 +1815,7 @@ function Core.detect_step(d,limit)
   end
   return false
 end
-function Core.detect(data,s)
-  local d=Core.detector(data,s); while not Core.detect_step(d) do end; return d.regions,d.raw
-end
+
 function Core.plan(info,regions,s)
   local parts,cursor,packed={},0,0
   local function add(a,b,sound)
@@ -1937,6 +2061,7 @@ local function detect_preview()
   if A.data then A.detector=Core.detector(A.data,S); A.detector.context="preview" end
 end
 local function start_preview(reset_view)
+ if not Media.ready() then return end
   A.settings_pending=false; A.settings_due=0
   stop_jobs(); A.data=nil; A.ready=false; A.regions={}; A.raw={}
   invalidate_wave_surface(true)
@@ -1982,6 +2107,7 @@ local function start_preview(reset_view)
   end
 end
 local function sync_selection()
+ if not Media.ready() then return end
   A.queue,A.selection_key,A.skipped=Core.selection(A.project); A.index=1
   A.selection_total=#A.queue
   prune_long_lufs_approvals()
@@ -2087,6 +2213,7 @@ local function batch_next()
   A.analysis=Core.start(A.project,info,b.settings.basis,chunk); A.analysis.context="batch"
 end
 local function execute()
+ if not A.job and not A.busy and not A.batch and not Media.ready() then return end
   if A.settings_pending then flush_scheduled_settings() end
   if A.batch then stop_jobs(); start_preview(false); notice("解析を中止しました。アイテムは変更していません。"); return end
   if not A.ready or not A.data then notice("プレビューの解析完了を待ってください。",true); return end
@@ -2115,6 +2242,7 @@ local function execute()
   batch_next()
 end
 local function work_step()
+ if not Media.ready() then return end
   -- Time-budgeted pipeline. Peak retrieval, detection, cached batch items and
   -- Loudness blocks can all advance within the same frame until the budget is used.
   local until_time=R.time_precise()+0.012
@@ -2308,7 +2436,7 @@ end
 
 -- CHAMELEON THEME ADAPTER
 --
--- Porting contract for other BLT scripts:
+-- Theme adapter interface:
 --   Required palette tables : C, C_DEFAULT
 --   Optional chrome colors   : Chrome, CHROME_DEFAULT
 --   Persistence              : SECTION / ExtState key "chameleon"
@@ -2316,8 +2444,6 @@ end
 --   UI integration           : Chameleon.enabled / Chameleon.set(...)
 --   Main-loop integration    : Chameleon.tick(now)
 --
--- Keep this block intact when porting; normally only the title-bar button
--- placement and the host hooks need adapting in another BLT script.
 Chameleon.keys={
   -- Main/surface colors
   "col_main_bg2","col_main_bg","col_arrangebg","col_tracklistbg","col_mixerbg",
@@ -3307,7 +3433,7 @@ local function draw()
   toggle_switch("all","選択アイテムを一括処理",518,696,182,S.all,function()
     S.all=not S.all; persist(); if S.all then A.index=1; start_preview() else detect_preview() end
   end,"ON：先頭をプレビューして全選択へ適用。OFF：1つずつ処理して次へ。",not A.batch)
-  BLT.footer(message~='' and message or (not A.ready and '音声アイテムを選択してください。' or ''),A.bad,W,H+22,'0.5.3')
+  BLT.footer(message~='' and message or (not A.ready and '音声アイテムを選択してください。' or ''),A.bad,W,H+22,'0.5.7')
   custom_titlebar()
 end
 
@@ -3404,10 +3530,11 @@ local function close()
   BLT.logError(err)
  end
 end
-function BLT.pick(obj,keys) local v=BLT.valueView or {};BLT.valueView=v;for k in pairs(keys) do v[k]=obj[k] end;return v end
+
 PrimaryButton.painter={C=C,gradient=gradient,line=line,rect=rect,corners=finish_corners,disc=disc,label=label}
 PrimaryButton.painter.motion=function(now) return (gfx.mouse_x-ox)/scale,(gfx.mouse_y-oy)/scale,visual_speed(now) end
 PrimaryButton.wake=function() redraw_dirty=true;A.content_dirty=true;next_draw_time=0 end
+Media.state=A;Media.onchange=function() if BLT.host and BLT.host.wake then BLT.host.wake() end end
 BLT.attach({
  R=R,C=C,Chrome=Chrome,Chameleon=Chameleon,section=SECTION,faces=fonts,font=font,
  geometry=function() return scale,ox,oy end,active=function() local f=gfx.getchar(65536);return (f&1)==0 or (f&2)~=0 end,
@@ -3431,7 +3558,7 @@ function BLT.drawIcon()
  scale,ox,oy=bs,bx,by
 end
 
-if ...=='blt_test' then return {BLT=BLT,A=A,Core=Core,S=S} end
+if ...=='blt_test' then return {Media=Media,BLT=BLT,A=A,Core=Core,S=S} end
 local chrome_ok,chrome_err=titlebar_api_ready()
 if not chrome_ok then Language.mb(BLT.publicError(chrome_err),"Auto Trim / Split | エラー",0); return end
 local wx,wy=tonumber(R.GetExtState(SECTION,"window_x")),tonumber(R.GetExtState(SECTION,"window_y"))
@@ -3447,20 +3574,19 @@ if Chameleon.enabled then Chameleon.refresh(true) end
 R.atexit(close)
 guarded(sync_selection)
 local function loop()
- BLT.tick(R.time_precise());PrimaryButton.tick(R.time_precise(),BLT.host.active(),PrimaryButton.wake)
-
-  if A.closing then close(); return end
-  local k=BLT.key(gfx.getchar()); if k<0 then close(); return end
   guarded(function()
-    local now=R.time_precise()
-    Chameleon.tick(now)
+ local now=R.time_precise();BLT.tick(now);PrimaryButton.tick(now,BLT.host.active(),PrimaryButton.wake)
+
+  if A.closing then A.closing=true; return end
+  local k=BLT.key(gfx.getchar()); if k<0 then close(); return end
+        Chameleon.tick(now)
     local flags=gfx.getchar(65537)
     local window_active=((flags & 1)==0) or ((flags & 2)~=0)
     if last_window_active==nil or window_active~=last_window_active then last_window_active=window_active; wake_visuals(now) end
 
     local key_activity=false
     local count=0
-    while k>0 and count<32 do key_activity=true; keypress(k); count=count+1; k=gfx.getchar() end
+    while k>0 and count<32 do key_activity=true; keypress(k); count=count+1; k=BLT.key(gfx.getchar()) end
     if key_activity then wake_visuals(now) end
     if A.closing then return end
 
@@ -3469,7 +3595,7 @@ local function loop()
       stop_jobs(); A.project=project; A.audio_cache={}; A.long_lufs_approved={}; sync_selection(); wake_visuals(now)
     end
     if A.settings_pending and now>=A.settings_due then flush_scheduled_settings(); redraw_dirty=true end
-    if now>=A.poll_at then
+    if Media.ready() and now>=A.poll_at then
       A.poll_at=now+0.35
       local revision=R.GetProjectStateChangeCount(A.project)
       local key=Core.selection_key(A.project)

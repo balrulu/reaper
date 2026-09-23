@@ -1,20 +1,104 @@
 -- @description LOUDNESS TRACE
--- @version 0.5.6
+-- @version 0.5.18
 -- @author Balrulu
 -- @provides
 --   . > ../
 -- @changelog
---   Increase preset capacity and show shared overflow dialogs.
+--   BLT SERIES Beta TEST UPLOAD
 -- @about
 --   BLT SERIES Beta TEST UPLOAD
 
--- BLT preset transfer limits 1.1.0. Embedded; no runtime dependency.
 local BLTPresetLimits={bytes=16777216,stringBytes=2097152,nodes=262144,entries=8192}
 function BLTPresetLimits.show(english)
  reaper.MB(english and 'Preset capacity limit exceeded. Export presets individually instead of as a bundle.' or '容量上限オーバーです。一括ではなく個別に保存してください。','BLT PRESET',0)
 end
 
--- BLT window geometry 1.0.0. Embedded; screen coordinates only.
+-- Media availability
+local function create_media_gate(api,graphics)
+ local M={waiting=false}
+ local next_check=0;local ready=true;local settle=0;local last_active
+ local function application_active()
+  if graphics and graphics.getchar then
+   local flags=graphics.getchar(65537)
+   if flags>=0 and ((flags&1)==0 or (flags&2)~=0) then return true end
+  end
+  if not (api.JS_Window_GetForeground and api.GetMainHwnd and api.JS_Window_GetParent) then return nil end
+  local foreground=api.JS_Window_GetForeground();local main=api.GetMainHwnd()
+  for _=1,32 do
+   if not foreground then return false end
+   if foreground==main then return true end
+   local parent=api.JS_Window_GetParent(foreground)
+   if parent==foreground then return nil end;foreground=parent
+  end
+  return nil
+ end
+ local function offline(project,take)
+  -- targets() resolves or validates each pointer in this same defer pass.
+  if not take then return false end
+  if api.TakeIsMIDI and api.TakeIsMIDI(take) then return false end
+  if not api.GetMediaItemTake_Source then return false end
+  local source=api.GetMediaItemTake_Source(take);local seen={}
+  for _=1,32 do
+   if not source or seen[source] then break end;seen[source]=true
+   local is_offline=false
+   if api.CF_GetMediaSourceOnline then
+    is_offline=not api.CF_GetMediaSourceOnline(source)
+   elseif api.GetMediaSourceSampleRate and api.GetMediaSourceNumChannels then
+    is_offline=api.GetMediaSourceSampleRate(source)<=0 or api.GetMediaSourceNumChannels(source)<=0
+   end
+   if is_offline then
+    local file=api.GetMediaSourceFileName and api.GetMediaSourceFileName(source,'') or ''
+    if file~='' and (not api.file_exists or api.file_exists(file)) then return true end
+   end
+   source=api.GetMediaSourceParent and api.GetMediaSourceParent(source) or nil
+  end
+  return false
+ end
+ local function targets(project,all_items)
+  local takes={};local invalid=false
+  local all=all_items or (M.all_items and M.state and M.state.job)
+  local count=all and api.CountMediaItems(project) or api.CountSelectedMediaItems(project)
+  for i=0,count-1 do
+   local item=all and api.GetMediaItem(project,i) or api.GetSelectedMediaItem(project,i)
+   if not item then invalid=true
+   else local take=api.GetActiveTake(item);if take then takes[take]=true end end
+  end
+  return takes,invalid
+ end
+ function M.ready(force,all_items)
+  local now=api.time_precise()
+  if not force and now<next_check then return ready end
+  next_check=now+.10
+  local project=api.EnumProjects(-1,'')
+  local takes,invalid=targets(project,all_items);local blocked=false
+  if M.state and M.state.project and M.state.project~=project then invalid=true end
+  if not invalid then
+   if next(takes) and not api.CF_GetMediaSourceOnline and application_active()==false then blocked=true
+   else for take in pairs(takes) do if offline(project,take) then blocked=true;break end end end
+  end
+  if invalid or not next(takes) then settle=0 end
+  if blocked then settle=now+.25 end
+  local waiting=not invalid and (blocked or now<settle)
+  ready=not waiting
+  if waiting~=M.waiting then
+   M.waiting=waiting
+   if M.onchange then M.onchange() end
+  end
+  return ready
+ end
+ function M.tick()
+  local active=application_active()
+  if active~=last_active then next_check=0;last_active=active end
+  return M.ready()
+ end
+ function M.message(section)
+  return api.GetExtState(section,'ui_language')=='EN' and 'Waiting for media to come online…' or 'メディアのオンライン復帰を待っています…'
+ end
+ return M
+end
+local Media=create_media_gate(reaper,gfx)
+
+-- Window coordinates
 local function create_window_geometry(api,graphics)
  local osname=api.GetOS() or ''
  if not osname:match('OSX') and not osname:match('macOS') then return api end
@@ -37,8 +121,11 @@ local function create_window_geometry(api,graphics)
 end
 
 local WindowGeometry=create_window_geometry(reaper,gfx)
-local BLT_MAC=(reaper.GetOS() or ''):match('OSX')~=nil or (reaper.GetOS() or ''):match('macOS')~=nil
 
+-- Application / analysis
+local VERSION="0.5.18"
+local MAX_HISTORY_ROWS=126000
+local MAX_SAVE_BYTES=12*1024*1024
 local Core = {}
 local floor, min, max, sin, pi = math.floor, math.min, math.max, math.sin, math.pi
 function Core.clamp(v, lo, hi) return max(lo, min(hi, v)) end
@@ -66,7 +153,7 @@ function Core.clock(t)
   local sign=t<0 and "-" or ""; t=math.abs(t)
   return string.format("%s%d:%06.3f",sign,floor(t/60),t%60)
 end
--- Pure-Lua stereo BS.1770 K weighting, 100 ms hop, absolute/relative gating.
+
 Core.SILENCE=-150
 function Core.db(e) return e>0 and max(Core.SILENCE,10*math.log(e,10)) or Core.SILENCE end
 function Core.lufs(e) return e>0 and max(Core.SILENCE,-.691+10*math.log(e,10)) or Core.SILENCE end
@@ -115,40 +202,6 @@ function Core.integrate(rows,tick)
   return nrows>0 and rows[nrows].i or Core.SILENCE
 end
 
--- EBU Tech 3342 Loudness Range (LRA): 3 s Short-Term loudness, absolute
--- gate at -70 LUFS, relative gate at -20 LU, then P95 - P10. The existing
--- Short-Term series has 100 ms hops, comfortably exceeding the required overlap.
-function Core.lra(rows)
-  local absGated={}
-  local powerSum=0
-  for _,r in ipairs(rows or {}) do
-    local v=r.s
-    if Core.finite(v) and v>=-70 then
-      absGated[#absGated+1]=v
-      powerSum=powerSum+10^(v/10)
-    end
-  end
-  local n=#absGated
-  if n==0 then return nil end
-  local absIntegrated=10*math.log(powerSum/n,10)
-  local relThreshold=absIntegrated-20
-  local gated={}
-  for i=1,n do
-    local v=absGated[i]
-    if v>=relThreshold then gated[#gated+1]=v end
-  end
-  n=#gated
-  if n==0 then return nil end
-  table.sort(gated)
-  local function ebu_percentile(p)
-    -- EBU reference MATLAB: round((n-1)*p/100 + 1)
-    local idx=floor((n-1)*p/100+1+.5)
-    idx=max(1,min(n,idx))
-    return gated[idx]
-  end
-  return max(0,ebu_percentile(95)-ebu_percentile(10))
-end
-
 function Core.wav(file)
   local size=assert(file:seek('end')); file:seek('set',0)
   local h=assert(file:read(12),'WAVヘッダーがありません。')
@@ -179,10 +232,7 @@ end
 function Core.analyze(file,expected,tick)
   local frames,sr=Core.wav(file)
   if expected then
-    -- REAPER renders time bounds on the audio sample grid. Comparing floating-point
-    -- seconds with a two-sample tolerance was unnecessarily strict on some projects.
-    -- Allow only a tiny (5 ms max) sample-grid discrepancy; a genuinely interrupted
-    -- render is still rejected, and the error reports both lengths for diagnosis.
+
     local expectedFrames=floor(expected*sr+.5)
     local diffFrames=math.abs(frames-expectedFrames)
     local toleranceFrames=max(8,floor(sr*.005+.5))
@@ -190,8 +240,7 @@ function Core.analyze(file,expected,tick)
       string.format('レンダーが中断されたか、測定範囲と音声の長さが一致しません。\n予定: %.6f 秒 / 実際: %.6f 秒 / 差: %.3f ms',
         expected,frames/sr,diffFrames/sr*1000))
   end
-  -- Keep the exact BS.1770 math/windowing, but make the sample loop cheaper:
-  -- larger buffered reads, localized hot functions, and scalar biquad state.
+
   local unpack,abs,finite,lufs,db=string.unpack,math.abs,Core.finite,Core.lufs,Core.db
   local rows,kbins,rbins={}, {}, {}
   local z1,z2,z3,z4,z5,z6,z7,z8=0,0,0,0,0,0,0,0
@@ -243,9 +292,7 @@ Core.metrics={'s','m','i','rms','peak'}
 local function build_lod(data,tick)
   data.lod={}
   for _,key in ipairs(Core.metrics) do
-    -- Each level is an interleaved {low,high,...} numeric array. The previous
-    -- representation allocated one Lua table per bucket (over a million tables
-    -- at maximum history), despite every bucket containing only two numbers.
+
     local first={}
     for _,r in ipairs(data.rows) do
       local value=r[key];if value==nil then value=false end
@@ -263,7 +310,7 @@ local function build_lod(data,tick)
           if blo==false then blo=nil end;if bhi==false then bhi=nil end
           if blo then lo=lo and min(lo,blo) or blo;hi=hi and max(hi,bhi) or bhi end
         end
-        nextlevel[#nextlevel+1]=lo==nil and false or lo;nextlevel[#nextlevel+1]=hi==nil and false or hi
+        nextlevel[#nextlevel+1]=lo~=nil and lo or false;nextlevel[#nextlevel+1]=hi~=nil and hi or false
       end
       levels[#levels+1]=nextlevel;n=(n+1)//2
       if tick then tick(.98) end
@@ -271,19 +318,217 @@ local function build_lod(data,tick)
     data.lod[key]=levels
   end
 end
--- Render transaction: every temporary setting and track selection is restored on error too.
-function Core.render(R,project,source,first,last,directory,basename)
+
+function Core.live_tree()
+  local T={v={},n={},sum={},count={},left={},right={},priority={},free={},root=0,serial=0,seed=17}
+  local function update(i)
+    local a,b=T.left[i],T.right[i]
+    T.count[i]=T.n[i]+(T.count[a] or 0)+(T.count[b] or 0)
+    T.sum[i]=T.v[i]*T.n[i]+(T.sum[a] or 0)+(T.sum[b] or 0)
+    return i
+  end
+  local function rotate(i,left)
+    local j=left and T.right[i] or T.left[i]
+    if left then T.right[i]=T.left[j];T.left[j]=i else T.left[i]=T.right[j];T.right[j]=i end
+    update(i);return update(j)
+  end
+  local function insert(i,v)
+    if i==0 then
+      i=table.remove(T.free)
+      if not i then T.serial=T.serial+1;i=T.serial end
+      T.seed=T.seed*48271%2147483647
+      T.v[i]=v;T.n[i]=1;T.sum[i]=v;T.count[i]=1;T.left[i]=0;T.right[i]=0;T.priority[i]=T.seed
+      return i
+    end
+    if v==T.v[i] then T.n[i]=T.n[i]+1
+    elseif v<T.v[i] then T.left[i]=insert(T.left[i],v);if T.priority[T.left[i]]<T.priority[i] then return rotate(i,false) end
+    else T.right[i]=insert(T.right[i],v);if T.priority[T.right[i]]<T.priority[i] then return rotate(i,true) end end
+    return update(i)
+  end
+  local function merge(a,b)
+    if a==0 then return b end;if b==0 then return a end
+    if T.priority[a]<T.priority[b] then T.right[a]=merge(T.right[a],b);return update(a) end
+    T.left[b]=merge(a,T.left[b]);return update(b)
+  end
+  local function remove(i,v)
+    assert(i~=0,'集計データの対応が失われました。')
+    if v<T.v[i] then T.left[i]=remove(T.left[i],v)
+    elseif v>T.v[i] then T.right[i]=remove(T.right[i],v)
+    elseif T.n[i]>1 then T.n[i]=T.n[i]-1
+    else
+      local root=merge(T.left[i],T.right[i]);T.v[i]=nil;T.n[i]=nil;T.sum[i]=nil;T.count[i]=nil
+      T.left[i]=nil;T.right[i]=nil;T.priority[i]=nil;T.free[#T.free+1]=i;return root
+    end
+    return update(i)
+  end
+  function T.add(v) T.root=insert(T.root,v) end
+  function T.remove(v) T.root=remove(T.root,v) end
+  function T.above(v,inclusive)
+    local i=T.root;local sum,count=0,0
+    while i~=0 do
+      if T.v[i]>v or (inclusive and T.v[i]==v) then
+        local r=T.right[i];sum=sum+T.v[i]*T.n[i]+(T.sum[r] or 0);count=count+T.n[i]+(T.count[r] or 0);i=T.left[i]
+      else i=T.right[i] end
+    end
+    return sum,count
+  end
+  function T.rank(n)
+    local i=T.root
+    while i~=0 do
+      local before=T.count[T.left[i]] or 0
+      if n<=before then i=T.left[i] elseif n<=before+T.n[i] then return T.v[i] else n=n-before-T.n[i];i=T.right[i] end
+    end
+  end
+  return T
+end
+function Core.live_meter()
+  local M={count=0,k={},r={},km=0,ks=0,rm=0}
+  function M.feed(time,k,raw,peak)
+    local i=M.count+1;M.count=i
+    local slot=(i-1)%30+1;local rmsSlot=(i-1)%4+1
+    M.km=max(0,M.km+k-(i>4 and (M.k[(i-5)%30+1] or 0) or 0))
+    M.ks=max(0,M.ks+k-(M.k[slot] or 0));M.rm=max(0,M.rm+raw-(M.r[rmsSlot] or 0))
+    M.k[slot]=k;M.r[rmsSlot]=raw
+    return {time=time,peak=Core.db(peak*peak),m=i>=4 and Core.lufs(M.km/4) or nil,
+      rms=i>=4 and Core.db(M.rm/4) or nil,s=i>=30 and Core.lufs(M.ks/30) or nil}
+  end
+  return M
+end
+
+-- Update only the affected min/max path, rather than rebuilding the full graph.
+function Core.live_lod_append(seg,row)
+  local count=#seg.rows;seg.lod=seg.lod or {}
+  for _,key in ipairs(Core.metrics) do
+    local levels=seg.lod[key] or {{}};seg.lod[key]=levels
+    local index=count;local value=row[key];if value==nil then value=false end
+    levels[1][index*2-1]=value;levels[1][index*2]=value
+    local level,n=1,count
+    while n>1 do
+      local parent=(index+1)//2;local left=(parent-1)*4+1
+      local prev=levels[level];local lo,hi=prev[left],prev[left+1]
+      if lo==false then lo=nil;hi=nil end
+      local blo,bhi=prev[left+2],prev[left+3]
+      if blo~=nil and blo~=false then lo=lo and min(lo,blo) or blo;hi=hi and max(hi,bhi) or bhi end
+      levels[level+1]=levels[level+1] or {};local dst=levels[level+1]
+      dst[parent*2-1]=lo~=nil and lo or false;dst[parent*2]=hi~=nil and hi or false
+      index=parent;n=(n+1)//2;level=level+1
+    end
+  end
+end
+function Core.live_after(rows,t)
+  local lo,hi=1,#rows+1
+  while lo<hi do local mid=(lo+hi)//2;if rows[mid].time<=t+1e-8 then lo=mid+1 else hi=mid end end
+  return lo
+end
+function Core.live_view(previous,active,source,name)
+  local out={source=source,name=name,segments={},rows=active.rows,integrated=active.integrated or Core.SILENCE,lra=active.lra}
+  local total=0
+  local function keep(seg,a,b)
+    if b<=a+1e-8 then return end
+    local first,last=Core.live_after(seg.rows,a),Core.live_after(seg.rows,b)-1
+    if last<first then return end
+    total=total+last-first+1
+    out.segments[#out.segments+1]={first=a,last=b,rows=seg.rows,origin=seg.origin,lod=seg.lod,stamp=seg.stamp or 0,stale=seg.stale}
+  end
+  if previous then for _,seg in ipairs(previous.segments) do
+    if seg.last<=active.first or seg.first>=active.last then keep(seg,seg.first,seg.last)
+    else keep(seg,seg.first,min(seg.last,active.first));keep(seg,max(seg.first,active.last),seg.last) end
+  end end
+  keep(active,active.first,active.last)
+  table.sort(out.segments,function(a,b)return a.first<b.first end)
+  out.first=out.segments[1].first;out.last=out.segments[#out.segments].last;out.liveCount=total
+  return out
+end
+-- Exact aggregate shared by offline and live histories. Each retained 400 ms / 3 s
+-- window must lie within its surviving segment; boundary-crossing windows are excluded.
+function Core.history_energy(row,key,first)
+  local window=key=='m' and .4 or 3
+  local v=row[key]
+  if not Core.finite(v) or row.time-window<first-1e-7 then return nil end
+  if key=='m' then return v> -70 and 10^((v+.691)/10) or nil end
+  return v>=-70 and 10^(v/10) or nil
+end
+function Core.tree_integrated(tree)
+  local n=tree.count[tree.root] or 0;if n==0 then return Core.SILENCE end
+  local sum,count=tree.above(max(10^((-70+.691)/10),tree.sum[tree.root]/n*.1),false)
+  return count>0 and Core.lufs(sum/count) or Core.SILENCE
+end
+function Core.tree_lra(tree)
+  local n=tree.count[tree.root] or 0;if n==0 then return nil end
+  local _,count=tree.above(max(1e-7,tree.sum[tree.root]/n*.01),true)
+  if count==0 then return nil end
+  local a=n-count+max(1,min(count,floor((count-1)*.10+1.5)))
+  local b=n-count+max(1,min(count,floor((count-1)*.95+1.5)))
+  return max(0,10*math.log(tree.rank(b)/tree.rank(a),10))
+end
+function Core.row_warning(row,targets)
+  local a,b=targets.s,targets.m
+  return ((row.s and row.s>a[1]+a[2]) or (row.m and row.m>b[1]+b[2])) and 1 or 0,
+    ((row.s and row.s<a[1]-a[2]) or (row.m and row.m<b[1]-b[2])) and 1 or 0,
+    row.peak and row.peak>=0 and 1 or 0
+end
+function Core.history_summary(previous,first,targets)
+  local H={m=Core.live_tree(),s=Core.live_tree(),prefix=Core.live_tree(),parts={},first=first,last=first,
+    warning={0,0,0},targets={s={targets.s[1],targets.s[2]},m={targets.m[1],targets.m[2]}}}
+  local function warning(row,delta)
+    local a,b,c=Core.row_warning(row,H.targets)
+    H.warning[1]=H.warning[1]+a*delta;H.warning[2]=H.warning[2]+b*delta;H.warning[3]=H.warning[3]+c*delta
+  end
+  H.warning_row=warning
+  for _,seg in ipairs(previous and previous.segments or {}) do
+    local q={seg=seg,last=Core.live_after(seg.rows,seg.last)-1}
+    local a=Core.live_after(seg.rows,seg.first)
+    q.w=max(a,Core.live_after(seg.rows,first))
+    q.m=max(q.w,Core.live_after(seg.rows,seg.first+.4-1e-7))
+    q.s=max(q.w,Core.live_after(seg.rows,seg.first+3-1e-7))
+    H.parts[#H.parts+1]=q
+    for i=a,q.last do
+      local row=seg.rows[i];warning(row,1)
+      if row.m and row.time-.4>=seg.first-1e-7 and row.time<=first+1e-8 then H.prefixValid=true end
+      for _,key in ipairs({'m','s'}) do
+        local e=Core.history_energy(row,key,seg.first)
+        if e then H[key].add(e);if key=='m' and row.time<=first+1e-8 then H.prefix.add(e) end end
+      end
+    end
+  end
+  function H.feed(row)
+    local last=row.time
+    assert(last>H.last,'測定時刻が逆転しています。')
+    for _,q in ipairs(H.parts) do
+      local seg=q.seg
+      if last>seg.first+1e-8 and seg.last>first then
+        for _,key in ipairs({'m','s','w'}) do
+          local window=key=='m' and .4 or key=='s' and 3 or 0
+          local edge=window==0 and last or last+window-1e-7
+          local stop=min(q.last,Core.live_after(seg.rows,edge)-1)
+          for i=q[key],stop do
+            local r=seg.rows[i]
+            if key=='w' then warning(r,-1) else local e=Core.history_energy(r,key,seg.first);if e then H[key].remove(e) end end
+          end
+          q[key]=max(q[key],stop+1)
+        end
+      end
+    end
+    for _,key in ipairs({'m','s'}) do
+      local e=Core.history_energy(row,key,first)
+      if e then H[key].add(e);if key=='m' then H.prefix.add(e) end end
+    end
+    warning(row,1);H.last=last
+    if row.m and row.time-.4>=first-1e-7 then H.prefixValid=true end
+    row.i=H.prefixValid and Core.tree_integrated(H.prefix) or nil
+    return Core.tree_integrated(H.m),Core.tree_lra(H.s)
+  end
+  return H
+end
+
+function Core.render(R,project,first,last,directory,basename)
   basename=basename or 'trace'
-  -- Track mode uses REAPER's "selected tracks via master" source. Unlike a master
-  -- render, this carries only the selected track contribution through its parent/
-  -- master processing path and explicitly excludes unselected project tracks.
-  -- The measurement source is the user's current time selection, so ask REAPER to
-  -- render that exact native bound mode rather than reconstructing it as custom bounds.
-  local nums={RENDER_SETTINGS=source and 128 or 0,RENDER_BOUNDSFLAG=2,RENDER_CHANNELS=2,RENDER_SRATE=48000,
+
+  local nums={RENDER_SETTINGS=0,RENDER_BOUNDSFLAG=2,RENDER_CHANNELS=2,RENDER_SRATE=48000,
     RENDER_STARTPOS=first,RENDER_ENDPOS=last,RENDER_TAILFLAG=0,RENDER_TAILMS=0,RENDER_ADDTOPROJ=0,
     RENDER_DITHER=16,RENDER_NORMALIZE=4<<16}
   local strs={RENDER_FILE=directory,RENDER_PATTERN=basename,RENDER_FORMAT='ZXZhdyADAA==',RENDER_FORMAT2=''}
-  local oldn,olds,oldcfg,selected={},{},{},{}
+  local oldn,olds,oldcfg={},{},{}
   for k in pairs(nums) do oldn[k]=R.GetSetProjectInfo(project,k,0,false) end
   for k in pairs(strs) do local ok,s=R.GetSetProjectInfo_String(project,k,'',false); assert(ok,'レンダー設定を読み取れません: '..k); olds[k]=s end
   for _,k in ipairs({'renderclosewhendone','autosaveonrender','autosaveonrender2'}) do
@@ -291,30 +536,16 @@ function Core.render(R,project,source,first,last,directory,basename)
     if v~=-2147483647 then oldcfg[k]=v end
   end
   assert(oldcfg.renderclosewhendone,'SWSからレンダー設定を取得できません。')
-  for i=0,R.CountSelectedTracks(project)-1 do selected[#selected+1]=R.GetSelectedTrack(project,i) end
-  local master=R.GetMasterTrack(project)
-  local masterSelected=master and R.GetMediaTrackInfo_Value(master,'I_SELECTED')>0.5 or false
   local function restore()
     for k,v in pairs(oldn) do R.GetSetProjectInfo(project,k,v,true) end
     for k,v in pairs(olds) do R.GetSetProjectInfo_String(project,k,v,true) end
     for k,v in pairs(oldcfg) do R.SNM_SetIntConfigVar(k,v) end
-    if source then
-      for i=0,R.CountTracks(project)-1 do R.SetTrackSelected(R.GetTrack(project,i),false) end
-      if master then R.SetTrackSelected(master,masterSelected) end
-      for _,tr in ipairs(selected) do if R.ValidatePtr2(project,tr,'MediaTrack*') then R.SetTrackSelected(tr,true) end end
-    end
   end
   local ok,result=pcall(function()
     for k,v in pairs(nums) do R.GetSetProjectInfo(project,k,v,true) end
     for k,v in pairs(strs) do assert(R.GetSetProjectInfo_String(project,k,v,true),'レンダー設定を変更できません: '..k) end
     R.SNM_SetIntConfigVar('renderclosewhendone',(oldcfg.renderclosewhendone|1)&~(16|16384|32768))
     for _,k in ipairs({'autosaveonrender','autosaveonrender2'}) do if oldcfg[k] then R.SNM_SetIntConfigVar(k,0) end end
-    if source then
-      -- Make the render selection unambiguous, including the master-track selection state.
-      for i=0,R.CountTracks(project)-1 do R.SetTrackSelected(R.GetTrack(project,i),false) end
-      if master then R.SetTrackSelected(master,false) end
-      R.SetTrackSelected(source,true)
-    end
     local function prefix_wavs()
       local found={}; local i=0
       while true do
@@ -330,8 +561,7 @@ function Core.render(R,project,source,first,last,directory,basename)
     local created={}
     for _,p in ipairs(prefix_wavs()) do if not before[p:gsub('\\','/'):lower()] then created[#created+1]=p end end
     assert(#created>0,'一時レンダーのWAVを確認できません。レンダーがキャンセルされた可能性があります。')
-    -- A one-track measurement must resolve to exactly one temporary WAV.
-    assert(#created==1,'一時レンダーが複数ファイルになりました。解析ソースのトラックを1つだけ指定してください。')
+    assert(#created==1,'マスターミックスの一時レンダーが複数ファイルになりました。')
     return created[1]
   end)
   local restored,err=pcall(restore)
@@ -340,7 +570,6 @@ function Core.render(R,project,source,first,last,directory,basename)
   return result
 end
 
--- Normalize fresh analysis into the segmented history representation.
 function Core.segmented(data)
   if not data or data.segments then return data end
   for _,r in ipairs(data.rows) do r.time=data.first+r.t end
@@ -364,7 +593,7 @@ function Core.replace_range(previous,fresh)
   end
   if previous and previous.source==fresh.source then
     for _,seg in ipairs(previous.segments) do
-      -- Retained ranges keep age metadata only for bounded-history pruning; visuals stay identical.
+
       if seg.last<=incoming.first or seg.first>=incoming.last then keep(seg,seg.first,seg.last,true)
       else
         keep(seg,seg.first,min(seg.last,incoming.first),true)
@@ -372,7 +601,7 @@ function Core.replace_range(previous,fresh)
       end
     end
   end
-  -- The newly measured range receives the newest history stamp; no visual distinction is applied.
+
   keep(incoming,incoming.first,incoming.last,false)
   table.sort(result.segments,function(a,b) return a.first<b.first end)
   return result
@@ -400,35 +629,35 @@ function Core.trim_history(data,maxrows)
   return removed
 end
 function Core.recompute(data,tick)
-  data.rows={}
-  local total=0
+  local segments,all={},{};local range=Core.live_tree()
   for _,seg in ipairs(data.segments) do
     assert(seg.last>seg.first and #seg.rows>0,'保存区間が不正です。')
-    seg.origin=seg.rows[1].time-.1
-    for _,r in ipairs(seg.rows) do
-      r.i=nil
-      -- Exclude a 400 ms block crossing a replaced/deleted boundary.
-      -- S/M themselves stay as originally measured outside the replacement.
-      r.energy=(r.m and r.time-.4>=seg.first-1e-7) and (r.m<=-150 and 0 or 10^((r.m+.691)/10)) or nil
-      data.rows[#data.rows+1]=r; total=total+1
-      if tick and total%1000==0 then tick(.94) end
+    local rows={}
+    local a,b=Core.live_after(seg.rows,seg.first),Core.live_after(seg.rows,seg.last)-1
+    for i=a,b do
+      local row=copy_row(seg.rows[i]);row.i=nil
+      row.energy=(row.m and row.time-.4>=seg.first-1e-7) and (row.m<=-150 and 0 or 10^((row.m+.691)/10)) or nil
+      local e=Core.history_energy(row,'s',seg.first);if e then range.add(e) end
+      rows[#rows+1]=row;all[#all+1]=row
+      if tick and #all%1000==0 then tick(.94) end
     end
+    if #rows>0 then segments[#segments+1]={first=seg.first,last=seg.last,rows=rows,origin=rows[1].time-.1,stamp=seg.stamp or 0,stale=seg.stale} end
   end
-  assert(total>0 and total<=432000,'保持できる測定量（12時間）を超えました。')
-  Core.integrate(data.rows,tick)
-  local cumulative
-  for _,r in ipairs(data.rows) do if r.i then cumulative=r.i else r.i=cumulative end end
-  data.integrated=cumulative or Core.SILENCE
-  data.lra=Core.lra(data.rows)
-  data.first=data.segments[1].first;data.last=data.segments[#data.segments].last
-  for _,seg in ipairs(data.segments) do build_lod(seg,tick) end
+  assert(#all>0 and #all<=MAX_HISTORY_ROWS,'保存できる共通履歴は最大3.5時間です。古い履歴を整理してから再試行してください。')
+  Core.integrate(all,tick);local cumulative
+  for _,r in ipairs(all) do if r.i then cumulative=r.i else r.i=cumulative end end
+  data.live=nil;data.source='master';data.name='MASTER MIX · stereo 1/2';data.rows=all;data.segments=segments
+  data.integrated=cumulative or Core.SILENCE;data.lra=Core.tree_lra(range)
+  data.first=segments[1].first;data.last=segments[#segments].last;data.liveCount=#all
+  for _,seg in ipairs(segments) do build_lod(seg,tick) end
 end
+
 function Core.row(data,time)
   if not data or not data.segments then return nil end
-  local l,h=1,#data.segments;local found
+  local l,h=1,#data.segments;local found,foundIndex
   while l<=h do
     local m=(l+h)//2;local seg=data.segments[m]
-    if time>=seg.first then found=seg;l=m+1 else h=m-1 end
+    if time>=seg.first then found=seg;foundIndex=m;l=m+1 else h=m-1 end
   end
   if not found or time>found.last+1e-8 then return nil end
   l,h=1,#found.rows;local row
@@ -436,62 +665,141 @@ function Core.row(data,time)
     local m=(l+h)//2
     if found.rows[m].time<=time+1e-8 then row=found.rows[m];l=m+1 else h=m-1 end
   end
+  if row and row.time<=found.first+1e-8 then row=nil end
+  if not row and foundIndex>1 and math.abs(time-found.first)<1e-8 then
+    local previous=data.segments[foundIndex-1];local last=previous.rows[#previous.rows]
+    if last and math.abs(last.time-time)<1e-8 and last.time<=previous.last+1e-8 then row=last end
+  end
   return row
 end
+-- Byte-bounded BLT2 records; current writer and reader use the same format.
+
 function Core.pack(data)
-  local chunks,lines={},{}
-  local function add(s)
-    lines[#lines+1]=s
-    if #lines>=512 then chunks[#chunks+1]=table.concat(lines,'\n');lines={} end
+  local chunks,lines,bytes={}, {},22
+  local function flush()
+    if #lines>0 then
+      local body=table.concat(lines,'|')
+      chunks[#chunks+1]='BLT2|'..Core.history_hash({body})..'|'..body;lines={};bytes=22
+    end
   end
-  local function number(n) return n and string.format('%.12g',n) or 'x' end
+  local function add(line)
+    if bytes+#line+1>8000 then flush() end
+    lines[#lines+1]=line;bytes=bytes+#line+1
+  end
+  local function number(n) return n~=nil and string.format('%.12g',n) or 'x' end
   for _,seg in ipairs(data.segments) do
-    add('G,'..string.format('%.9f,%.9f,%d,%.6f',seg.first,seg.last,seg.stale and 1 or 0,seg.stamp or 0))
-    for _,r in ipairs(seg.rows) do
-      local f={'R',string.format('%.9f',r.time)}
-      for _,k in ipairs({'s','m','rms','peak'}) do f[#f+1]=number(r[k]) end
-      add(table.concat(f,','))
-    end
-  end
-  if #lines>0 then chunks[#chunks+1]=table.concat(lines,'\n') end
-  return chunks
-end
-function Core.unpack(chunks)
-  local data={segments={}};local current;local total=0
-  for _,chunk in ipairs(chunks) do
-    for line in chunk:gmatch('[^\n]+') do
-      local f={};for v in (line..','):gmatch('(.-),') do f[#f+1]=v end
-      if f[1]=='G' then
-        local a,b=tonumber(f[2]),tonumber(f[3])
-        assert(#f==5 and Core.finite(a) and Core.finite(b) and b>a,'保存範囲が不正です。')
-        assert(not current or a>=current.last-1e-8,'保存範囲が重複しています。')
-        local stamp=tonumber(f[5]);assert(Core.finite(stamp),'保存時刻情報が不正です。')
-        current={first=a,last=b,rows={},stale=f[4]=='1',stamp=stamp};data.segments[#data.segments+1]=current
-      elseif f[1]=='R' then
-        assert(current and #f==6,'保存データが不正です。')
-        local r={time=tonumber(f[2])}
-        assert(Core.finite(r.time) and r.time>current.first and r.time<=current.last+1e-7,'保存時刻が範囲外です。')
-        local prev=current.rows[#current.rows]
-        assert(not prev or math.abs(r.time-prev.time-.1)<1e-6,'保存カーブが途切れています。')
-        for j,k in ipairs({'s','m','rms','peak'}) do
-          local v=tonumber(f[j+2]);assert(f[j+2]=='x' or Core.finite(v),'保存数値が不正です。');r[k]=v
+    local a,b=Core.live_after(seg.rows,seg.first),Core.live_after(seg.rows,seg.last)-1
+    -- A LIVE view can retain a shared row array with clipped first/last bounds.
+    -- Persist only the visible rows, not the full backing array.
+    if a<=b then
+      local groups={};local first=a
+      for i=a+1,b do
+        if math.abs(seg.rows[i].time-seg.rows[i-1].time-.1)>=1e-6 then groups[#groups+1]={first,i-1};first=i end
+      end
+      groups[#groups+1]={first,b}
+      for gi,g in ipairs(groups) do
+        local start=gi==1 and seg.first or max(seg.rows[g[1]-1].time,seg.rows[g[1]].time-.1)
+        local finish=gi==#groups and seg.last or seg.rows[g[2]].time
+        add('G,'..string.format('%.17g,%.17g,%d,%.6f',start,finish,seg.stale and 1 or 0,seg.stamp or 0))
+        for i=g[1],g[2] do
+          local r=seg.rows[i];local f={'R',string.format('%.17g',r.time)}
+          for _,k in ipairs({'s','m','rms','peak'}) do f[#f+1]=number(r[k]) end
+          add(table.concat(f,','))
         end
-        current.rows[#current.rows+1]=r;total=total+1;assert(total<=432000,'保存データが上限を超えています。')
-      else error('不明な保存データ形式です。') end
+      end
     end
   end
-  assert(#data.segments>0,'保存データが空です。')
-  return data
+  flush();return chunks
 end
--- A slow, broad loudness-style history line moving continuously right-to-left.
--- The shape is analytic rather than frame-randomized, so the icon remains temporally stable.
+function Core.history_hash(chunks)
+  local h=0xcbf29ce484222325;local bytes=0
+  for _,chunk in ipairs(chunks) do
+    bytes=bytes+#chunk
+    for i=1,#chunk do h=(h~chunk:byte(i))*0x100000001b3 end
+    h=(h~10)*0x100000001b3
+  end
+  return string.format('%016x',h),bytes
+end
+function Core.unpack(chunks,recover)
+  local data={segments={}};local current;local total=0
+  local info={skipped=0,split=0}
+  local function bad(message,header)
+    if not recover then error(message,0) end
+    info.skipped=info.skipped+1
+    if header then current=nil end
+  end
+  for _,chunk in ipairs(chunks) do
+    assert(type(chunk)=='string','保存データが不正です。')
+    local wire=chunk
+    if wire:sub(1,5)=='BLT2|' then
+      local hash,body=wire:match('^BLT2|([%x]+)|(.*)$')
+      if not hash or #hash~=16 or Core.history_hash({body})~=hash then
+        bad('保存グラフの整合性検証に失敗しました。',true);wire=''
+      else wire=body:gsub('|','\n') end
+    elseif wire=='' then
+      if recover then info.skipped=info.skipped+1 end
+    else bad('不明な保存データ形式です。',true);wire='' end
+    for line in wire:gmatch('[^\r\n]+') do
+      line=line:match('^%s*(.-)%s*$')
+      if line~='' then
+        local f={};for v in (line..','):gmatch('(.-),') do f[#f+1]=v:match('^%s*(.-)%s*$') end
+        if f[1]=='G' then
+          local a,b,stamp=tonumber(f[2]),tonumber(f[3]),tonumber(f[5])
+          if #f~=5 or not Core.finite(a) or not Core.finite(b) or b<=a or not Core.finite(stamp) or (f[4]~='0' and f[4]~='1') then
+            bad('保存範囲が不正です。',true)
+          elseif data.segments[#data.segments] and a<data.segments[#data.segments].last-1e-8 then
+            bad('保存範囲が重複しています。',true)
+          else
+            current={first=a,last=b,rows={},stale=f[4]=='1',stamp=stamp}
+            data.segments[#data.segments+1]=current
+          end
+        elseif f[1]=='R' then
+          local r={time=tonumber(f[2])};local valid=current and #f==6
+          local problem='保存データが不正です。'
+          if valid then
+            valid=Core.finite(r.time) and r.time>current.first and r.time<=current.last+1e-7
+            problem='保存時刻が範囲外です。'
+          end
+          if valid then
+            for j,k in ipairs({'s','m','rms','peak'}) do
+              local v=tonumber(f[j+2])
+              if f[j+2]~='x' and not Core.finite(v) then valid=false;problem='保存数値が不正です。';break end
+              r[k]=v
+            end
+          end
+          local prev=current and current.rows[#current.rows]
+          if valid and prev and r.time<=prev.time+1e-9 then valid=false;problem='保存時刻が逆転または重複しています。' end
+          if valid and prev and math.abs(r.time-prev.time-.1)>=1e-6 then
+            if not recover then error('保存カーブが途切れています。',0) end
+            -- Keep a genuine missing span as a gap. Never interpolate measurements.
+            local stop=current.last;current.last=prev.time
+            local first=max(prev.time,r.time-.1)
+            current={first=first,last=stop,rows={},stale=current.stale,stamp=current.stamp}
+            data.segments[#data.segments+1]=current;info.split=info.split+1
+          end
+          if valid then
+            current.rows[#current.rows+1]=r;total=total+1;assert(total<=MAX_HISTORY_ROWS,'保存データが上限を超えています。')
+          else bad(problem,false) end
+        else bad('不明な保存データ形式です。',false) end
+      end
+    end
+  end
+  local kept={}
+  for _,seg in ipairs(data.segments) do
+    if #seg.rows>0 then kept[#kept+1]=seg elseif not recover then error('保存区間に測定点がありません。',0) end
+  end
+  data.segments=kept
+  assert(#kept>0,'保存データに復元できる測定点がありません。')
+  return data,info
+end
+
 function Core.loudness_line(seconds)
   local out={}
   local width,step,speed=76,2,4.6
   local travel=seconds*speed
   for x=0,width,step do
     local world=x+travel
-    -- Long wavelengths keep the motion closer to a loudness trace than an audio waveform.
+
     local y=7.2*sin(world*.105+.35)+3.8*sin(world*.047+1.55)+1.8*sin(world*.021+.4)
     local edge=min(1,x/8,(width-x)/8)
     out[#out+1]={x=x,y=y,a=max(0,edge)}
@@ -501,7 +809,7 @@ end
 function Core.axis_ticks(lo,hi,pixels)
   local step=Core.tick_step(hi-lo,pixels*3)
   local start=math.ceil(lo/step)*step;local out={};local previous
-  -- Bounded iteration also handles magnitudes where adding a step rounds to itself.
+
   for i=0,64 do
     local v=start+i*step
     if v>hi then break end
@@ -510,18 +818,18 @@ function Core.axis_ticks(lo,hi,pixels)
   return out
 end
 
--- BLT language runtime 1.1.0. Embed with an app-specific catalog; no runtime file I/O.
+-- Localization
 local function create_language(api,section,catalog)
  local L={code=api.GetExtState(section,'ui_language')=='EN' and 'EN' or 'JP'}
  local en=catalog.en
  local cache,count={},0
- -- Fixed labels: one lookup, no pattern scan, allocation, or cache insertion.
+
  function L.text(value)
   local text=type(value)=='string' and value or tostring(value or '')
   if L.code=='JP' then return text end
   return en[text] or text
  end
- -- Only status text, tooltips and dialogs need dynamic-message handling.
+
  function L.message(value)
   local text=type(value)=='string' and value or tostring(value or '')
   if L.code=='JP' then return text end
@@ -564,7 +872,6 @@ local function create_language(api,section,catalog)
  return L
 end
 
--- Latest embedded application catalog.
 local LanguageCatalog={en={
  ["WAVヘッダーがありません。"]="Missing WAV header.",
  ["WAV形式を確認できません。"]="Cannot identify WAV format.",
@@ -582,20 +889,17 @@ local LanguageCatalog={en={
  ["SWSからレンダー設定を取得できません。"]="Cannot read render settings from SWS.",
  ["レンダー設定を変更できません: "]="Cannot change render setting: ",
  ["一時レンダーのWAVを確認できません。レンダーがキャンセルされた可能性があります。"]="Cannot find temporary render WAV. Render may have been cancelled.",
- ["一時レンダーが複数ファイルになりました。解析ソースのトラックを1つだけ指定してください。"]="Temporary render produced multiple files. Select only one source track.",
  ["レンダー設定の復元に失敗: "]="Cannot restore render setting: ",
  ["保存区間が不正です。"]="Invalid saved section.",
- ["保持できる測定量（12時間）を超えました。"]="Measurement limit exceeded (12 hours).",
+ ["保存できる共通履歴は最大3.5時間です。古い履歴を整理してから再試行してください。"]="Shared history is limited to 3.5 hours. Remove old history, then retry.",
  ["保存範囲が不正です。"]="Invalid saved range.",
  ["保存範囲が重複しています。"]="Saved ranges overlap.",
- ["保存時刻情報が不正です。"]="Invalid saved time information.",
  ["保存データが不正です。"]="Invalid saved data.",
  ["保存時刻が範囲外です。"]="Saved time is out of range.",
  ["保存カーブが途切れています。"]="Saved curve has gaps.",
  ["保存数値が不正です。"]="Invalid saved number.",
  ["保存データが上限を超えています。"]="Saved data exceeds limit.",
  ["不明な保存データ形式です。"]="Unknown saved data format.",
- ["保存データが空です。"]="Saved data is empty.",
  ["ファクトリーデフォルト"]="Factory Default",
  ["ファクトリーデフォルトは変更できません。"]="Factory Default is read-only.",
  ["「"]="\"",
@@ -635,39 +939,25 @@ local LanguageCatalog={en={
  ["次のプリセット"]="Next preset",
  ["前のプリセット"]="Previous preset",
  ["プリセット（読込・保存・インポート／エクスポート）"]="Presets: load, save, import/export",
- ["解析中...%d%%"]="Analyzing...%d%%",
- ["解析中...100%"]="Analyzing...100%",
- ["不明なエラー"]="Unknown error",
  ["処理中にエラーが発生しました。"]="An error occurred during processing.",
  ["LOUDNESS TRACEにはSWSとjs_ReaScriptAPIが必要です。\nSWS: https://www.sws-extension.org/\njs_ReaScriptAPI: ReaPackからインストール\n\n不足: "]="LOUDNESS TRACE requires SWS and js_ReaScriptAPI.\nSWS: https://www.sws-extension.org/\njs_ReaScriptAPI: install via ReaPack\n\nMissing: ",
  ["LOUDNESS TRACE | 必要な拡張"]="LOUDNESS TRACE | Required extensions",
- ["LOUDNESS TRACEはWindows用です。"]="LOUDNESS TRACE requires Windows.",
- ["保存できる履歴は解析ソースごとに最大3.5時間です。古い履歴を整理してから再試行してください。"]="History is limited to 3.5 hours per source. Remove old history, then retry.",
  ["保存データが12 MiBの安全上限を超えました。測定範囲を短くしてください。"]="Saved data exceeds the 12 MiB safety limit. Shorten the measurement range.",
- ["カーブを保存できません。"]="Cannot save curve.",
- ["結果を保存できません。"]="Cannot save results.",
  ["保存情報が不正です。"]="Invalid saved information.",
  ["保存カーブが不足しています。"]="Missing saved curve data.",
- ["指定トラックが見つかりません"]="Source track not found",
  ["LOUDNESS TRACE: 表示トラックを作成"]="LOUDNESS TRACE: Create display track",
  ["描画用ビットマップを作成できません。"]="Cannot create drawing bitmap.",
- ["CHAMELEON  REAPERテーマに擬態"]="CHAMELEON  REAPER theme",
- ["CHAMELEON  オリジナル配色"]="CHAMELEON  Original colors",
  ["解析ソース"]="Source",
  ["前回の解析で残った可能性がある一時ファイルを%d件検出しました（合計 %s）。\n\n削除してよろしいですか？\n別のLOUDNESS TRACEが現在解析中の場合だけキャンセルしてください。"]="Found %d temporary files possibly left by an earlier analysis (total %s).\n\nDelete them?\nCancel if another LOUDNESS TRACE is currently analyzing.",
  ["LOUDNESS TRACE | 一時ファイル回収"]="LOUDNESS TRACE | Temporary files",
  ["長い範囲を解析するため、一時WAVを約 %s 作成します。\n解析中は同程度の空き容量が必要です。続行しますか？\n\n範囲：%.1f分"]="This range creates about %s of temporary WAV data.\nKeep this much disk space free during analysis. Continue?\n\nRange: %.1f min",
  ["LOUDNESS TRACE | 長尺解析"]="LOUDNESS TRACE | Long analysis",
  ["測定開始前にプロジェクトが切り替わりました。"]="Project changed before measurement started.",
- ["測定元トラックが削除されました。"]="Source track was deleted.",
  ["測定開始前に時間選択が変更されました。"]="Time selection changed before measurement started.",
  ["レンダーがキャンセルされたか、一時音声を開けません。"]="Render cancelled or temporary audio unavailable.",
  ["LOUDNESS TRACE | 解析"]="LOUDNESS TRACE | Analysis",
  ["LOUDNESS TRACE | 保存"]="LOUDNESS TRACE | Save",
- ["MASTER OUT 1/2|選択中のトラック / バスを指定"]="MASTER OUT 1/2|Use selected track / bus",
  ["目標"]="Aim",
- ["カメレオンモード（配色をテーマへ擬態）"]="Chameleon: match REAPER colors",
- ["折りたたむ"]="Collapse",
  ["ドッキング中はウィンドウを縮小できません。\nフローティング表示で使用してください。"]="Cannot collapse while docked.\nUse a floating window.",
  ["中止"]="Stop",
  ["解析"]="Analyze",
@@ -699,14 +989,84 @@ local LanguageCatalog={en={
  ["LOUDNESS TRACE | エラー"]="LOUDNESS TRACE | Error",
  ["表示言語を切替（JP / EN）"]="Switch language (JP / EN)",
  ["プリセットを読み込みました: ファクトリーデフォルト"]="Loaded: Factory Default",
- ["選択中のトラック / バスを指定"]="Use selected track / bus",
  ["グラフ ON"]="Graph ON",
  ["グラフ OFF"]="Graph OFF",
+ ["LOUDNESS TRACEはWindows／macOS用です。"]="LOUDNESS TRACE requires Windows or macOS.",
+ ["現在のMetal設定ではグラフを重ね描画できません。REAPERの高度なUI設定でMetalを無効にするか、描画互換モードを選び、必要に応じてREAPERを再起動してください。"]="The current Metal mode cannot display the graph overlay. Disable Metal or enable drawing compatibility in REAPER's advanced UI settings, then restart REAPER if needed.",
+ ["リアルタイム"]="Real-time",
+ ["リアルタイム測定をOFFにしました。グラフは保持します。"]="Real-time recording is OFF. Recorded graph retained.",
+ ["リアルタイムOFF：記録したグラフを表示しています。"]="Real-time OFF: showing recorded graph.",
+ ["リアルタイムON：再生するとグラフを記録します。"]="Real-time ON: play to record the graph.",
+ ["リアルタイム描画中：100 ms単位で追記しています。"]="Recording the live graph in 100 ms steps.",
+ ["リアルタイム待機：プロジェクトの再生速度を1.0にしてください。"]="Live standby: set project play rate to 1.0.",
+ ["リアルタイム待機：音声のオンライン復帰を待っています。"]="Live standby: waiting for media to come online.",
+ ["測定信号を待っています。音声デバイス・モニターFXを確認してください。"]="Waiting for meter data. Check audio device and monitoring FX.",
+ ["リアルタイム履歴の上限に達しました。グラフを保持して測定をOFFにしました。"]="Live history limit reached. Graph retained; recording switched OFF.",
+ ["リアルタイム結果を保存できませんでした。メモリ内のグラフは保持しています。"]="Cannot save live results. The graph remains in memory.",
+ ["測定データの受信が遅れた区間は空白として保持します。"]="Late meter data: missing intervals are left blank.",
+ ["リアルタイム測定の共有メモリを確保できません。ほかの測定をOFFにしてください。"]="Cannot reserve live meter memory. Switch other live meters OFF.",
+ ["リアルタイム測定JSFXを保存できません。"]="Cannot save the live metering JSFX.",
+ ["測定用トラックまたはFXが変更されているため、自動削除できませんでした。確認してください。"]="Meter track or FX was changed and could not be removed safely. Please inspect it.",
+ ["リアルタイム測定JSFXを追加できません。FX一覧を再スキャンしてください。"]="Cannot add the metering JSFX. Rescan the FX list.",
+ ["リアルタイム測定JSFXを確認できません。"]="Cannot identify the live metering JSFX.",
+ ["測定用JSFXの設定に失敗しました。"]="Cannot configure the metering JSFX.",
+ ["リアルタイム測定の接続が失われました。"]="Live metering connection was lost.",
+ ["リアルタイム測定データが不正です。"]="Invalid live metering data.",
+ ["リアルタイム測定に必要なREAPER APIがありません。REAPERを更新してください。"]="Required live metering API is unavailable. Update REAPER.",
+ ["リアルタイム測定用FXが削除または移動されました。"]="Live metering FX was removed or moved.",
+ ["モニターFXの順序が変更されたため、測定をOFFにしました。"]="Monitoring FX order changed. Live recording switched OFF.",
+ ["リアルタイム測定用FXが無効です。"]="Live metering FX is disabled or offline.",
+ ["測定先が変更されたため、リアルタイム測定をOFFにしました。"]="Measurement source changed. Live recording switched OFF.",
+ ["音声に不正な値があるため、リアルタイム測定をOFFにしました。"]="Invalid audio values. Live recording switched OFF.",
+ ["リアルタイム測定では標準的な8～384 kHzのサンプルレートを使用してください。"]="Use a standard sample rate from 8 to 384 kHz for live metering.",
+ ["リアルタイム測定JSFXの内容が不正です。"]="Invalid embedded live meter JSFX.",
+ ["既存のリアルタイム測定JSFXを読み取れません。権限を確認してください。"]="Cannot read an existing live meter JSFX. Check file permissions.",
+ ["リアルタイム測定JSFXの書き込み検証に失敗しました。"]="Live meter JSFX write verification failed.",
+ ["リアルタイム測定JSFXの通信形式が一致しません。測定をOFFにしました。"]="Live meter JSFX protocol mismatch. Live measurement was turned OFF.",
+ ["マスターミックスの一時レンダーが複数ファイルになりました。"]="The master mix produced multiple temporary WAVs.",
+ ["測定データのソースがマスターミックスではありません。"]="Measurement source is not the master mix.",
+ ["集計データの対応が失われました。"]="History aggregation is inconsistent.",
+ ["測定時刻が逆転しています。"]="Measurement time moved backwards.",
+ ["共通グラフ：再生・解析した範囲を更新し、範囲外は保持します。"]="Shared graph: playback and analysis replace only the measured range.",
+ ["マスタートラックを取得できません。"]="Cannot access the master track.",
+ ["マスターのミュート／ソロ／モノ設定を解除するとLIVE測定できます。"]="Disable master mute/solo/mono monitoring to enable LIVE measurement.",
+ ["モニターFXがバイパス中のためLIVE測定を待機しています。"]="LIVE is waiting because Monitoring FX are bypassed.",
+ ["別プロジェクトを停止するとLIVE測定できます。"]="Stop other projects before LIVE measurement.",
+ ["LIVE測定には、マスター1/2を音量・パンロー0 dB、PAN中央のステレオで単独出力する経路が必要です。"]="LIVE needs an isolated stereo post-fader hardware route from master 1/2 at unity gain/pan law and centered pan.",
+ ["ハードウェア出力のエンベロープ状態を確認できないため、LIVE測定できません。"]="Cannot verify hardware-output envelopes; LIVE measurement is unavailable.",
+ ["ハードウェア出力の音量エンベロープが使用中のため、LIVE測定できません。"]="The hardware-output volume envelope is in use; LIVE measurement is unavailable.",
+ ["ハードウェア出力のPANエンベロープが使用中のため、LIVE測定できません。"]="The hardware-output pan envelope is in use; LIVE measurement is unavailable.",
+ ["ハードウェア出力のミュートエンベロープが使用中のため、LIVE測定できません。"]="The hardware-output mute envelope is in use; LIVE measurement is unavailable.",
+ ["測定用JSFXのチャンネルを設定できません。"]="Cannot set meter JSFX channel mappings.",
+ ["測定用JSFXのチャンネルを確認できません。"]="Cannot verify meter JSFX channel mappings.",
+ ["FXウィンドウの自動表示設定を取得できません。"]="Cannot read automatic FX window preferences.",
+ ["FXウィンドウの自動表示を抑制できません。"]="Cannot suppress automatic FX windows.",
+ ["FXウィンドウの自動表示設定を復元できません。終了時に再試行します。"]="Cannot restore FX window preferences. Will retry before exit.",
+ ["測定用JSFXのチャンネルが変更されたため、測定をOFFにしました。"]="Meter channel mappings changed; LIVE stopped.",
+ ["ハードウェア出力の経路が変わりました。LIVEをOFFにして再度ONにしてください。"]="Hardware output routing changed. Switch LIVE off, then on again.",
+ ['リアルタイム測定JSFXの更新用ファイルを読み取れません。']='Cannot read the meter update files.',
+ ['リアルタイム測定JSFXの前回更新を復元できません。']='Cannot restore the previous meter installation.',
+ ['リアルタイム測定JSFXの作業ファイルを削除できません。']='Cannot remove the meter temporary file.',
+ ['リアルタイム測定JSFXの更新用ファイルを削除できません。']='Cannot remove the meter update backup.',
+ ['リアルタイム測定JSFXを更新できません。']='Cannot update the meter JSFX.',
+ ['起動済みの測定用JSFXを終了できません。']='Cannot remove the running BLT monitoring meter.',
+ ['保存時刻が逆転または重複しています。']='Saved measurement times are reversed or duplicated.',
+ ['保存区間に測定点がありません。']='A saved segment has no measurements.',
+ ['保存データに復元できる測定点がありません。']='No recoverable measurements in the saved data.',
+ ['保存情報を取得できません。']='Cannot read the history metadata.',
+ ['グラフ保存の読み戻し検証に失敗しました。']='Saved graph read-back validation failed.',
+ ['保存グラフの整合性検証に失敗しました。']='Saved graph integrity validation failed.',
+ ['グラフ保存先を確保できません。']='Cannot allocate the graph snapshot.',
+ ['前回の正常な保存からグラフを復元しました。直近の一部は再測定してください。']='Restored the previous valid snapshot. Remeasure the latest missing section.',
+ ['保存グラフの正常な測定点を復元しました。欠けた区間だけ再測定してください。']='Recovered valid measurements. Remeasure only the missing sections.',
+ ['保存グラフの形式を修復しました。測定値は保持しています。']='Repaired the saved graph format. Measurements were preserved.',
+ ['グラフをメモリ内へ復元しましたが、保存できません。元の保存データは保持しています。']='Recovered graph in memory but could not save. Original stored data retained.',
+ ['保存グラフを復元できません。元のデータは保持しています。']='Cannot recover the graph. Original stored data retained.',
+ ['保存グラフの欠損データを退避しました。グラフをクリアせず再測定できます。']='Damaged graph data retained separately. You can measure again without clearing the graph.',
 },patterns={
  {"^「(.*)」を上書きしますか？$","Overwrite \"%s\"?"},
  {"^レンダーが中断されたか、測定範囲と音声の長さが一致しません。\n予定: ([%+%-]?[%d%.eE]+) 秒 / 実際: ([%+%-]?[%d%.eE]+) 秒 / 差: ([%+%-]?[%d%.eE]+) ms$","Render interrupted or duration mismatch.\nExpected: %.6f s / Actual: %.6f s / Difference: %.3f ms"},
  {"^([%+%-]?[%d%.eE]+)–([%+%-]?[%d%.eE]+) / ([%+%-]?[%d%.eE]+)   スクロールで選択$","%d–%d / %d   Scroll to browse"},
- {"^解析中%.%.%.([%+%-]?[%d%.eE]+)%%$","Analyzing...%d%%"},
  {"^前回の解析で残った可能性がある一時ファイルを([%+%-]?[%d%.eE]+)件検出しました（合計 (.-)）。\n\n削除してよろしいですか？\n別のLOUDNESS TRACEが現在解析中の場合だけキャンセルしてください。$","Found %d temporary files possibly left by an earlier analysis (total %s).\n\nDelete them?\nCancel if another LOUDNESS TRACE is currently analyzing."},
  {"^長い範囲を解析するため、一時WAVを約 (.-) 作成します。\n解析中は同程度の空き容量が必要です。続行しますか？\n\n範囲：([%+%-]?[%d%.eE]+)分$","This range creates about %s of temporary WAV data.\nKeep this much disk space free during analysis. Continue?\n\nRange: %.1f min"},
  {"^解析中 ([%+%-]?[%d%.eE]+)%%$","Analyzing %d%%"},
@@ -720,22 +1080,17 @@ local LanguageCatalog={en={
  {"^(.-)個インポートしました。$","%s preset(s) imported."},
  {"^現在: (.-)(.-)$","Current: %s%s"},
  {"^LOUDNESS TRACEにはSWSとjs_ReaScriptAPIが必要です。\nSWS: https://www%.sws%-extension%.org/\njs_ReaScriptAPI: ReaPackからインストール\n\n不足: (.-)$","LOUDNESS TRACE requires SWS and js_ReaScriptAPI.\nSWS: https://www.sws-extension.org/\njs_ReaScriptAPI: install via ReaPack\n\nMissing: %s"},
- {"^(.-)MASTER OUT 1/2|選択中のトラック / バスを指定$","%sMASTER OUT 1/2|Use selected track / bus"},
  {"^保存済み：(.-)  /  (.-)$","Saved: %s  /  %s"},
  {"^(.-)区間  ·  選択範囲だけ置換$","%s sections · Replace selected range only"},
  {"^グラフ (.-)$","Graph %s"},
  {"^グラフ幅：(.-)$","Width:%s"},
  {"^解析を中止  (.-)%%$","Stop analysis  %s%%"},
- {"^「(.*)」を上書きしますか？$","Overwrite \"%s\"?"},
  {"^(%d+)個インポートしました。$","Imported %s preset(s)."},
- {"^(%d+)件をノーマライズしました。選択を解除しました。$","Normalized %s items and deselected them."},
 },prefixes={"LOUDNESS TRACEにはSWSとjs_ReaScriptAPIが必要です。\nSWS: https://www.sws-extension.org/\njs_ReaScriptAPI: ReaPackからインストール\n\n不足: ","レンダー設定を読み取れません: ","レンダー設定を変更できません: ","プリセットを読み込みました: ","レンダー設定の復元に失敗: ","プリセットを保存しました: ","保存済み：","グラフ幅：","現在: "}}
 
-LanguageCatalog.en["LOUDNESS TRACEはWindows／macOS用です。"]="LOUDNESS TRACE requires Windows or macOS."
-LanguageCatalog.en["現在のMetal設定ではグラフを重ね描画できません。REAPERの高度なUI設定でMetalを無効にするか、描画互換モードを選び、必要に応じてREAPERを再起動してください。"]="The current Metal mode cannot display the graph overlay. Disable Metal or enable drawing compatibility in REAPER's advanced UI settings, then restart REAPER if needed."
-
 local Language=create_language(reaper,"LOUDNESS_TRACE",LanguageCatalog)
--- LOUDNESS TRACE platform adapter 1.0.1. Embedded; no runtime file dependency.
+
+-- Platform drawing adapter
 local function create_trace_platform(api,graphics)
  local osname=api.GetOS()
  local P={mac=osname:match('OSX')~=nil or osname:match('macOS')~=nil,windows=osname:match('Win')~=nil}
@@ -751,9 +1106,9 @@ local function create_trace_platform(api,graphics)
   end
   return os.getenv('TEMP') or api.GetResourcePath()
  end
- -- Windows keeps the original API table and every existing call unchanged.
+
  if not P.mac then return P end
- local R=setmetatable({}, {__index=api});P.api=R
+ local R=setmetatable({}, {__index=WindowGeometry});P.api=R
  -- Async layered drawing can still reference the last published bitmap after
  -- unlink. Retire whole bitmaps for two defer turns instead of resizing/reusing
  -- their storage immediately. This queue exists only on macOS.
@@ -778,22 +1133,6 @@ local function create_trace_platform(api,graphics)
  end
  -- Internal screen Y points downward. Native macOS screen Y points upward.
  -- Client coordinates already point downward and must never be flipped.
- function R.GetMousePosition()
-  local x,y=api.GetMousePosition();return x,-y
- end
- function R.JS_Window_GetRect(hwnd)
-  local ok,l,t,r,b=api.JS_Window_GetRect(hwnd)
-  if not ok then return ok,l,t,r,b end
-  return ok,l,-math.max(t,b),r,-math.min(t,b)
- end
- function R.JS_Window_SetPosition(hwnd,x,y,w,h,z,flags)
-  -- A docked controller is a child view whose geometry belongs to REAPER.
-  -- Screen-to-window conversion below is valid only while floating.
-  if graphics and graphics.dock and (graphics.dock(-1)&1)~=0 then return false end
-  -- Used only for the floating controller. SWELL positions top-level windows
-  -- by their bottom-left corner; preserve our top edge while resizing.
-  return api.JS_Window_SetPosition(hwnd,x,-y-h,w,h,z,flags)
- end
  function R.JS_Window_ClientToScreen(hwnd,x,y)
   local sx,sy=api.JS_Window_ClientToScreen(hwnd,x,y);return sx,-sy
  end
@@ -806,7 +1145,8 @@ end
 
 local Platform=create_trace_platform(reaper,gfx)
 local R=Platform.api
--- BLT shared shell 3.2.0. Embedded at build time; no runtime module dependency.
+
+-- Shared UI / presets
 local BLT=(function()
 local B={fitCache={},fitCount=0,metrics={},metricCount=0,slots={},nextSlot=1,specs={}}
 local host,C,Chrome,Chameleon,scale,ox,oy
@@ -852,12 +1192,6 @@ function B.unpack(data)
  end
  local ok,v=pcall(read,0);if capacity then BLTPresetLimits.show(Language.code=='EN') end;if ok and at==#data+1 then return v end
 end
-function B.cleanText(text)
- text=tostring(text);B.cleanCache=B.cleanCache or {};local v=B.cleanCache[text];if v then return v end
- v=text:gsub('[%z\1-\31\127]',' ')
- B.cleanCount=(B.cleanCount or 0)+1;if B.cleanCount>512 then B.cleanCache={};B.cleanCount=1 end
- B.cleanCache[text]=v;return v
-end
 function B.publicError(value,fallback)
  local text=tostring(value or '')
  text=text:match('^(.-)\nstack traceback:') or text
@@ -869,8 +1203,11 @@ function B.publicError(value,fallback)
   line=line:gsub('^%s*/[^:\r\n]+:%s*','')
   line=line:gsub('[A-Za-z]:/[^:\r\n"<>|]*','')
   line=line:gsub('//[^:\r\n"<>|]*','')
-  line=line:gsub('%s/[^:\r\n"<>|]*','')
-  line=line:gsub('[^%s:"<>|/]+/[^%s:"<>|]+','')
+  line=line:gsub('%s/[^%s:\r\n"<>|][^:\r\n"<>|]*','')
+
+  line=line:gsub('[^%s:"<>|/]+/[^%s:"<>|]+',function(part)
+   return part:match('%.[%a][%w%-]*$') and '' or part
+  end)
   line=line:gsub('[^%s:"<>|]+%.[%a][%w%-]*','')
   line=line:gsub('%s+:%s+',': ')
   return line:match('^%s*(.-)%s*$') or ''
@@ -978,7 +1315,7 @@ function Presets.capture(name)
 end
 function Presets.dirty()
  if not Presets.current then return false end
- -- Whitelisted views are reused; never serialize settings in the draw path.
+
  return not B.same(host.capture(),Presets.current.values)
 end
 function Presets.flush()
@@ -1082,30 +1419,14 @@ local function chrome_resize_hit(x,y) if y<26 and x>=UI.bar(gfx.w).presetX then 
 local function set_resize_cursor(mode) host.cursor(mode) end
 local function begin_window_resize(mode) host.beginResize(mode) end
 local function update_window_resize() host.resize() end
-local function clear_chrome_tooltip() B.popupUntil=nil;if R.TrackCtl_SetToolTip then R.TrackCtl_SetToolTip('',0,0,true) end end
+local function clear_chrome_tooltip() if R.TrackCtl_SetToolTip then R.TrackCtl_SetToolTip('',0,0,true) end end
 B.clearTooltip=clear_chrome_tooltip
--- Non-modal dependency hint. Uses the existing tick, with no extra defer loop.
-function B.inputNotice()
- local x,y=gfx.clienttoscreen(gfx.mouse_x,gfx.mouse_y+18)
- R.TrackCtl_SetToolTip(Language.message('ReaImGui 0.10以降が必要です。ReaPackで導入・更新してください。'),x,y,true)
- B.popupUntil=R.time_precise()+1;B.tip=nil;B.tipVisible=false
-end
-function B.requireInput(ime)
- if ime.api then return true end
- if type(R.ImGui_GetBuiltinPath)~='function' then B.inputNotice();return false end
- local ok,api=pcall(function() return dofile(R.ImGui_GetBuiltinPath()..'/imgui.lua')('0.10') end)
- if not ok or type(api)~='table' then B.inputNotice();return false end
- ime.api=api;return true
-end
+
 function B.switch(x,y,state,enabled)
  local s,bx,by=host.geometry();local cy=by+(y+12)*s;local cx=bx+(x+7+12*state)*s
  local c=C.edge2;gfx.set(c[1],c[2],c[3],enabled and .45 or .2);gfx.line(bx+(x+3)*s,cy,bx+(x+23)*s,cy,1)
  c=C.faint;gfx.set(c[1],c[2],c[3],enabled and .8 or .4);gfx.circle(cx,cy,4.2*s,1,1)
  if state>.001 and enabled then c=C.accent;gfx.set(c[1],c[2],c[3],.06*state);gfx.circle(cx,cy,7*s,1,1);c=C.accent2;gfx.set(c[1],c[2],c[3],.94*state);gfx.circle(cx,cy,4.2*s,1,1) end
-end
-function B.blend(dt)
- if B.blendDt~=dt then B.blendDt=dt;B.blendValue=1-math.exp(-12*dt) end
- return B.blendValue
 end
 function Presets.menu(x,y)
   if host.prepareMenu and not host.prepareMenu() then wake_visuals();return end
@@ -1191,7 +1512,7 @@ function Presets.update(active)
     if inside and Presets.page=="load" then Presets.offset=math.max(0,math.min(math.max(0,#Presets.items-Layout.popup.visiblePresets),Presets.offset+(wheel>0 and -1 or 1)));Presets.selected=nil end
     gfx.mouse_wheel=0
   end
-  -- Hover only opens the preset list, never applies a preset automatically.
+
   if Presets.page=="main" and hit==2 and #Presets.items>0 and not down then
     Presets.hoverSince=Presets.hoverSince or R.time_precise()
     if R.time_precise()-Presets.hoverSince>=Layout.popup.hoverDelay then Presets.activate(2);Presets.down=down;return end
@@ -1301,7 +1622,7 @@ local function custom_titlebar(blocked)
   local hoverFold=foldX and not (host.transition and host.transition()) and inBar and mx>=foldX and mx<chamX and not resizeMode and not resizing
   local hoverLanguage=inBar and mx>=languageX and mx<(foldX or chamX) and not resizeMode and not resizing
   local down=not blocked and (gfx.mouse_cap&1)~=0
-  -- A content modal disables chrome; it does not give chrome ownership of its input.
+
   Chrome.mouseActive=(Presets.open or Presets.swallow) or inBar or Chrome.drag~=nil or Chrome.resize~=nil or cursorMode~=nil
     or Chrome.languagePressed or Chrome.closePressed or Chrome.resetPressed or Chrome.chameleonPressed or Chrome.presetPressed or Chrome.presetPrevPressed or Chrome.presetNextPressed
 
@@ -1311,7 +1632,7 @@ local function custom_titlebar(blocked)
   gfx.set(C.edge[1],C.edge[2],C.edge[3],.42); gfx.line(0,Chrome.titleH-1,w,Chrome.titleH-1,1)
 
   if not Chrome.textFontsReady or Chrome.fontDPI~=(gfx.ext_retina or 1) then Chrome.fontDPI=gfx.ext_retina or 1;B.chromeFont(); Chrome.textFontsReady=true else B.chromeFont() end; B.fontKey="chrome"
-  -- Center the unadorned title within the bar using the actual font height.
+
   local _,titleHeight=UI.textMetrics(Chrome.titleText)
   local ty=math.floor((Chrome.titleH-titleHeight)*.5)
   gfx.set(Chrome.mint[1],Chrome.mint[2],Chrome.mint[3],.88); gfx.x=14; gfx.y=ty; gfx.drawstr(UI.fit(Chrome.titleText,math.max(0,(b.compact and b.foldX or presetX)-22)))
@@ -1351,7 +1672,7 @@ local function custom_titlebar(blocked)
   B.font(13,2,true,1,host.faces)
   local lw,lh=UI.textMetrics(Language.code)
   gfx.x=languageX+(26-lw)/2;gfx.y=(Chrome.titleH-lh)/2;gfx.drawstr(Language.code)
-  end -- full-size preset and language controls
+  end
   if foldX then
     gfx.set(C.accent2[1],C.accent2[2],C.accent2[3],hoverFold and .98 or .8)
     local cx,cy=foldX+17,13;local d=host.collapsed() and 1 or -1
@@ -1366,9 +1687,6 @@ local function custom_titlebar(blocked)
   local chx,chy=chamX+chamW*.5,Chrome.titleH*.5
   local active_a=hoverCham and 1 or (Chameleon.enabled and .96 or .85)
 
-  -- Theme / mimicry icon:
-  -- three overlapping color fields, visually reading as "take on / blend into
-  -- surrounding colors" rather than as a literal animal.
   local c1,c2,c3=Chameleon.icon_colors()
 
   gfx.set(c1[1],c1[2],c1[3],active_a)
@@ -1388,14 +1706,12 @@ local function custom_titlebar(blocked)
   local rcx,rcy=resetX+resetW*.5,Chrome.titleH*.5
   local rcol=hoverReset and Chrome.mint or C.muted
 
-  -- Reference-style outlined window; arrow explicitly points LOWER LEFT.
   gfx.set(rcol[1],rcol[2],rcol[3],hoverReset and .98 or .82)
   gfx.roundrect(rcx-6,rcy-6,12,12,1,1)
   gfx.line(rcx+3,rcy-3,rcx-3,rcy+3,1)
   gfx.line(rcx-3,rcy+3,rcx-3,rcy-1,1)
   gfx.line(rcx-3,rcy+3,rcx+1,rcy+3,1)
-
-  end -- full-size reset control
+  end
   if hoverClose then
     gfx.set(Chrome.red[1],Chrome.red[2],Chrome.red[3],.10); gfx.rect(closeX,0,closeW,Chrome.titleH,1)
     gfx.set(Chrome.red[1],Chrome.red[2],Chrome.red[3],.56); gfx.line(closeX,Chrome.titleH-1,w,Chrome.titleH-1,1)
@@ -1486,51 +1802,24 @@ end
 function B.blocked()
  return Presets.open or Presets.swallow or (gfx.mouse_y>=0 and gfx.mouse_y<26)
 end
--- Shared project Undo shortcut. Embedded; no runtime file dependency.
-local function create_project_undo(api,context)
- local function message(jp,en,ok)
-  if context.notice then context.notice(context.language()=='EN' and en or jp,ok) end
- end
- return function(key,modifiers)
-  modifiers=modifiers or 0
-  if (modifiers&24)~=0 or not (key==26 or ((modifiers&4)~=0 and (key==90 or key==122))) then return false end
-  -- Native text editors own their own Undo; never send their shortcut to REAPER.
-  if context.editing() then return true end
-  if context.busy() then message('処理中は元に戻せません。','Cannot undo during processing.',false);return true end
-  local project=api.EnumProjects(-1,'')
-  if context.perform then context.perform(project);return true end
-  local entry=api.Undo_CanUndo2(project)
-  if not entry or entry=='' then message('元に戻せる操作がありません。','Nothing to undo.',true);return true end
-  if context.before then context.before() end
-  local result=api.Undo_DoUndo2(project)
-  if result==nil or result==false or result==0 then message('Undoを実行できませんでした。','Undo failed.',false);return true end
-  api.UpdateArrange()
-  if context.after then context.after(project) end
-  message('元に戻しました。','Undone.',true)
-  return true
- end
-end
-local project_undo=create_project_undo(R,{
- language=function() return Language.code end,notice=notice,
- editing=function() return host.editing() or host.modal() end,
- busy=function() return host.busy() end,
- before=function() if host.undoBefore then host.undoBefore() end end,
- after=function(project) if host.undoRefresh then host.undoRefresh(project) end;wake_visuals() end,
-})
+
 function B.key(k)
+ if k<0 then return k end
  if Presets.open then Presets.key(k);return 0 end
- if host and not host.localUndo then
-  if host.undoAction then
-   local cap=gfx.mouse_cap or 0
-   if (cap&24)==0 and (k==26 or ((cap&4)~=0 and (k==90 or k==122))) then
-    if not host.editing() and not host.modal() then host.undoAction() end
-    return 0
-   end
-  elseif project_undo(k,gfx.mouse_cap) then return 0 end
- end
- return k
+ local cap=gfx.mouse_cap or 0
+ if (cap&24)~=0 or not (k==26 or ((cap&4)~=0 and (k==90 or k==122))) then return k end
+ if host.editing() or host.modal() then return 0 end
+ local function message(jp,en,ok) notice(Language.code=='EN' and en or jp,ok) end
+ if host.busy() then message('処理中は元に戻せません。','Cannot undo during processing.',false);return 0 end
+ local project=R.EnumProjects(-1,'');local entry=R.Undo_CanUndo2(project)
+ if not entry or entry=='' then message('元に戻せる操作がありません。','Nothing to undo.',true);return 0 end
+ local result=R.Undo_DoUndo2(project)
+ if result==nil or result==false or result==0 then message('Undoを実行できませんでした。','Undo failed.',false);return 0 end
+ R.UpdateArrange();host.undoRefresh(project);wake_visuals();message('元に戻しました。','Undone.',true)
+ return 0
 end
 function B.tick(now)
+ Media.tick()
  if not host then return end
  if B.windowW~=gfx.w or B.windowH~=gfx.h then B.windowW,B.windowH=gfx.w,gfx.h;B.lastRect=nil;wake_visuals() end
  B.viewport(host.geometry(),gfx.ext_retina or 1)
@@ -1543,10 +1832,6 @@ function B.tick(now)
  if B.caretPhase~=phase then B.caretPhase=phase;wake_visuals() end
  if B.lastDPI~=(gfx.ext_retina or 1) then B.lastDPI=gfx.ext_retina or 1;wake_visuals() end
  if now>=(B.displayAt or 0) then gfx.update();B.displayAt=now+.25 end
- if B.popupUntil then
-  if now<B.popupUntil then return end
-  clear_chrome_tooltip();B.tip=nil;B.tipVisible=false;B.tipAt=now
- end
  local tip
  local mx,my=gfx.mouse_x,gfx.mouse_y
  if active and not Presets.open and not host.modal() and (gfx.mouse_cap&1)==0 then
@@ -1564,39 +1849,17 @@ end
 function B.bar()
  if not host then return end
  scale,ox,oy=host.geometry()
- local blocked=not B.recoveryMode and (Presets.open or Presets.swallow or host.modal())
+ local blocked=Presets.open or Presets.swallow or host.modal()
  custom_titlebar(blocked)
  Presets.draw()
 end
 
--- Preserve title-bar button edges across repeated application failures.
 function B.logError(err)
  local message=B.publicError(err)
  if message~=B.lastLoggedError then
   B.lastLoggedError=message
   if R.ShowConsoleMsg then pcall(R.ShowConsoleMsg,message..'\n') end
  end
-end
-function B.cleanup(fn,...)
- local ok,result=pcall(fn,...)
- if not ok then B.logError(result) end
- return ok,result
-end
-function B.recoverInput(state,err)
- gfx.dest=-1;gfx.mode=0;gfx.a=1
- for _,key in ipairs({'drag','number_drag','pointer_capture','field_drag','fieldDrag','curve_drag','scroll_drag','seam_drag','seam_hold','pressed','popup','name_dialog','duplicate_modal'}) do state[key]=nil end
- if host.cancelEdit then B.cleanup(host.cancelEdit) end
- Presets.open=false;Presets.swallow=false
- B.recoveryMode=true
- local ok,why=pcall(B.bar)
- B.recoveryMode=nil
- if not ok then B.logError(why) end
- pcall(B.footer,B.publicError(err),true,gfx.w,0,B.footerVersion or '')
- pcall(gfx.update)
- if Chrome.requestClose then state.closing=true end
- state.content_dirty=true
- B.cleanup(host.wake)
- B.logError(err)
 end
 
 function B.title(title,subtitle,width,divider)
@@ -1605,57 +1868,18 @@ function B.title(title,subtitle,width,divider)
  B.font(10,1,false,scale,host.faces);gfx.set(C.accent2[1],C.accent2[2],C.accent2[3],1);gfx.x=ox+26*scale;gfx.y=origin+44*scale;gfx.drawstr(UI.fit(Language.text(subtitle),(width-155)*scale))
  if divider~=false then gfx.set(C.edge2[1],C.edge2[2],C.edge2[3],.26);gfx.line(ox+24*scale,origin+62*scale,ox+(width-24)*scale,origin+62*scale,1) end
 end
-function B.chaosButton(cx,cy,cw,ch,enabled,hot,pushed,time,glow)
- local d=host.chaosPainter
- local violet=Chameleon.enabled and C.accent2 or B.chaosViolet
- local ember=Chameleon.enabled and C.accent or B.chaosEmber
- local pale=Chameleon.enabled and C.text or B.chaosPale
- local surface=Chameleon.enabled and C.field or B.chaosSurface
- local alive=enabled and 1 or .25
- local breath=(.5+.5*math.sin(time*.85))*alive
- local y=cy+(pushed and 1 or 0);local center=ch/2
- -- Keep both the outer glow and the pressed face inside the registered bounds.
- d.cut(cx,cy,cw,ch,11,violet,.025*alive,violet,.10+.07*breath)
- d.cut(cx,y+2,cw,ch-4,9,surface,1,violet,(.45+.3*glow)*alive)
- d.gradient(cx+2,y+4,cw-4,ch-8,violet,C.bg,.12+.15*glow,.015,true)
- for i=1,6 do
-  local phase=time*.3+i*1.7;local px=cx+12+(i-1)*(cw-29)/5
-  local py=y+center+math.sin(phase)*(center-6)
-  local alpha=(.18+.22*math.sin(phase*.7)^2)*alive
-  if px<cx+36 or px>cx+cw-36 or math.abs(py-y-center)>11 then
-   d.disc(px,py,3,violet,alpha*.08);d.disc(px,py,.7,i%2==0 and ember or pale,alpha)
-  end
- end
- d.line(cx+cw*.335,y+ch-5,cx+cw*.665,y+ch-5,violet,(.18+.22*breath+.2*glow)*alive)
- d.label('C H A O S',cx+24,y+center-9,17,enabled and pale or C.faint,2,cw-48,22,1,true)
-end
-B.chaosViolet={.62,.23,.94};B.chaosEmber={.92,.27,.65};B.chaosPale={.87,.69,1};B.chaosSurface={.038,.014,.068}
 
-function B.footer(message,bad,width,height,version,progress)
- if version~='' then B.footerVersion=version end
+function B.footer(message,bad,width,height,version)
+ if Media.waiting then message=Media.message(host.section);bad=false end
  scale,ox,oy=host.geometry();message=Language.message(B.notice or tostring(message or ''))
  if B.notice then bad=B.noticeBad end
  local y=oy+(height-13)*scale
  B.font(8,3,true,scale,host.faces);local ver=version~='' and 'v'..version or '';local vw=UI.textMetrics(ver)
  local available=(width-48)*scale-vw-14*scale
- local progressing=type(progress)=='number'
- B.font(9,1,false,scale,host.faces);local shown=progressing and '' or UI.fit(message,available)
- B.footerText=progressing and '' or message;B.footerClipped=not progressing and shown~=message;B.footerBounds={ox+24*scale,y,ox+24*scale+available,y+14*scale}
+ B.font(9,1,false,scale,host.faces);local shown=UI.fit(message,available)
+ B.footerText=message;B.footerClipped=shown~=message;B.footerBounds={ox+24*scale,y,ox+24*scale+available,y+14*scale}
  gfx.set(C.edge[1],C.edge[2],C.edge[3],.26);gfx.line(ox+24*scale,y-3*scale,ox+(width-24)*scale,y-3*scale)
- if progressing then
-  local fraction=math.max(0,math.min(1,progress))
-  -- Reserve the widest caption so the track stays still as the percentage changes.
-  local caption=string.format(Language.text('解析中...%d%%'),math.floor(fraction*100+.5))
-  local captionWidth=UI.textMetrics(Language.text('解析中...100%'))
-  gfx.set(C.muted[1],C.muted[2],C.muted[3],1);gfx.x=ox+24*scale;gfx.y=y;gfx.drawstr(caption)
-  local x=ox+24*scale+captionWidth+10*scale;local barY=y+3*scale;local barH=6*scale
-  local barW=math.max(0,math.min(available,(width-48)*scale*.45)-captionWidth-10*scale)
-  gfx.set(C.field[1],C.field[2],C.field[3],1);gfx.rect(x,barY,barW,barH,1)
-  gfx.set(C.accent2[1],C.accent2[2],C.accent2[3],.95);gfx.rect(x,barY,barW*fraction,barH,1)
-  gfx.set(C.muted[1],C.muted[2],C.muted[3],.5);gfx.rect(x,barY,barW,barH,0)
- else
-  local c=bad and C.warn or C.muted;gfx.set(c[1],c[2],c[3],1);gfx.x=ox+24*scale;gfx.y=y;gfx.drawstr(shown)
- end
+ local c=bad and C.warn or C.muted;gfx.set(c[1],c[2],c[3],1);gfx.x=ox+24*scale;gfx.y=y;gfx.drawstr(shown)
  B.font(8,3,true,scale,host.faces);gfx.set(C.faint[1],C.faint[2],C.faint[3],1);gfx.x=ox+(width-24)*scale-vw;gfx.y=y;gfx.drawstr(ver)
 end
 return B
@@ -1663,11 +1887,8 @@ end)()
 
 local SECTION="LOUDNESS_TRACE"
 local TAG="P_EXT:"..SECTION
-local TRACK_CACHE_LIMIT=3
-local MAX_HISTORY_ROWS=126000 -- 3.5 hours at 100 ms resolution per measurement target.
-local MAX_SAVE_BYTES=12*1024*1024
 local TEMP_WARNING_SECONDS=25*60
-local TEMP_BYTES_PER_SECOND=48000*2*4 -- stereo float32 WAV, excluding its tiny header.
+local TEMP_BYTES_PER_SECOND=48000*2*4
 local W,H=646,616
 local COLLAPSED_W,COLLAPSED_H=350,58
 local COMPACT_MEASURE_X,COMPACT_MEASURE_Y,COMPACT_MEASURE_W,COMPACT_MEASURE_H=256,12,78,34
@@ -1679,6 +1900,112 @@ local S={lo=-60,hi=0,visible=true,height=280,
   show={s=true,m=true,i=true,rms=false,peak=false},
   targets={s={-23,3},m={-23,3},i={-23,1}},source="master",
   alertUpper=false,alertLower=false,alertPeak=false}
+-- LIVE meter / embedded JSFX
+local Live={enabled=false,protocol=1,memory='BLT_LOUDNESS_TRACE_RT_V1',fx_relative='BLT/BLT_Loudness_Trace_Live.jsfx'}
+Live.jsfx=[==[
+desc:BLT Loudness Trace Live
+// BLT managed LIVE meter; source revision 1.1.0.
+// Measurement only: all audio and MIDI pass through unchanged.
+// Private, bounded 100 ms energy queue shared with BLT_LOUDNESS_TRACE.lua.
+options:gmem=BLT_LOUDNESS_TRACE_RT_V1
+slider1:0<0,15,1>-BLT memory slot
+slider2:0<0,16777215,1>-BLT owner token
+
+@init
+ext_noinit=1;
+ext_nodenorm=1;
+pdc_delay=0;
+last_owner=0;
+was_running=0;
+seq=0;
+epoch=0;
+
+@block
+base=floor(slider1)*8192;
+owned=slider2>0 && gmem[base]===slider2;
+owned ? (
+  owner_changed=last_owner!==slider2;
+  owner_changed ? (seq=0; epoch=0; was_running=0; last_owner=slider2;);
+  placement=get_host_placement(chain_position,host_flags);
+  active=placement==-2 && chain_position==0 && !(host_flags&4) && gmem[base+2]>0 && gmem[base+7]==0 && (play_state==1 || play_state==5);
+  reset=owner_changed || last_reset!==gmem[base+4] || last_sr!==srate;
+  last_reset=gmem[base+4];
+  last_sr!==srate ? (
+    last_sr=srate;
+    // BS.1770 K weighting. At 48 kHz these match the offline analyzer.
+    kk=tan($pi*1681.974450955533/srate);
+    q=.7071752369554196;
+    vh=10^(3.999843853973347/20);
+    vb=vh^.4996667741545416;
+    aa=1+kk/q+kk*kk;
+    b0=(vh+vb*kk/q+kk*kk)/aa;
+    b1=2*(kk*kk-vh)/aa;
+    b2=(vh-vb*kk/q+kk*kk)/aa;
+    a1=2*(kk*kk-1)/aa;
+    a2=(1-kk/q+kk*kk)/aa;
+    kk=tan($pi*38.13547087602444/srate);
+    aa=1+kk/.5003270373238773+kk*kk;
+    h1=2*(kk*kk-1)/aa;
+    h2=(1-kk/.5003270373238773+kk*kk)/aa;
+    hop=max(1,floor(srate*.1+.5));
+    inv_sr=1/srate;
+    reset=1;
+  );
+  active && (!was_running || abs(play_position-expected)>max(4/srate,.00005)) ? reset=1;
+  reset ? (
+    z1=0;z2=0;z3=0;z4=0;z5=0;z6=0;z7=0;z8=0;
+    energy=0;raw=0;pk=0;n=0;
+    epoch+=1;
+    last_reset=gmem[base+4];
+  );
+  active && (srate<8000 || srate>384000 || abs(hop/srate-.1)>.0000001) ? (
+    gmem[base+7]=2;active=0;
+  );
+  block_pos=play_position;
+  block_i=0;
+  expected=play_position+samplesblock/srate;
+  was_running=active;
+  gmem[base+5]=epoch;
+  gmem[base+6]=srate;
+  gmem[base+9]=1; // Protocol acknowledgment; only the current slot owner may publish.
+  gmem[base+8]+=1;
+) : (active=0;was_running=0;);
+
+@sample
+(active && gmem[base]===slider2) ? (
+  ll=spl0;rr=spl1;
+  !(ll===ll) || !(rr===rr) || abs(ll)>1000000000 || abs(rr)>1000000000 ? (
+    gmem[base+7]=1;active=0;
+  ) : (
+    yl=b0*ll+z1;
+    z1=b1*ll-a1*yl+z2;z2=b2*ll-a2*yl;
+    kl=yl+z3;z3=-2*yl-h1*kl+z4;z4=yl-h2*kl;
+    yr=b0*rr+z5;
+    z5=b1*rr-a1*yr+z6;z6=b2*rr-a2*yr;
+    kr=yr+z7;z7=-2*yr-h1*kr+z8;z8=yr-h2*kr;
+    energy+=kl*kl+kr*kr;
+    raw+=(ll*ll+rr*rr)*.5;
+    pk=max(pk,max(abs(ll),abs(rr)));
+    n+=1;
+    n>=hop ? (
+      seq+=1;
+      addr=base+64+((seq-1)%512)*8;
+      gmem[addr]=-seq;
+      gmem[addr+1]=epoch;
+      gmem[addr+2]=block_pos+(block_i+1)*inv_sr;
+      gmem[addr+3]=energy/n;
+      gmem[addr+4]=raw/n;
+      gmem[addr+5]=pk;
+      gmem[addr+6]=srate;
+      gmem[addr+7]=slider2;
+      gmem[addr]=seq;
+      gmem[base+3]=seq;
+      energy=0;raw=0;pk=0;n=0;
+    );
+  );
+  block_i+=1;
+);
+]==]
 local function target_alert(v,target)
   if not v or not target then return false end
   if S.alertUpper and v>target[1]+target[2] then return true end
@@ -1695,26 +2022,16 @@ local function peak_bucket_alert(low,high)
   return S.alertPeak and high and high>=0 or false
 end
 
--- Warning durations use the local S/M curves; overlapping warnings count once.
 local function warning_durations(data)
+  if Live.run and data then return Live.warnings(data) end
+  local c=BLT.warningCache;local a,b=S.targets.s,S.targets.m
+  if c and c.data==data and c.a==a[1] and c.b==a[2] and c.c==b[1] and c.d==b[2] then return c[1],c[2],c[3] end
   local upper,lower,peak=0,0,0
-  if not data then return upper,lower,peak end
-  for _,r in ipairs(data.rows or {}) do
-    local up,down=false,false
-    if r.s then
-      local t=S.targets.s
-      up=up or r.s>t[1]+t[2]
-      down=down or r.s<t[1]-t[2]
-    end
-    if r.m then
-      local t=S.targets.m
-      up=up or r.m>t[1]+t[2]
-      down=down or r.m<t[1]-t[2]
-    end
-    if up then upper=upper+.1 end
-    if down then lower=lower+.1 end
-    if r.peak and r.peak>=0 then peak=peak+.1 end
+  for _,row in ipairs(data and data.rows or {}) do
+    local u,l,p=Core.row_warning(row,S.targets)
+    upper=upper+u*.1;lower=lower+l*.1;peak=peak+p*.1
   end
+  BLT.warningCache={upper,lower,peak,data=data,a=a[1],b=a[2],c=b[1],d=b[2]}
   return upper,lower,peak
 end
 local function warning_time_text(seconds)
@@ -1733,7 +2050,6 @@ local A={data=nil,job=nil,stale=false,project=nil,track=nil,bitmap=nil,arrange=n
   titleMouseDown=false,titleDrag=nil,titleClosePressed=false,titleFoldPressed=false,titleResetPressed=false,titleChameleonPressed=false,titleMouseActive=false,
   resizeDrag=nil,resizeMouseActive=false,resizeCursorMode=nil,resizeCursors={},requestClose=false,requestFold=false,requestReset=false,
   tempDeletePending={},tempDeleteRetryAt=0,
-  tooltipHover=nil,tooltipSince=0,tooltipVisible=false,tooltipDelay=.70,
   fieldFlash={},fieldDrag=nil,titleH=26,resizeEdge=6,resizeCornerBand=8,resizeCornerSpan=24,resizeTopLeftGuard=30,resizeTopRightGuard=144,minWindowW=520,minWindowH=327,
   resizeCursorId={we=32644,ns=32645,nwse=32642,nesw=32643,arrow=32512}}
 local function extnum(key,default)
@@ -1774,8 +2090,7 @@ local function configure_composite_delay(hwnd)
   if not Platform.windows then return end
   if A.compositeDelayWindow==hwnd and A.compositeDelayPrev then return end
   restore_composite_delay()
-  -- JS_Composite_Delay was added specifically on Windows to reduce composite flicker.
-  -- Preserve the previous per-window values so other scripts/REAPER are not left altered.
+
   local _,pmin,pmax,pbitmaps=R.JS_Composite_Delay(hwnd,-1,-1,-1)
   A.compositeDelayWindow=hwnd
   A.compositeDelayPrev={min=pmin or -1,max=pmax or -1,bitmaps=pbitmaps or -1}
@@ -1786,7 +2101,8 @@ local function unlink()
     if R.JS_Window_IsWindow(A.arrange) then R.JS_Composite_Unlink(A.arrange,A.bitmap,true) end
   end
   restore_composite_delay()
-  A.linked=false; A.cache=""; A.layoutCache=nil; A.hover=nil; A.lastArrangeMouseX=nil; A.mouseRepairQueue={}; A.mouseSweepMin=nil; A.mouseSweepMax=nil; A.lastMouseMoveAt=nil
+  A.graphContentKey=nil;A.graphCursorPixel=nil
+  A.linked=false; A.cache=""; A.layoutCache=nil; A.paintRect=nil; A.hover=nil; A.lastArrangeMouseX=nil; A.mouseRepairQueue={}; A.mouseSweepMin=nil; A.mouseSweepMax=nil; A.lastMouseMoveAt=nil
 end
 local function dispose_bitmap()
   unlink()
@@ -1820,8 +2136,8 @@ local function load_settings()
   S.alertUpper=false;S.alertLower=false;S.alertPeak=false
   local _,raw=R.GetProjExtState(A.project,SECTION,'settings')
   local f={};for v in raw:gmatch('[^;]+') do f[#f+1]=v end
-  if #f<18 then return end
-  S.source=f[1];S.height=Core.clamp(tonumber(f[2]) or 280,180,800)
+  if #f~=18 or f[1]~='master' then return end
+  S.source='master';S.height=Core.clamp(tonumber(f[2]) or 280,180,800)
   local lo,hi=tonumber(f[3]),tonumber(f[4])
   if Core.finite(lo) and Core.finite(hi) and Core.finite(hi-lo) and hi-lo>1e-6 then
     lo=Core.round(Core.clamp(lo,-120,18),2)
@@ -1838,139 +2154,150 @@ local function load_settings()
   end
   S.alertUpper=f[16]=='1';S.alertLower=f[17]=='1';S.alertPeak=f[18]=='1'
 end
-local function clear_saved_result(key,raw)
-  local id,n=raw:match('^([^;]+);(%d+);'); n=tonumber(n)
-  if id and n and n<=2000 then
-    for i=1,n do R.SetProjExtState(A.project,SECTION,id..'_'..i,'') end
-    R.SetProjExtState(A.project,SECTION,id..'_name','')
-  end
-  R.SetProjExtState(A.project,SECTION,key,'')
+-- Snapshot ownership is explicit. Never delete by subtracting an enumeration
+-- from the reference set: enumeration output/case is not an ownership proof.
+-- Current graph storage
+local History={key='result@master',backup='result_backup@master',recovery='result_recovery@master',failed='result_failed@master',failedBackup='result_failed_backup@master'}
+History.references={History.key,History.backup,History.recovery,History.failed,History.failedBackup}
+function History.manifest(raw)
+  assert(type(raw)=='string' and #raw<=512,'保存情報が不正です。')
+  local f={};for v in (raw..';'):gmatch('(.-);') do f[#f+1]=v end
+  local n,stamp,bytes=tonumber(f[2]),tonumber(f[3]),tonumber(f[5])
+  assert(#f==6 and f[1]:match('^[%x]+$') and #f[1]<=128 and n and n>=1 and n<=4096 and n%1==0
+    and Core.finite(stamp) and f[4]=='2' and bytes and bytes>0 and bytes<=MAX_SAVE_BYTES
+    and f[6]:match('^[%x]+$') and #f[6]==16,'保存情報が不正です。')
+  return f[1]:lower(),n,stamp,bytes,f[6]:lower()
 end
-local function cleanup_orphaned_saved_chunks()
-  if not A.project then return 0 end
-  local referenced,keys={},{};local i=0
-  while true do
-    local ok,key,val=R.EnumProjExtState(A.project,SECTION,i)
-    if not ok or ok==0 then break end
-    keys[#keys+1]=key
-    if key:match('^result@') then
-      local id=val:match('^([^;]+);%d+;')
-      if id then referenced[id]=true end
-    end
-    i=i+1
-  end
-  local removed=0
-  for _,key in ipairs(keys) do
-    local id=key:match('^([%x]+)_%d+$') or key:match('^([%x]+)_name$')
-    if id and #id>=16 and not referenced[id] then
-      R.SetProjExtState(A.project,SECTION,key,'');removed=removed+1
-    end
-  end
-  return removed
+function History.raw(key)
+  local _,value=R.GetProjExtState(A.project,SECTION,key:lower())
+  assert(type(value)=='string','保存情報を取得できません。')
+  return value
 end
-local function enforce_track_cache()
-  local tracks={}; local i=0
-  while true do
-    local ok,key,val=R.EnumProjExtState(A.project,SECTION,i)
-    if not ok or ok==0 then break end
-    local source=key:match('^result@(.+)$')
-    if source and source~='master' and val~='' then
-      local stamp=tonumber(val:match('^[^;]+;%d+;([^;]+)$')) or 0
-      tracks[#tracks+1]={key=key,raw=val,stamp=stamp,source=source}
-    end
-    i=i+1
-  end
-  if #tracks<=TRACK_CACHE_LIMIT then return end
-  table.sort(tracks,function(a,b)
-    if a.stamp==b.stamp then return a.key<b.key end
-    return a.stamp<b.stamp
-  end)
-  for n=1,#tracks-TRACK_CACHE_LIMIT do clear_saved_result(tracks[n].key,tracks[n].raw) end
+function History.put(key,value)
+  local canonical=key:lower()
+  R.SetProjExtState(A.project,SECTION,canonical,value)
+  local _,check=R.GetProjExtState(A.project,SECTION,canonical)
+  assert(check==value,'グラフ保存の読み戻し検証に失敗しました。')
 end
-local function save_data(data)
-  local chunks=Core.pack(data);local key='result@'..data.source
-  local bytes=0;for _,chunk in ipairs(chunks) do bytes=bytes+#chunk end
-  assert(#data.rows<=MAX_HISTORY_ROWS,'保存できる履歴は解析ソースごとに最大3.5時間です。古い履歴を整理してから再試行してください。')
+function History.erase(key)
+  if History.raw(key)~='' then History.put(key,'') end
+end
+function History.retire(raw)
+  -- Retire known snapshots only after verified publication or clearing their references.
+  if raw=='' then return end
+  local parsed,id,n=pcall(History.manifest,raw);if not parsed then return end
+  if not id:match('^[%x]+$') or #id<16 then return end
+  local canonical=id:lower()
+  for _,key in ipairs(History.references) do
+    local value=History.raw(key)
+    if value~='' then
+      local owner=value:match('^([%w]+);')
+      if owner and owner:lower()==canonical then return end
+
+      if not owner and value:lower():find(canonical,1,true) then return end
+    end
+  end
+  for i=1,n do History.erase(id..'_'..i) end
+  History.erase(id..'_name')
+end
+function History.read(raw,recover,verifyOnly)
+  if raw=='' then return nil end
+  local id,n,_,expectedBytes,expectedHash=History.manifest(raw)
+  local chunks,bytes={},0
+  for i=1,n do
+    local v=History.raw(id..'_'..i)
+    if not recover then assert(v~='','保存カーブが不足しています。') end
+    bytes=bytes+#v;assert(bytes<=MAX_SAVE_BYTES,'保存データが12 MiBの安全上限を超えました。測定範囲を短くしてください。')
+    chunks[i]=v
+  end
+  if not recover then
+    local hash,actualBytes=Core.history_hash(chunks)
+    assert(actualBytes==expectedBytes and hash==expectedHash,'保存グラフの整合性検証に失敗しました。')
+  end
+
+  if verifyOnly and not recover then return true end
+  local data,info=Core.unpack(chunks,recover)
+  data.source='master';data.name='MASTER MIX · stereo 1/2'
+  if not verifyOnly then Core.recompute(data) end
+  return data,info
+end
+local function save_data(data,recovered)
+  assert(data.source=='master','測定データのソースがマスターミックスではありません。')
+  local chunks=Core.pack(data)
+  local verified=Core.unpack(chunks);local rows=0
+  for _,seg in ipairs(verified.segments) do rows=rows+#seg.rows end
+  assert(rows<=MAX_HISTORY_ROWS,'保存できる共通履歴は最大3.5時間です。古い履歴を整理してから再試行してください。')
+  local hash,bytes=Core.history_hash(chunks)
   assert(bytes<=MAX_SAVE_BYTES,'保存データが12 MiBの安全上限を超えました。測定範囲を短くしてください。')
-  local _,old=R.GetProjExtState(A.project,SECTION,key)
-  local oldid,oldn=old:match('^([^;]+);(%d+);')
-  local id=R.genGuid():gsub('[^%w]','')
+  local old=History.raw(History.key)
+  local snapshotKey=recovered and History.recovery or History.backup
+  local previousSnapshot=History.raw(snapshotKey)
+  local id=R.genGuid():gsub('[^%w]',''):lower()
+  assert(id~='' and old:sub(1,#id):lower()~=id and History.raw(id..'_1')=='','グラフ保存先を確保できません。')
   local stamp=os.time()+(R.time_precise()%1)
-  local written={}
-  local ok,why=pcall(function()
+  local manifest=string.format('%s;%d;%.6f;2;%d;%s',id,#chunks,stamp,bytes,hash)
+  local written={};local switching=false
+  local ok,why=xpcall(function()
     for i,chunk in ipairs(chunks) do
-      local chunkKey=id..'_'..i
-      assert(R.SetProjExtState(A.project,SECTION,chunkKey,chunk)>0,'カーブを保存できません。')
-      written[#written+1]=chunkKey
+      local key=id..'_'..i;written[#written+1]=key;History.put(key,chunk)
     end
-    local nameKey=id..'_name';R.SetProjExtState(A.project,SECTION,nameKey,data.name or '');written[#written+1]=nameKey
-    assert(R.SetProjExtState(A.project,SECTION,key,string.format('%s;%d;%.6f',id,#chunks,stamp))>0,'結果を保存できません。')
-  end)
+    local nameKey=id..'_name';written[#written+1]=nameKey;History.put(nameKey,data.name or '')
+    History.read(manifest,false,true)
+    if old~='' then History.put(snapshotKey,old) end
+    switching=true;History.put(History.key,manifest)
+
+    History.read(History.raw(History.key),false,true)
+  end,debug.traceback)
   if not ok then
-    for _,writtenKey in ipairs(written) do R.SetProjExtState(A.project,SECTION,writtenKey,'') end
+    if switching then pcall(History.put,History.key,old) end
+    local read,current=pcall(History.raw,History.key)
+    if read and current==old then
+      pcall(History.put,snapshotKey,previousSnapshot)
+      for _,key in ipairs(written) do pcall(History.erase,key) end
+    end
+    -- On an uncertain rollback, keep the new chunks rather than delete a possible owner.
     error(why,0)
   end
-  if oldid and tonumber(oldn) and tonumber(oldn)<=2000 then
-    for i=1,tonumber(oldn) do R.SetProjExtState(A.project,SECTION,oldid..'_'..i,'') end
-    R.SetProjExtState(A.project,SECTION,oldid..'_name','')
+  A.historyBlocked=false;A.historyProblem=nil
+  local cleaned,err=pcall(History.retire,previousSnapshot);if not cleaned then BLT.logError(err) end
+  -- Retirement cannot turn a successful save into a missing-curve snapshot.
+  History.read(History.raw(History.key),false,true)
+end
+function History.clear()
+  local snapshots={}
+  for _,key in ipairs(History.references) do
+    snapshots[#snapshots+1]=History.raw(key);History.erase(key)
   end
-  if data.source~='master' then enforce_track_cache() end
-  cleanup_orphaned_saved_chunks()
+  for _,raw in ipairs(snapshots) do History.retire(raw) end
 end
 local function load_data()
-  A.data=nil
-  local _,raw=R.GetProjExtState(A.project,SECTION,'result@'..S.source)
-  if raw=='' then return end
-  local ok,result=pcall(function()
-    local id,n,stamp=raw:match('^([^;]+);(%d+);([^;]+)$');n=tonumber(n);stamp=tonumber(stamp)
-    assert(id and n and n>=1 and n<=2000 and Core.finite(stamp),'保存情報が不正です。')
-    local chunks={}
-    for i=1,n do
-      local _,v=R.GetProjExtState(A.project,SECTION,id..'_'..i)
-      assert(v~='','保存カーブが不足しています。')
-      chunks[i]=v
-    end
-    local data=Core.unpack(chunks)
-    data.source=S.source
-    local _,name=R.GetProjExtState(A.project,SECTION,id..'_name')
-    data.name=name
-    Core.recompute(data)
-    return data
-  end)
-  if ok and result then A.data=result;A.stale=true end
+  A.data=nil;A.stale=false;A.historyBlocked=false;A.historyProblem=nil;A.historyRecovery=nil
+  local raw=History.raw(History.key)
+  local ok,result=pcall(History.read,raw)
+  if ok then A.data=result;A.stale=result~=nil;return end
+  -- Invalid persisted history starts a new measurement without a recovery prompt.
+  History.clear()
+  Live.run=nil;Live.previous=nil;Live.dirty=false;Live.notice=nil;Live.noticeBad=false
 end
 
 local function clear_measurement()
   if A.job then return end
-  -- Snapshot result keys first because deleting while enumerating would shift indices.
-  local results={}; local i=0
-  while true do
-    local ok,key,val=R.EnumProjExtState(A.project,SECTION,i)
-    if not ok or ok==0 then break end
-    if key:match('^result@') then results[#results+1]={key,val} end
-    i=i+1
-  end
-  for _,m in ipairs(results) do clear_saved_result(m[1],m[2]) end
-  cleanup_orphaned_saved_chunks()
-  A.data=nil; A.stale=false
-  A.revision=A.revision+1; A.cache=''; A.hover=nil
+  if Live.enabled then Live.stop() end
+  Live.run=nil;Live.previous=nil;Live.dirty=false;Live.notice=nil;Live.noticeBad=false
+  History.clear()
+  A.historyBlocked=false;A.historyProblem=nil;A.historyRecovery=nil
+  A.data=nil;A.stale=false
+  A.revision=A.revision+1;A.cache='';A.hover=nil
   A.baseline=R.GetProjectStateChangeCount(A.project)
 end
 
-local function source_track()
-  if S.source=='master' then return nil,'MASTER OUT · stereo 1/2' end
-  for i=0,R.CountTracks(A.project)-1 do
-    local tr=R.GetTrack(A.project,i)
-    if R.GetTrackGUID(tr)==S.source then local _,name=R.GetTrackName(tr); return tr,name..' · selected via master 1/2' end
-  end
-  return nil,'指定トラックが見つかりません'
-end
+local function source_name() return 'MASTER MIX · stereo 1/2' end
 
 local function ensure_track()
   A.track=find_track()
   if A.track then return end
   R.Undo_BeginBlock2(A.project)
-  -- Index zero is outside existing folders. No existing routing or folder flags change.
+
   R.InsertTrackAtIndex(0,false)
   A.track=R.GetTrack(A.project,0)
   R.GetSetMediaTrackInfo_String(A.track,TAG,"display",true)
@@ -2006,13 +2333,562 @@ local function set_graph_track_visible(visible)
   end
 end
 local function adopt_project(create)
+  if Live.enabled or Live.dirty then Live.stop() end
+  Live.project=nil;Live.run=nil;Live.previous=nil;Live.dirty=false;Live.notice=nil;Live.noticeBad=false
   unlink(); A.edit=nil; A.project=R.EnumProjects(-1,""); A.track=find_track()
-  cleanup_orphaned_saved_chunks();load_settings(); load_data()
+  -- Validate stored history before displaying it; invalid history is cleared.
+  load_settings();load_data()
   if create then ensure_track() end
-  -- The track's TCP visibility is project state, so use it as the authoritative
-  -- visibility state when reopening the script.
+
   if valid_track() then S.visible=graph_track_is_visible() end
   A.revision=A.revision+1; A.baseline=R.GetProjectStateChangeCount(A.project)
+end
+
+-- LIVE acquisition
+function Live.wake()
+  A.revision=A.revision+1;A.cache='';A.hover=nil
+  if BLT.host then BLT.host.wake() end
+end
+function Live.message(text,bad)
+  Live.notice=text;Live.noticeBad=bad==true;Live.wake()
+end
+function Live.valid_project(project)
+  if not project then return false end
+  local i=0
+  while true do local p=R.EnumProjects(i,'');if not p then return false end;if p==project then return true end;i=i+1 end
+end
+function Live.select_memory() R.gmem_attach(Live.memory) end
+function Live.release_slot()
+  if Live.base then
+    Live.select_memory()
+    if R.gmem_read(Live.base)==Live.token then
+      R.gmem_write(Live.base+2,0);R.gmem_write(Live.base,0);R.gmem_write(Live.base+1,0)
+    end
+  end
+  Live.base=nil;Live.slot=nil
+end
+function Live.reserve_slot()
+  Live.select_memory();local now=R.time_precise()
+  for slot=0,15 do
+    local b=slot*8192;local owner,stamp=R.gmem_read(b),R.gmem_read(b+1)
+    if owner==0 or now-stamp>30 or stamp>now+1 then
+      local token=tonumber(R.genGuid():gsub('[^%x]',''):sub(1,6),16) or 1
+      token=max(1,token)
+      R.gmem_write(b+2,0);R.gmem_write(b,token);R.gmem_write(b+1,now)
+      for i=3,9 do R.gmem_write(b+i,0) end
+      Live.slot,Live.base,Live.token=slot,b,token;Live.readSeq=0
+      return
+    end
+  end
+  error('リアルタイム測定の共有メモリを確保できません。ほかの測定をOFFにしてください。',0)
+end
+
+function Live.file_contents(path)
+  local f,err,code=io.open(path,'rb')
+  if not f then
+    -- Only ENOENT means missing. Access errors must never become permission to write.
+    if code==2 then return nil,'missing' end
+    return nil,'unreadable',err
+  end
+  local ok,body=pcall(f.read,f,131073)
+  local closed,result=pcall(f.close,f)
+  if not ok or not closed or not result then return nil,'unreadable',body end
+  if not body then body='' end
+  return body,#body>131072 and 'oversized' or 'read'
+end
+function Live.discard_install_temp(path)
+  local ok,removed=pcall(os.remove,path)
+  if ok and removed then return true end
+  local _,state=Live.file_contents(path);if state=='missing' then return true end
+
+  A.tempDeletePending[path]=R.time_precise()
+  return false
+end
+function Live.meter_file()
+  assert(type(Live.jsfx)=='string' and #Live.jsfx>0 and #Live.jsfx<=131072,'リアルタイム測定JSFXの内容が不正です。')
+  local root=R.GetResourcePath()..'/Effects/'
+  local path=root..Live.fx_relative
+  local body,state=Live.file_contents(path)
+  if state=='read' and body==Live.jsfx then
+    Live.discard_install_temp(path..'.tmp');Live.discard_install_temp(path..'.bak');return path
+  end
+  assert(state~='unreadable','既存のリアルタイム測定JSFXを読み取れません。権限を確認してください。')
+  -- Never replace the source of a running meter, even if called outside startup.
+  Live.remove_monitor_meters()
+  R.RecursiveCreateDirectory(root..'BLT',0)
+  local temp,backup=path..'.tmp',path..'.bak'
+  local _,backupState=Live.file_contents(backup)
+  assert(backupState~='unreadable','リアルタイム測定JSFXの更新用ファイルを読み取れません。')
+  if state=='missing' and backupState~='missing' then
+    assert(os.rename(backup,path),'リアルタイム測定JSFXの前回更新を復元できません。')
+    body,state=Live.file_contents(path)
+    if state=='read' and body==Live.jsfx then Live.discard_install_temp(temp);return path end
+  end
+  local moved=false
+  local ok,why=xpcall(function()
+    -- A single temporary file and backup keep failed updates bounded as well.
+    local _,temporaryState=Live.file_contents(temp)
+    assert(temporaryState~='unreadable','リアルタイム測定JSFXの更新用ファイルを読み取れません。')
+    if temporaryState~='missing' then assert(os.remove(temp),'リアルタイム測定JSFXの作業ファイルを削除できません。') end
+    local f,err=io.open(temp,'wb');assert(f,err or 'リアルタイム測定JSFXを保存できません。')
+    local called,written,werr=pcall(f.write,f,Live.jsfx)
+    local closed,result=pcall(f.close,f)
+    assert(called and written and closed and result,werr or 'リアルタイム測定JSFXを保存できません。')
+    assert(Live.file_contents(temp)==Live.jsfx,'リアルタイム測定JSFXの書き込み検証に失敗しました。')
+    local _,oldBackup=Live.file_contents(backup)
+    if oldBackup~='missing' then assert(os.remove(backup),'リアルタイム測定JSFXの更新用ファイルを削除できません。') end
+    local _,current=Live.file_contents(path)
+    assert(current~='unreadable','既存のリアルタイム測定JSFXを読み取れません。権限を確認してください。')
+    if current~='missing' then assert(os.rename(path,backup),'リアルタイム測定JSFXを更新できません。');moved=true end
+    assert(os.rename(temp,path),'リアルタイム測定JSFXを保存できません。')
+    assert(Live.file_contents(path)==Live.jsfx,'リアルタイム測定JSFXの書き込み検証に失敗しました。')
+  end,debug.traceback)
+  if not ok then
+    if moved then
+      -- Restore the last complete source on failure; do not discard a failed rollback.
+      local _,current=Live.file_contents(path)
+      if current~='missing' then os.remove(path) end
+      local restored=os.rename(backup,path)
+      if not restored then why=tostring(why)..'\nリアルタイム測定JSFXの前回更新を復元できません。' end
+    end
+    Live.discard_install_temp(temp)
+    error(why,0)
+  end
+  if moved then Live.discard_install_temp(backup) end
+  return path
+end
+
+function Live.relative_fx_name(name)
+  name=tostring(name or ''):gsub('^JS:%s*',''):gsub('\\','/')
+  local root=(R.GetResourcePath()..'/Effects/'):gsub('\\','/')
+  local compare,base=name,root
+  if Platform.windows then compare,base=compare:lower(),base:lower() end
+  if compare:sub(1,#base)==base then name=name:sub(#root+1) end
+  return name
+end
+function Live.find_fx(host,guid)
+  if not host or not guid then return end
+  for i=0,R.TrackFX_GetRecCount(host)-1 do
+    local index=0x1000000+i
+    if R.TrackFX_GetFXGUID(host,index)==guid then return index end
+  end
+end
+function Live.is_meter(host,index)
+  local ok,name=R.TrackFX_GetNamedConfigParm(host,index,'fx_ident')
+  if not ok then return false end
+  name=Live.relative_fx_name(name)
+  if Platform.windows then return name:lower()==Live.fx_relative:lower() end
+  return name==Live.fx_relative
+end
+-- Startup owns only BLT's dedicated monitoring meters, never other monitor FX.
+function Live.remove_monitor_meters()
+  local project=R.EnumProjects(-1,'');local host=R.GetMasterTrack(project)
+  if not host then return end
+  for i=R.TrackFX_GetRecCount(host)-1,0,-1 do
+    local index=0x1000000+i
+    if Live.is_meter(host,index) then
+      local guid=R.TrackFX_GetFXGUID(host,index)
+      local slot,token=R.TrackFX_GetParam(host,index,0),R.TrackFX_GetParam(host,index,1)
+      if Core.finite(slot) and slot%1==0 and slot>=0 and slot<=15 and Core.finite(token) and token>0 then
+        Live.select_memory();local base=slot*8192
+        if R.gmem_read(base)==token then
+          R.gmem_write(base+2,0);R.gmem_write(base,0);R.gmem_write(base+1,0)
+        end
+      end
+      if R.TrackFX_Show then R.TrackFX_Show(host,index,2) end
+      assert(R.TrackFX_Delete(host,index)~=false and not Live.find_fx(host,guid),'起動済みの測定用JSFXを終了できません。')
+    end
+  end
+end
+function Live.prepare_install()
+  Live.remove_monitor_meters()
+  Live.meter_file()
+end
+function Live.slot_alive(host,index)
+  local slot=R.TrackFX_GetParam(host,index,0);local token=R.TrackFX_GetParam(host,index,1)
+  if not Core.finite(slot) or slot%1~=0 or not Core.finite(token) or token%1~=0 or token<=0 or slot<0 or slot>15 then return false end
+  Live.select_memory();local b=floor(slot+.5)*8192;local age=R.time_precise()-R.gmem_read(b+1)
+  return R.gmem_read(b)==token and age>=-1 and age<=30
+end
+function Live.recover_orphans(project)
+  local master=R.GetMasterTrack(project)
+  for i=R.TrackFX_GetRecCount(master)-1,0,-1 do
+    local index=0x1000000+i
+    if Live.is_meter(master,index) and R.TrackFX_GetParam(master,index,1)>0 and not Live.slot_alive(master,index) then
+      R.TrackFX_Delete(master,index)
+    end
+  end
+end
+function Live.disconnect()
+  if Live.base then Live.select_memory();if R.gmem_read(Live.base)==Live.token then R.gmem_write(Live.base+2,0) end end
+  local host=R.GetMasterTrack(R.EnumProjects(-1,''));local clean=true
+  local idx=Live.find_fx(host,Live.guid)
+  if idx then clean=R.TrackFX_Delete(host,idx)~=false and Live.find_fx(host,Live.guid)==nil end
+  Live.release_slot();Live.host=nil;Live.guid=nil;Live.fxIndex=nil;Live.connecting=nil;Live.route=nil
+  Live.restore_fx_preference()
+  if not clean then Live.message('測定用トラックまたはFXが変更されているため、自動削除できませんでした。確認してください。',true) end
+  return clean
+end
+
+-- P_ENV may return an allocated envelope even when no automation is in use.
+
+function Live.hardware_envelopes_unused(project,track,index)
+  local unknown='ハードウェア出力のエンベロープ状態を確認できないため、LIVE測定できません。'
+  local entries={
+    {'VOLENV','ハードウェア出力の音量エンベロープが使用中のため、LIVE測定できません。'},
+    {'PANENV','ハードウェア出力のPANエンベロープが使用中のため、LIVE測定できません。'},
+    {'MUTEENV','ハードウェア出力のミュートエンベロープが使用中のため、LIVE測定できません。'},
+  }
+  local function integer(v) return Core.finite(v) and v>=0 and v%1==0 end
+  for _,entry in ipairs(entries) do
+    local got,env=pcall(R.GetTrackSendInfo_Value,track,1,index,'P_ENV:<'..entry[1])
+    if not got then return false,unknown end
+    if env and env~=0 then
+      local valid,exists=pcall(R.ValidatePtr2,project,env,'TrackEnvelope*')
+      if not valid or exists~=true then return false,unknown end
+      local counted,points=pcall(R.CountEnvelopePoints,env)
+      local listed,items=pcall(R.CountAutomationItems,env)
+      local read,state=pcall(R.GetEnvelopeUIState,env)
+      if not counted or not listed or not read or not integer(points) or not integer(items) or not integer(state) or state>7 then
+        return false,unknown
+      end
+      -- Stored points/automation items remain conservatively unsupported, even
+      -- when currently bypassed. Empty envelopes that are playing or writing
+      -- automation are not safe either. Visibility alone is irrelevant.
+      if points>0 or items>0 or (state&3)~=0 then return false,entry[2] end
+    end
+  end
+  return true
+end
+
+-- Monitoring FX receive hardware-output audio, not an unconditional master tap.
+-- Accept only an unmixed unity stereo post-fader route from master channels 1/2.
+-- Never alter the user's sends, hardware levels, master fader, pan, or monitor FX.
+function Live.route_for_master(project)
+  local master=R.GetMasterTrack(project)
+  if not master or not R.ValidatePtr2(project,master,'MediaTrack*') then return nil,'マスタートラックを取得できません。' end
+  if (R.GetMasterMuteSoloFlags()&7)~=0 then return nil,'マスターのミュート／ソロ／モノ設定を解除するとLIVE測定できます。' end
+  if R.SNM_GetIntConfigVar('hwoutfx_bypass',0)~=0 then return nil,'モニターFXがバイパス中のためLIVE測定を待機しています。' end
+  for i=0,1023 do
+    local p=R.EnumProjects(i,'');if not p then break end
+    if p~=project and (R.GetPlayStateEx(p)&1)~=0 then return nil,'別プロジェクトを停止するとLIVE測定できます。' end
+  end
+  local function value(track,i,key) return R.GetTrackSendInfo_Value(track,1,i,key) end
+  local function unity_panlaw(index)
+    local law=value(master,index,'D_PANLAW')
+    if law==-1 then
+      if type(R.get_config_var_string)=='function' then
+        local ok,raw=R.get_config_var_string('panlaw');law=ok and tonumber(raw) or nil
+      elseif type(R.SNM_GetDoubleConfigVar)=='function' then law=R.SNM_GetDoubleConfigVar('panlaw',-1) end
+    end
+    return Core.finite(law) and math.abs(law-1)<1e-12
+  end
+  local function overlap(track,i,channel)
+    if value(track,i,'B_MUTE')~=0 then return false end
+    local src,dst=value(track,i,'I_SRCCHAN'),value(track,i,'I_DSTCHAN')
+    if not Core.finite(src) or not Core.finite(dst) then return true end
+    src,dst=floor(src),floor(dst)
+    if src<0 then return false end
+    local start=dst&1023;local mode=src>>10
+    local count=(dst&1024)~=0 and 1 or mode==0 and 2 or mode==1 and 1 or mode*2
+    return start<channel+2 and start+count>channel
+  end
+  local count=R.GetTrackNumSends(master,1)
+  local outputs=R.GetNumAudioOutputs();local envelopeProblem
+  for index=0,count-1 do
+    local dst=value(master,index,'I_DSTCHAN')
+    if Core.finite(dst) and dst%1==0 and dst>=0 and dst<=62 and dst+2<=outputs
+      and value(master,index,'I_SRCCHAN')==0 and value(master,index,'I_SENDMODE')==0
+      and value(master,index,'B_MUTE')==0 and value(master,index,'B_PHASE')==0 and value(master,index,'B_MONO')==0
+      and math.abs(value(master,index,'D_VOL')-1)<1e-12 and math.abs(value(master,index,'D_PAN'))<1e-12
+      and unity_panlaw(index) then
+      local unused,why=Live.hardware_envelopes_unused(project,master,index)
+      if not unused then envelopeProblem=envelopeProblem or why end
+      local isolated=unused
+      if isolated then
+        for i=0,count-1 do if i~=index and overlap(master,i,dst) then isolated=false;break end end
+      end
+      if isolated then
+        for ti=0,R.CountTracks(project)-1 do
+          local tr=R.GetTrack(project,ti)
+          for si=0,R.GetTrackNumSends(tr,1)-1 do if overlap(tr,si,dst) then isolated=false;break end end
+          if not isolated then break end
+        end
+      end
+      if isolated then return {index=index,channel=dst,master=master} end
+    end
+  end
+  return nil,envelopeProblem or 'LIVE測定には、マスター1/2を音量・パンロー0 dB、PAN中央のステレオで単独出力する経路が必要です。'
+end
+function Live.pin_mask(channel)
+  return channel<32 and (1<<channel) or 0,channel>=32 and (1<<(channel-32)) or 0
+end
+function Live.map_meter(host,index,channel)
+  for output=0,1 do for pin=0,1 do
+    local lo,hi=Live.pin_mask(channel+pin)
+    assert(R.TrackFX_SetPinMappings(host,index,output,pin,lo,hi),'測定用JSFXのチャンネルを設定できません。')
+    local a,b=R.TrackFX_GetPinMappings(host,index,output,pin)
+    assert((a&0xffffffff)==lo and (b&0xffffffff)==hi,'測定用JSFXのチャンネルを確認できません。')
+  end end
+end
+function Live.add_meter_quiet(host)
+  local previous=R.SNM_GetIntConfigVar('fxfloat_focus',-2147483647)
+  assert(previous~=-2147483647,'FXウィンドウの自動表示設定を取得できません。')
+  local visible=R.TrackFX_GetRecChainVisible(host)
+  local selected=visible>=0 and R.TrackFX_GetFXGUID(host,0x1000000|(visible&0xffffff)) or nil
+  local focus=R.JS_Window_GetFocus and R.JS_Window_GetFocus()
+  local idx;local before={}
+  for i=0,R.TrackFX_GetRecCount(host)-1 do local id=R.TrackFX_GetFXGUID(host,0x1000000+i);if id then before[id]=true end end
+  local ok,why=xpcall(function()
+    -- &4 auto-float; !&128 auto-open quick-add. Also prevent focus/chain replacement.
+    local quiet=(previous&(~(1|2|4|16|32|64)))|8|128|65536
+    Live.restoreFXPreference=previous
+    assert(R.SNM_SetIntConfigVar('fxfloat_focus',quiet)~=false,'FXウィンドウの自動表示を抑制できません。')
+    assert(R.SNM_GetIntConfigVar('fxfloat_focus',-1)==quiet,'FXウィンドウの自動表示を抑制できません。')
+    idx=R.TrackFX_AddByName(host,'JS: '..Live.fx_relative,true,-1000)
+    assert(idx and idx>=0,'リアルタイム測定JSFXを追加できません。FX一覧を再スキャンしてください。')
+    idx=0x1000000|(idx&0xffffff);Live.fxIndex=idx
+    Live.guid=assert(R.TrackFX_GetFXGUID(host,idx))
+  end,debug.traceback)
+  if not ok and not Live.guid then
+    for i=0,R.TrackFX_GetRecCount(host)-1 do
+      local n=0x1000000+i;local id=R.TrackFX_GetFXGUID(host,n)
+      if id and not before[id] and Live.is_meter(host,n) then Live.guid=id;idx=n;Live.fxIndex=n;break end
+    end
+  end
+  -- All cleanup is attempted independently; a failed add must not leave preferences changed.
+  local shown,showerr=pcall(function()
+    if idx and idx>=0 then R.TrackFX_Show(host,idx,2) end
+    if visible==-1 then R.TrackFX_Show(host,0x1000000,0)
+    elseif selected then
+      local old=Live.find_fx(host,selected)
+      if old then R.TrackFX_Show(host,old,1) end
+    end
+  end)
+  local restored,result=pcall(R.SNM_SetIntConfigVar,'fxfloat_focus',previous)
+  if not restored or result==false or R.SNM_GetIntConfigVar('fxfloat_focus',-1)~=previous then
+    Live.restoreFXPreference=previous
+    error('FXウィンドウの自動表示設定を復元できません。終了時に再試行します。',0)
+  end
+  Live.restoreFXPreference=nil
+  if focus and R.JS_Window_IsWindow(focus) and R.JS_Window_SetFocus then pcall(R.JS_Window_SetFocus,focus) end
+  if not ok then error(why,0) end
+  if not shown then error(showerr,0) end
+  return idx
+end
+function Live.restore_fx_preference()
+  if Live.restoreFXPreference==nil then return end
+  local old=Live.restoreFXPreference
+  if R.SNM_SetIntConfigVar('fxfloat_focus',old)~=false and R.SNM_GetIntConfigVar('fxfloat_focus',-1)==old then Live.restoreFXPreference=nil end
+end
+function Live.connect()
+  local project=A.project
+  assert(project==R.EnumProjects(-1,''),'プロジェクトが切り替わりました。')
+  Live.project=project;Live.source='master';Live.host=R.GetMasterTrack(project)
+  local route,why=Live.route_for_master(project);assert(route,why)
+  Live.route=route;Live.routeAt=0;Live.routeRevision=nil;Live.checkedRoute=nil
+  Live.recover_orphans(project);Live.meter_file();Live.reserve_slot()
+  local idx=Live.add_meter_quiet(Live.host)
+  assert(Live.is_meter(Live.host,idx),'リアルタイム測定JSFXを確認できません。')
+  Live.map_meter(Live.host,idx,route.channel)
+  assert(R.TrackFX_SetParam(Live.host,idx,0,Live.slot)~=false and R.TrackFX_SetParam(Live.host,idx,1,Live.token)~=false,'測定用JSFXの設定に失敗しました。')
+  assert(R.TrackFX_GetParam(Live.host,idx,0)==Live.slot and R.TrackFX_GetParam(Live.host,idx,1)==Live.token,'測定用JSFXの設定に失敗しました。')
+  R.TrackFX_SetNamedConfigParm(Live.host,idx,'renamed_name','BLT LOUDNESS TRACE [LIVE]')
+  Live.startedAt=R.time_precise();Live.checkAt=0;Live.readSeq=0;Live.epoch=nil;Live.wasPlaying=false;Live.prevPos=nil
+  A.baseline=R.GetProjectStateChangeCount(project)
+end
+
+function Live.finish_run()
+  if not Live.run then return end
+  if A.data then Core.recompute(A.data) end
+  Live.run=nil;Live.previous=nil;Live.warningCache=nil;Live.wake()
+end
+function Live.save()
+  if not Live.dirty or not A.data then return true end
+  if not Live.valid_project(Live.project or A.project) then return false end
+
+  local ok,err=pcall(save_data,A.data)
+  if ok then Live.dirty=false;A.baseline=R.GetProjectStateChangeCount(A.project)
+  else Live.message('リアルタイム結果を保存できませんでした。メモリ内のグラフは保持しています。',true);BLT.logError(err) end
+  return ok
+end
+function Live.accept(packet)
+  local run=Live.run;local time=packet.time
+  if run and (packet.epoch~=run.epoch or math.abs(time-run.last-.1)>1e-6 or packet.srate~=run.srate) then Live.finish_run();run=nil end
+  if not run then
+    Live.previous=A.data
+    Live.stamp=max(os.time()+(R.time_precise()%1),(Live.stamp or 0)+.000001)
+    run={first=time-.1,last=time-.1,origin=time-.1,rows={},stamp=Live.stamp,epoch=packet.epoch,srate=packet.srate,meter=Core.live_meter(),summary=Core.history_summary(Live.previous,time-.1,S.targets)}
+    Live.run=run
+  end
+  local row=run.meter.feed(time,packet.energy,packet.raw,packet.peak)
+  run.integrated,run.lra=run.summary.feed(row)
+  run.rows[#run.rows+1]=row;run.last=time
+  Core.live_lod_append(run,row)
+  local data=Core.live_view(Live.previous,run,'master',source_name())
+  if data.liveCount>MAX_HISTORY_ROWS or #data.segments>2048 then
+    -- Refuse the overflowing row, keeping the previous valid graph intact.
+    run.rows[#run.rows]=nil;Live.run=nil;Live.previous=nil
+    if A.data then Core.recompute(A.data) end
+    error('リアルタイム履歴の上限に達しました。グラフを保持して測定をOFFにしました。',0)
+  end
+  A.data=data;A.stale=false;Live.dirty=true;Live.latest=row;Live.lastPacketAt=R.time_precise();Live.phase='writing';Live.wake()
+end
+function Live.pull(limit,final)
+  if not Live.base then return end
+  Live.select_memory();local base=Live.base
+  assert(R.gmem_read(base)==Live.token,'リアルタイム測定の接続が失われました。')
+  if R.gmem_read(base+8)>0 then
+    assert(R.gmem_read(base+9)==Live.protocol,'リアルタイム測定JSFXの通信形式が一致しません。測定をOFFにしました。')
+  end
+  local head=R.gmem_read(base+3);local epoch=R.gmem_read(base+5)
+  assert(Core.finite(head) and head>=0 and head%1==0 and head<2^45,'リアルタイム測定データが不正です。')
+  if head<Live.readSeq then Live.readSeq=0;Live.finish_run() end
+  if head-Live.readSeq>512 then Live.readSeq=head-512;Live.finish_run();Live.message('測定データの受信が遅れた区間は空白として保持します。',true) end
+  local stop=min(head,Live.readSeq+512)
+  for seq=Live.readSeq+1,stop do
+    local at=base+64+((seq-1)%512)*8
+    if R.gmem_read(at)~=seq then break end
+    local p={epoch=R.gmem_read(at+1),time=R.gmem_read(at+2),energy=R.gmem_read(at+3),raw=R.gmem_read(at+4),peak=R.gmem_read(at+5),srate=R.gmem_read(at+6)}
+    if R.gmem_read(at)~=seq or R.gmem_read(at+7)~=Live.token then break end
+    if p.epoch==epoch or final then
+      assert(Core.finite(p.time) and Core.finite(p.energy) and p.energy>=0 and Core.finite(p.raw) and p.raw>=0
+        and Core.finite(p.peak) and p.peak>=0 and Core.finite(p.srate) and p.srate>=8000 and p.srate<=384000,'リアルタイム測定データが不正です。')
+      if not final and p.time>limit+.005 then break end
+      if not limit or p.time<=limit+.005 then Live.accept(p) end
+    end
+    Live.readSeq=seq
+  end
+end
+function Live.stop(message)
+  Live.enabled=false
+  if Live.base then
+    Live.select_memory();if R.gmem_read(Live.base)==Live.token then R.gmem_write(Live.base+2,0) end
+    if Live.project==R.EnumProjects(-1,'') then
+      local route=Live.route_for_master(Live.project)
+      if route and Live.route and route.index==Live.route.index and route.channel==Live.route.channel then
+        local ok,err=pcall(Live.pull,Live.lastPos,true);if not ok then BLT.logError(err) end
+      end
+    end
+  end
+  local ok,err=pcall(Live.finish_run);if not ok then Live.run=nil;Live.previous=nil;BLT.logError(err) end
+  local disconnected,why=pcall(Live.disconnect);if not disconnected then BLT.logError(why);Live.release_slot() end
+  local saved=Live.save();Live.phase='off';Live.wasPlaying=false;Live.latest=nil
+  if message and saved and not Live.noticeBad then Live.message(message,false) else Live.wake() end
+  return saved
+end
+function Live.toggle()
+  if Live.enabled then Live.stop('リアルタイム測定をOFFにしました。グラフは保持します。');return end
+  if A.job then return end
+  Live.notice=nil;Live.noticeBad=false
+  local ok,err=xpcall(function()
+    local required={'gmem_attach','gmem_read','gmem_write','TrackFX_AddByName','TrackFX_GetFXGUID','TrackFX_GetNamedConfigParm','TrackFX_GetRecCount',
+      'TrackFX_SetParam','TrackFX_GetParam','TrackFX_Delete','GetTrackNumSends','GetTrackSendInfo_Value',
+      'TrackFX_GetRecChainVisible','TrackFX_Show','TrackFX_SetPinMappings','TrackFX_GetPinMappings','GetNumAudioOutputs','GetMasterMuteSoloFlags'}
+    for _,name in ipairs(required) do assert(type(R[name])=='function','リアルタイム測定に必要なREAPER APIがありません。REAPERを更新してください。') end
+    assert(not A.historyBlocked,A.historyProblem or '保存グラフを復元できません。元のデータは保持しています。')
+    set_graph_track_visible(true)
+    R.PreventUIRefresh(1)
+    Live.connecting=true
+    local connected,why=xpcall(Live.connect,debug.traceback)
+    R.PreventUIRefresh(-1)
+    if not connected then error(why,0) end
+    Live.connecting=nil;Live.enabled=true;Live.phase='waiting';Live.lastPacketAt=nil;Live.lastPos=nil
+    Live.wake()
+  end,debug.traceback)
+  if not ok then Live.stop();Live.message(public_error(err),true) end
+end
+function Live.check_connection()
+  local host=R.GetMasterTrack(A.project)
+  assert(host and R.ValidatePtr2(A.project,host,'MediaTrack*'),'マスタートラックを取得できません。')
+  local idx=Live.find_fx(host,Live.guid)
+  assert(idx and Live.is_meter(host,idx),'リアルタイム測定用FXが削除または移動されました。')
+  assert(idx==0x1000000,'モニターFXの順序が変更されたため、測定をOFFにしました。')
+  assert(R.TrackFX_GetEnabled(host,idx) and not R.TrackFX_GetOffline(host,idx),'リアルタイム測定用FXが無効です。')
+  assert(R.TrackFX_GetParam(host,idx,0)==Live.slot and R.TrackFX_GetParam(host,idx,1)==Live.token,'測定用JSFXの設定に失敗しました。')
+  for output=0,1 do for pin=0,1 do
+    local lo,hi=Live.pin_mask(Live.route.channel+pin);local a,b=R.TrackFX_GetPinMappings(host,idx,output,pin)
+    assert((a&0xffffffff)==lo and (b&0xffffffff)==hi,'測定用JSFXのチャンネルが変更されたため、測定をOFFにしました。')
+  end end
+end
+
+function Live.tick(now)
+  if not Live.enabled then return end
+  local ok,err=xpcall(function()
+    assert(A.project==Live.project and S.source==Live.source,'測定先が変更されたため、リアルタイム測定をOFFにしました。')
+    Live.select_memory();assert(R.gmem_read(Live.base)==Live.token,'リアルタイム測定の接続が失われました。')
+    R.gmem_write(Live.base+1,now)
+    if now>=(Live.checkAt or 0) then Live.check_connection();Live.checkAt=now+.5 end
+    if R.gmem_read(Live.base+8)>0 then
+      assert(R.gmem_read(Live.base+9)==Live.protocol,'リアルタイム測定JSFXの通信形式が一致しません。測定をOFFにしました。')
+    end
+    local errorCode=R.gmem_read(Live.base+7)
+    assert(errorCode~=1,'音声に不正な値があるため、リアルタイム測定をOFFにしました。')
+    assert(errorCode~=2,'リアルタイム測定では標準的な8～384 kHzのサンプルレートを使用してください。')
+    local playing=(R.GetPlayStateEx(A.project)&1)~=0
+    local ready=Media.ready();local rate=R.Master_GetPlayRate(A.project)
+    local revision=R.GetProjectStateChangeCount(A.project)
+    local route,routeWhy
+    if revision~=Live.routeRevision or now>=(Live.routeAt or 0) then
+      route,routeWhy=Live.route_for_master(A.project)
+      Live.routeRevision=revision;Live.routeAt=now+.1;Live.checkedRoute=route;Live.checkedRouteProblem=routeWhy
+    else route,routeWhy=Live.checkedRoute,Live.checkedRouteProblem end
+    local routeOK=route and route.channel==Live.route.channel and route.index==Live.route.index
+    if not routeOK then
+      R.gmem_write(Live.base+2,0)
+      Live.readSeq=R.gmem_read(Live.base+3)
+      Live.finish_run();Live.save()
+      if Live.phase~='routing' then R.gmem_write(Live.base+4,R.gmem_read(Live.base+4)+1) end
+      Live.wasPlaying=false;Live.routeProblem=routeWhy or 'ハードウェア出力の経路が変わりました。LIVEをOFFにして再度ONにしてください。'
+      if Live.phase~='routing' then Live.phase='routing';Live.wake() end
+      return
+    end
+    Live.routeProblem=nil
+    local allowed=playing and ready and math.abs(rate-1)<1e-6
+    R.gmem_write(Live.base+2,allowed and 1 or 0)
+    if allowed then
+      local pos=R.GetPlayPositionEx(A.project)
+      Live.lastPos=pos;Live.pull(pos,false)
+      if not Live.wasPlaying then Live.startedAt=now end
+      local phase=now-(Live.lastPacketAt or Live.startedAt)>2 and 'signal' or (Live.run and 'writing' or 'waiting')
+      if phase~=Live.phase then Live.phase=phase;Live.wake() end
+    else
+      if Live.wasPlaying then
+        Live.pull(Live.lastPos,true);Live.finish_run();Live.save()
+        Live.select_memory();R.gmem_write(Live.base+4,R.gmem_read(Live.base+4)+1)
+        Live.readSeq=R.gmem_read(Live.base+3)
+      end
+      local phase=not ready and 'offline' or math.abs(rate-1)>=1e-6 and 'rate' or 'waiting'
+      if phase~=Live.phase then Live.phase=phase;Live.wake() end
+    end
+    Live.wasPlaying=allowed
+  end,debug.traceback)
+  if not ok then Live.stop();Live.message(public_error(err),true) end
+end
+function Live.status()
+  if Live.noticeBad then return Live.notice,true end
+  if Live.enabled then
+    if Live.phase=='routing' then return Live.routeProblem,true end
+    if Live.phase=='rate' then return 'リアルタイム待機：プロジェクトの再生速度を1.0にしてください。',true end
+    if Live.phase=='offline' then return 'リアルタイム待機：音声のオンライン復帰を待っています。',false end
+    if Live.phase=='signal' then return '測定信号を待っています。音声デバイス・モニターFXを確認してください。',true end
+    return Live.phase=='writing' and 'リアルタイム描画中：100 ms単位で追記しています。' or 'リアルタイムON：再生するとグラフを記録します。',false
+  end
+  return Live.notice or 'リアルタイムOFF：記録したグラフを表示しています。',false
+end
+function Live.prepare_offline()
+  if Live.enabled then if not Live.stop() then return false end
+  else Live.finish_run();if not Live.save() then return false end end
+  Live.notice=nil;Live.noticeBad=false
+  return true
+end
+function Live.restore_after_measure(job)
+  local resume=job.resumeLive;job.resumeLive=nil
+  if not resume or Live.enabled or A.job or A.closed or A.requestClose
+    or A.project~=job.project or R.EnumProjects(-1,'')~=job.project then return end
+  local message,bad=Live.notice,Live.noticeBad
+  Live.toggle()
+  if Live.enabled and bad then Live.message(message,true) end
 end
 
 local function value(v) return not v and '—' or (v<=-149 and '-inf' or string.format('%.1f',v)) end
@@ -2029,6 +2905,7 @@ local function ltext(s,x,y,w,c)
   R.JS_LICE_SetFontColor(A.font,argb(c or C.muted))
   R.JS_LICE_DrawText(draw_bitmap(),A.font,s,#s,floor(x),floor(y),floor(x+w),floor(y+20))
 end
+-- Arrange graph
 local function chart(width,height,first,last,mx)
   R.JS_LICE_Clear(draw_bitmap(),argb(C.bg))
   local top,bottom=48,height-30
@@ -2042,29 +2919,44 @@ local function chart(width,height,first,last,mx)
   local colors={s=C.ice,m=C.mint,i=C.purple,rms=C.gold,peak=C.faint}
   local data=A.data
   if data then
-   local whole=data
+   local whole=data;local ranges={}
+   -- Adjacent history segments share one guide layer; their moving borders do not restart dashes.
+   for _,seg in ipairs(whole.segments) do
+     local ax,bx=max(0,xx(seg.first)),min(width,xx(seg.last))
+     if bx>ax then
+       local previous=ranges[#ranges]
+       if previous and ax<=previous[2]+1e-6 then previous[2]=max(previous[2],bx)
+       else ranges[#ranges+1]={ax,bx} end
+     end
+   end
+   for _,range in ipairs(ranges) do
+     local ax,bx=range[1],range[2]
+     lrect(ax,top,bx-ax,bottom-top,C.accent,.035)
+     for _,key in ipairs({'s','m','i'}) do
+       if S.show[key] then
+         local target=S.targets[key]
+         for j,v in ipairs({target[1]-target[2],target[1]+target[2]}) do
+           if v>=S.lo and v<=S.hi and (j==1 or target[2]~=0) then
+             local y=yy(v)
+             for x=floor(ax/14)*14,bx,14 do
+               local left,right=max(ax,x),min(bx,x+5)
+               if right>left then lline(left,y,right,y,colors[key],.23) end
+             end
+           end
+         end
+       end
+     end
+   end
    for _,data in ipairs(whole.segments) do
     local ax,bx=max(0,xx(data.first)),min(width,xx(data.last))
     if bx>ax then
-      -- Retained and newly measured ranges use the same visual treatment.
-      lrect(ax,top,bx-ax,bottom-top,C.accent,.035)
-      for _,key in ipairs({'s','m','i'}) do
-        if S.show[key] then
-          local target=S.targets[key]
-          for _,v in ipairs({target[1]-target[2],target[1]+target[2]}) do
-            if v>=S.lo and v<=S.hi then
-              for x=ax,bx,14 do lline(x,yy(v),min(bx,x+5),yy(v),colors[key],.23) end
-            end
-          end
-        end
-      end
-      -- Peak-preserving min/max pyramid limits redraw cost to roughly the pixel width.
       local spp=(last-first)*10/width
       local lev,span=1,1
       while span*2<=spp and span*2<#data.rows do lev=lev+1; span=span*2 end
       for _,key in ipairs(Core.metrics) do
         if S.show[key] then
           local buckets=data.lod[key][lev]
+          if key=='i' and Live.run and data.first>=Live.run.last-1e-8 then buckets={} end
           local from=max(1,floor((first-data.origin)*10/span))
           local to=min(#buckets//2,math.ceil((last-data.origin)*10/span)+1)
           local px,py,pbad
@@ -2081,8 +2973,7 @@ local function chart(width,height,first,last,mx)
               local y=yy((low+high)*.5); local color=bad and C.red or colors[key]
               local pathColor=(bad or pbad) and C.red or colors[key]
               local pathAlpha=(key=='s' and .98 or .78)
-              -- Retain neighbouring offscreen samples, then clip the connecting line.
-              -- A zoomed viewport can lie entirely between two samples.
+
               if px and x>=ax and px<=bx and x>px then
                 local left,right=max(ax,px),min(bx,x)
                 if right>left then
@@ -2098,19 +2989,19 @@ local function chart(width,height,first,last,mx)
       end
     end
    end
-  else ltext('Select a time range, then MEASURE.',65,top+24,width-90,C.muted) end
+  else ltext(Live.enabled and 'Press PLAY to record live loudness.' or 'Select a time range, or enable REAL-TIME.',65,top+24,width-90,C.muted) end
   for _,v in ipairs(ticks) do
     lrect(5,yy(v)-8,35,17,C.bg,.94); ltext(string.format('%.5g',v),8,yy(v)-8,30,C.muted)
   end
   lrect(0,0,width,28,C.panel)
-  local measuredName=data and data.name or select(2,source_track())
+  local measuredName=source_name()
   ltext('LOUDNESS TRACE  ·  '..tostring(measuredName or 'NO TARGET'),12,5,max(165,width-390),C.ice)
   if width>680 then
     local tags={}
     for _,q in ipairs({{'s','S'},{'m','M'},{'i','I RUN'},{'rms','RMS'},{'peak','PEAK'}}) do if S.show[q[1]] then tags[#tags+1]=q[2] end end
     ltext(table.concat(tags,'  /  '),max(300,width-365),5,180,C.muted)
   end
-  if width>370 then ltext(data and (A.stale and 'SAVED / RE-MEASURE' or 'MEASURED') or 'NO MEASUREMENT',width-185,5,180,A.stale and C.gold or C.faint) end
+  if width>370 then ltext(Live.enabled and (Live.phase=='writing' and 'LIVE / RECORDING' or 'LIVE / WAIT') or (data and (A.stale and 'SAVED / RE-MEASURE' or 'MEASURED') or 'NO MEASUREMENT'),width-185,5,180,Live.enabled and C.mint or A.stale and C.gold or C.faint) end
   ltext((S.show.rms or S.show.peak) and 'LUFS / dBFS' or 'LUFS',7,height-20,110,C.faint)
   for t=math.ceil(first/step)*step,last,step do
     local x=xx(t); if x>115 and x<width-64 then ltext(Core.clock(t),x+3,height-20,85,C.faint) end
@@ -2123,15 +3014,32 @@ local function chart(width,height,first,last,mx)
   if mx and data then
     local t=Core.x_time(mx,first,last,width); local r=Core.row(data,t)
     if r then
-      A.hover={time=t,s=r.s,m=r.m,i=r.i,rms=r.rms,peak=r.peak}
+      local iv=not (Live.run and t>Live.run.last+1e-8) and r.i or nil
+      A.hover={time=t,s=r.s,m=r.m,i=iv,rms=r.rms,peak=r.peak}
       lline(mx,28,mx,bottom,C.text,.4)
-      local label=Core.clock(t)..'   S '..value(r.s)..'   M '..value(r.m)..'   I RUN '..value(r.i)..' LUFS'
+      local label=Core.clock(t)..'   S '..value(r.s)..'   M '..value(r.m)..'   I RUN '..value(iv)..' LUFS'
       local boxw=min(555,width-16); local bx=Core.clamp(mx+14,8,max(8,width-boxw-8))
       lrect(bx,29,boxw,19,C.panel); ltext(label,bx+7,29,boxw-12,C.text)
     end
   end
 end
 
+function Core.present_graph(hwnd,bitmap,x1,x2,destY,sourceY,height)
+  if x2<=x1 or height<=0 then return end
+  if Platform.windows and R.JS_GDI_GetClientDC and R.JS_GDI_ReleaseDC and R.JS_LICE_GetDC and R.JS_GDI_Blit then
+    local dc=R.JS_GDI_GetClientDC(hwnd)
+    if dc then
+      local ok,err=pcall(function()
+        local source=R.JS_LICE_GetDC(bitmap);assert(source,'Graph bitmap DC unavailable')
+        R.JS_GDI_Blit(dc,x1,destY,source,x1,sourceY,x2-x1,height,'SRCCOPY')
+      end)
+      R.JS_GDI_ReleaseDC(dc,hwnd)
+      if ok then return end
+      BLT.logError(err)
+    end
+  end
+  R.JS_Window_InvalidateRect(hwnd,x1,destY,x2,destY+height,false)
+end
 local function overlay(now)
   if not S.visible then unlink(); return end
   if not valid_track() then unlink(); return end
@@ -2184,22 +3092,13 @@ local function overlay(now)
   if (R.GetPlayStateEx(A.project)&1)==1 then cursor=R.GetPlayPositionEx(A.project) end
   local cursorPixel=floor(Core.time_x(cursor,first,last,width))
 
-  -- REAPER can draw a native vertical guide that follows the *mouse pointer* in the
-  -- arrange view.  Lua does not necessarily observe every intermediate pointer position:
-  -- during fast motion the sampled X coordinate may jump tens or hundreds of pixels.
-  -- Repairing only the previous guide stripe therefore leaves holes at skipped positions.
-  --
-  -- Keep the non-flickering static composite, but repair the entire swept X range between
-  -- the previous and current samples.  A second delayed pass covers REAPER's later erase,
-  -- and one final merged sweep is repaired shortly after motion stops.
   local pointerInArrange=clientMouseX>=0 and clientMouseX<width and clientMouseY>=0 and clientMouseY<vh and R.JS_Window_FromPoint(mouseX,mouseY)==hwnd
   local arrangeMouseX=pointerInArrange and floor(clientMouseX) or nil
   local function queue_mouse_repair(x1,x2,delay)
     if x1==nil or x2==nil then return end
     if x2<x1 then x1,x2=x2,x1 end
     local q=A.mouseRepairQueue
-    -- A swept range already covers all skipped native-guide positions.  Keep enough
-    -- delayed work for very fast motion without allowing an unbounded repaint backlog.
+
     while #q>=128 do table.remove(q,1) end
     q[#q+1]={due=now+(delay or .030),x1=x1,x2=x2}
   end
@@ -2213,7 +3112,7 @@ local function overlay(now)
     if A.lastArrangeMouseX~=nil and arrangeMouseX~=A.lastArrangeMouseX then
       local a=min(A.lastArrangeMouseX,arrangeMouseX)-7
       local b=max(A.lastArrangeMouseX,arrangeMouseX)+8
-      -- Fast first repair plus a delayed pass after REAPER has erased the old guide.
+
       queue_mouse_repair(a,b,.020)
       queue_mouse_repair(a,b,.075)
       extend_mouse_sweep(a,b)
@@ -2226,15 +3125,11 @@ local function overlay(now)
     extend_mouse_sweep(a,b)
     A.lastArrangeMouseX=nil
   end
-  -- After the pointer has been still for a moment, repair the union of the complete
-  -- recent path once more.  This catches native guide positions that were drawn between
-  -- two Lua defer samples during very fast motion.
+
   if A.mouseSweepMin and A.lastMouseMoveAt and now-A.lastMouseMoveAt>=.050 then
     local a=A.mouseSweepMin-4
     local b=A.mouseSweepMax+4
-    -- Fast pointer motion can make REAPER draw/erase guide positions between Lua defer
-    -- samples.  The merged sweep therefore gets several *post-motion* repairs.
-    -- These are event-driven rather than periodic, so idle-time flicker does not return.
+
     queue_mouse_repair(a,b,.005)
     queue_mouse_repair(a,b,.085)
     queue_mouse_repair(a,b,.180)
@@ -2242,26 +3137,46 @@ local function overlay(now)
     A.mouseSweepMin=nil; A.mouseSweepMax=nil; A.lastMouseMoveAt=nil
   end
 
-  local key=table.concat({width,height,first,last,A.revision,tostring(A.stale),mx or -1,cursorPixel},":")
+  local contentKey=table.concat({width,height,first,last,A.revision,tostring(A.stale),mx or -1},":")
+  local key=contentKey..":"..cursorPixel
   local layout=table.concat({width,height,destY,visible,sourceY},":")
-  -- Position and clipping must follow scrolling even inside the content frame limit.
+
   local redraw=key~=A.cache and (A.cache=="" or now-A.lastPaint>=.05)
+  local cursorOnly=Platform.mac and redraw and A.cache~="" and A.linked and layout==A.layoutCache and A.graphContentKey==contentKey
+  local previousCursor=A.graphCursorPixel
+  local dirtyLeft,dirtyRight
+  local function present(left,right)
+    if right<=left then return end
+    if Platform.mac then
+      dirtyLeft=dirtyLeft and min(dirtyLeft,left) or left;dirtyRight=dirtyRight and max(dirtyRight,right) or right
+    else Core.present_graph(hwnd,A.bitmap,left,right,destY,sourceY,visible) end
+  end
   if redraw then
     A.drawBitmap=A.backBitmap
     chart(width,height,first,last,mx)
     A.drawBitmap=nil
     R.JS_LICE_Blit(A.bitmap,0,0,A.backBitmap,0,0,width,height,1,"COPY")
-    A.cache=key; A.lastPaint=now
+    A.cache=key;A.lastPaint=now;A.graphContentKey=contentKey;A.graphCursorPixel=cursorPixel
   end
-  if redraw or not A.linked or layout~=A.layoutCache then
-    local code=R.JS_Composite(hwnd,0,destY,width,visible,A.bitmap,0,sourceY,width,visible,true)
+  local moved=not A.linked or layout~=A.layoutCache
+  if moved then
+    local old=A.paintRect
+    local code=R.JS_Composite(hwnd,0,destY,width,visible,A.bitmap,0,sourceY,width,visible,false)
     if code~=1 then error("JS_Composite failed: "..tostring(code)) end
-    A.linked=true; A.layoutCache=layout
-    if Platform.mac then R.JS_Window_InvalidateRect(hwnd,0,destY,width,destY+visible,false) end
+    A.linked=true;A.layoutCache=layout;A.paintRect={top=destY,bottom=destY+visible,width=width}
+
+    if old then
+      if old.top<destY then R.JS_Window_InvalidateRect(hwnd,0,old.top,old.width,min(old.bottom,destY),false) end
+      if old.bottom>destY+visible then R.JS_Window_InvalidateRect(hwnd,0,max(old.top,destY+visible),old.width,old.bottom,false) end
+    end
+  end
+  if redraw or moved then
+    if cursorOnly and not moved and previousCursor then
+
+      present(max(0,min(previousCursor,cursorPixel)-3),min(width,max(previousCursor,cursorPixel)+4))
+    else present(0,width) end
   end
 
-  -- Repair due swept ranges.  Do not assume the queue is sorted: delayed second passes
-  -- are interleaved with newer first passes during continuous motion.
   if A.linked and A.mouseRepairQueue and #A.mouseRepairQueue>0 then
     local processed=0
     local i=1
@@ -2270,13 +3185,15 @@ local function overlay(now)
       if r.due<=now then
         table.remove(A.mouseRepairQueue,i)
         local x1=max(0,floor(r.x1)); local x2=min(width,math.ceil(r.x2))
-        if x2>x1 then R.JS_Window_InvalidateRect(hwnd,x1,destY,x2,destY+visible,false) end
+        if x2>x1 then present(x1,x2) end
         processed=processed+1
       else
         i=i+1
       end
     end
   end
+
+  if dirtyLeft then Core.present_graph(hwnd,A.bitmap,dirtyLeft,dirtyRight,destY,sourceY,visible) end
 end
 
 local scale,ox,oy=1,0,0
@@ -2306,40 +3223,26 @@ for k,v in pairs(C) do
     C_DEFAULT[k]={v[1],v[2],v[3]}
   end
 end
+-- Chameleon palette
 local Chameleon={
   enabled=R.GetExtState(SECTION,"chameleon")=="1",
   signature=nil,poll_at=0,poll_interval=3.0,
 }
 
--- CHAMELEON THEME ADAPTER
---
--- Porting contract for other BLT scripts:
---   Required palette tables : C, C_DEFAULT
---   Optional chrome colors   : Chrome, CHROME_DEFAULT
---   Persistence              : SECTION / ExtState key "chameleon"
---   Host hooks               : notice(), wake_visuals(), redraw_dirty
---   UI integration           : Chameleon.enabled / Chameleon.set(...)
---   Main-loop integration    : Chameleon.tick(now)
---
--- Keep this block intact when porting; normally only the title-bar button
--- placement and the host hooks need adapting in another BLT script.
 Chameleon.keys={
-  -- Main/surface colors
+
   "col_main_bg2","col_main_bg","col_arrangebg","col_tracklistbg","col_mixerbg",
   "genlist_bg","col_tl_bg","col_trans_bg","col_tr1_bg","col_tr2_bg",
   "col_main_editbk","col_transport_editbk","col_buttonbg",
 
-  -- Text colors
   "col_main_text2","col_main_text","genlist_fg","col_tcp_text",
   "col_toolbar_text","col_toolbar_text_on","col_tl_fg","col_tl_fg2","col_trans_fg",
 
-  -- Selection / active / accent colors
   "col_seltrack","col_seltrack2","genlist_selbg",
   "col_tl_bgsel","toolbararmed_color","col_main_resize2",
   "selitem_dot","selitem_tag","activetake_tag",
   "col_routinghl1","col_routinghl2","track_lanesolo_tabcol",
 
-  -- REAPER's own highlight / shadow / separators
   "col_main_3dhl","col_main_3dsh","genlist_grid","col_toolbar_frame",
   "col_tr1_divline","col_tr2_divline","docker_shadow",
 }
@@ -2399,15 +3302,13 @@ local function dominant_surface(colors,fallback)
   return ccopy(best.c)
 end
 local function generated_text(bg)
-  -- Text polarity follows the ACTUAL palette background, not a theme text slot.
-  -- This guarantees black-ish text on light themes and white-ish text on dark themes.
   local l=clum(bg)
   if l>=0.56 then
     return {0.070,0.075,0.082},false
   elseif l<=0.44 then
     return {0.935,0.945,0.958},true
   end
-  -- Mid-grey themes: choose the side with the larger luminance separation.
+
   if l>=0.50 then return {0.075,0.080,0.088},false end
   return {0.935,0.945,0.958},true
 end
@@ -2416,11 +3317,11 @@ local function fit_accent_to_bg(accent,bg,text_is_light)
   local delta=math.abs(clum(out)-clum(bg))
   if delta>=0.17 then return out end
   if text_is_light then
-    -- Dark background: lift the accent without washing it toward full white.
+
     local target=math.min(.78,clum(bg)+.28)
     return cshift_luma(out,target)
   end
-  -- Light background: darken the accent so controls remain visible.
+
   local target=math.max(.16,clum(bg)-.30)
   return cshift_luma(out,target)
 end
@@ -2494,7 +3395,7 @@ end
 local function usable_theme_text(map,bg,keys,generated)
   local c=best_contrast_color(map,bg,keys,.28)
   if not c then return ccopy(generated) end
-  -- Never let a theme text slot invert into poor contrast after user transforms.
+
   if math.abs(clum(c)-clum(bg))<.28 then return ccopy(generated) end
   return c
 end
@@ -2517,7 +3418,7 @@ local function best_theme_accent(map,bg)
       if keys[i]=="genlist_selbg" or keys[i]=="col_seltrack" or keys[i]=="toolbararmed_color" then
         score=score+.12
       end
-      -- Ignore almost-background colors unless no better candidate exists.
+
       if delta<.035 and sat<.035 then score=score-.35 end
       if score>best_score then best,best_score=c,score end
     end
@@ -2535,9 +3436,6 @@ local function theme_snapshot()
   return map,table.concat(raw,":")
 end
 local function build_chameleon_palette(map)
-  -- Derive a stable BLT palette from REAPER's current theme.
-  -- Missing/unsupported keys are ignored and each semantic role has a safe
-  -- fallback, which is important for custom and older themes.
   local sampled_bg=dominant_surface({
     map.col_main_bg2,
     map.col_main_bg,
@@ -2577,8 +3475,6 @@ local function build_chameleon_palette(map)
     if clum(panel)>=clum(bg)-.022 then panel=cshift_luma(panel,math.max(.06,clum(bg)-.038)) end
   end
 
-  -- Generated polarity remains the safety net; a readable theme text color can
-  -- contribute some hue/temperature without sacrificing contrast.
   local generated,text_is_light=generated_text(bg)
   local theme_text=usable_theme_text(map,bg,{
     "col_main_text2","col_main_text","genlist_fg","col_tcp_text",
@@ -2598,8 +3494,6 @@ local function build_chameleon_palette(map)
     accent=cshift_luma(accent,math.max(.12,clum(bg)-.28))
   end
 
-  -- Use REAPER's own highlight/shadow roles when available, but only as a
-  -- restrained contribution so an unusual theme cannot destroy readability.
   local theme_hi=theme_edge_role(map,bg,dark,true)
   local theme_sh=theme_edge_role(map,bg,dark,false)
   local edge_base=cmix(bg,textcol,dark and .20 or .18)
@@ -2631,12 +3525,15 @@ local function build_chameleon_palette(map)
 
   out.warn=fit_accent_to_bg(C_DEFAULT.warn,bg,text_is_light)
   out.red=fit_accent_to_bg(C_DEFAULT.red,bg,text_is_light)
+  out.gold=fit_accent_to_bg(C_DEFAULT.gold,bg,text_is_light)
+  out.purple=fit_accent_to_bg(C_DEFAULT.purple,bg,text_is_light)
   return out
 end
 
 function Chameleon.restore()
   for k,v in pairs(C_DEFAULT) do C[k]=ccopy(v) end
   C.accent2=C.ice;C.edge2=C.edge
+  if BLT.chrome then BLT.chrome.mint=C.mint;BLT.chrome.red=C.red end
   A.cache=""
 end
 
@@ -2654,7 +3551,9 @@ function Chameleon.apply(palette)
   C.mint=ccopy(palette.focus2)
   C.warn=ccopy(palette.warn)
   C.red=ccopy(palette.red)
+  C.gold=ccopy(palette.gold);C.purple=ccopy(palette.purple)
   C.accent2=C.ice;C.edge2=C.edge
+  if BLT.chrome then BLT.chrome.mint=C.mint;BLT.chrome.red=C.red end
   A.cache=""
 end
 
@@ -2675,11 +3574,9 @@ function Chameleon.set(on)
 
   if Chameleon.enabled then
     Chameleon.refresh(true)
-
   else
     Chameleon.restore()
     redraw_dirty=true
-
   end
   wake_visuals(R.time_precise())
 end
@@ -2690,9 +3587,6 @@ function Chameleon.tick(now)
   return Chameleon.refresh(false)
 end
 
--- Icon-only color separation.
--- The main UI palette remains untouched; this only keeps the three overlapping
--- Chameleon circles visually distinct even when a REAPER theme is nearly mono-hued.
 local function rgb_to_hsv(c)
   local r,g,b=c[1],c[2],c[3]
   local mx=math.max(r,g,b)
@@ -2739,11 +3633,9 @@ function Chameleon.compute_icon_colors()
   end
 
   local h,s,v=rgb_to_hsv(C.accent)
-  -- Only the icon gets a saturation floor; the actual BLT theme does not.
+
   s=math.max(s,.46)
 
-  -- Preserve the theme's base hue, but fan the other two colors away from it.
-  -- +/- 0.19 ~= 68 degrees: clearly different without turning into a rainbow badge.
   local c1=hsv_to_rgb(h,      s,                v)
   local c2=hsv_to_rgb(h+.19, math.max(.42,s*.90), v)
   local c3=hsv_to_rgb(h-.19, math.max(.42,s*.86), v)
@@ -2758,11 +3650,11 @@ function Chameleon.icon_colors()
  Chameleon.bltIcon={x,y,z,on=Chameleon.enabled,r=a[1],g=a[2],b=a[3]};return x,y,z
 end
 
+-- Controller widgets
 local function color(c,a) gfx.set(c[1],c[2],c[3],a or 1) end
 local function rect(x,y,w,h,c,a) color(c,a); gfx.rect(ox+x*scale,oy+y*scale,w*scale,h*scale,1) end
 local function line(x,y,x2,y2,c,a) color(c,a); gfx.line(ox+x*scale,oy+y*scale,ox+x2*scale,oy+y2*scale,1) end
 local function disc(x,y,r,c,a) color(c,a); gfx.circle(ox+x*scale,oy+y*scale,r*scale,1,1) end
-
 local function set_font(size,kind,bold) BLT.font(size,kind,bold,scale,Platform.bodyFaces) end
 local function measure_text(text,size,kind,bold) set_font(size,kind,bold);local w,h=BLT.metricsFor(Language.message(text));return w/scale,h/scale end
 local function text(s,x,y,size,c,w,kind,bold,literal)
@@ -2871,9 +3763,7 @@ local function button(id,label,x,y,w,h,fn,primary,selected,eyebrow,tone)
       end
     end
     if A.collapsed and id=='measure' then
-      -- Compact controller: the state line already shows ANALYZING + progress.
-      -- Keep the button to one font state so it does not reintroduce the
-      -- SETFONT-heavy path that was previously optimized out.
+
       local tw,th=measure_text(label,12.5,1,true)
       text(label,x+(w-tw)/2,y+(h-th)/2,12.5,C.text,tw+2,1,true)
     else
@@ -2919,11 +3809,8 @@ local function button(id,label,x,y,w,h,fn,primary,selected,eyebrow,tone)
   widgets[#widgets+1]={id=id,x=x,y=y-shift,w=w,h=h,fn=fn}
 end
 
-local function source_selector(name,x,y,w,h,fn)
-  local id='source'
-  local hover=A.active and inside(x,y,w,h)
-  local a=animate('source_selector',hover and 1 or .32)
-  local shift=A.pressed==id and 1.5 or 0;y=y+shift
+local function source_display(name,x,y,w,h)
+  local a=.32
   gradient(x,y,w,h,C.deep,C.field,.56+.10*a,.98)
   rect(x+2,y+2,w-4,h-4,C.accent,.035+.025*a)
   line(x+10,y,x+w-12,y,C.ice,.58+.22*a)
@@ -2935,9 +3822,7 @@ local function source_selector(name,x,y,w,h,fn)
   line(x+24,cy,x+34,cy,C.ice,.48)
   line(x+31,cy-4,x+35,cy,C.ice,.48);line(x+31,cy+4,x+35,cy,C.ice,.48)
   text('解析ソース',x+45,y+(h-15)/2-1,15,C.ice,92,1,true)
-  text(name,x+140,y+(h-16)/2-1,16,C.text,w-188,1,true,true)
-  text('CHANGE',x+w-57,y+(h-8)/2-1,8,C.faint,48,2,true)
-  widgets[#widgets+1]={id=id,x=x,y=y-shift,w=w,h=h,fn=fn}
+  text(name,x+140,y+(h-16)/2-1,16,C.text,w-156,1,true,true)
 end
 
 local function temp_file_exists(path)
@@ -2985,7 +3870,7 @@ local function clean_temp(job)
   local paths,seen={},{}
   local function add(path) if path and path~='' and not seen[path] then seen[path]=true;paths[#paths+1]=path end end
   add(job.path)
-  -- Only files bearing this job's unique GUID; never remove the temp directory.
+
   if job.dir and job.prefix then for _,path in ipairs(prefix_temp_files(job.dir,job.prefix)) do add(path) end end
   for _,path in ipairs(paths) do if not remove_temp_file(path) then queue_temp_delete(path) end end
   retry_temp_deletes(true)
@@ -3043,20 +3928,21 @@ local function trigger_analysis_finish_burst()
   end
 end
 
-local function cancel_job()
+local function cancel_job(restoreLive)
   if not A.job then return end
   local job=A.job; A.job=nil; clean_temp(job)
+  if restoreLive~=false then Live.restore_after_measure(job) end
 end
 local function measure()
+ if not Media.ready(true,true) then return end
   if A.job then return end
   if R.GetPlayStateEx(A.project)~=0 then return end
   if math.abs(R.Master_GetPlayRate(A.project)-1)>.000001 then return end
   local first,last=R.GetSet_LoopTimeRange2(A.project,false,false,0,0,false)
   if last-first<.4 then return end
   if last-first>12600 then return end
-  local source,name=source_track()
-  if S.source~='master' and not source then return end
-  if source and source==A.track then return end
+  if A.historyBlocked then Live.message(A.historyProblem or '保存グラフを復元できません。元のデータは保持しています。',true);return end
+  local name=source_name()
   local duration=last-first
   if duration>TEMP_WARNING_SECONDS then
     local estimate=duration*TEMP_BYTES_PER_SECOND
@@ -3064,20 +3950,25 @@ local function measure()
     if Language.mb(message,'LOUDNESS TRACE | 長尺解析',1)~=1 then return end
   end
   set_graph_track_visible(true)
-  local job={project=A.project,first=first,last=last,source=S.source,name=name,progress=0,phase='prepare'}
+  local job={project=A.project,first=first,last=last,source=S.source,name=name,progress=0,phase='prepare',resumeLive=Live.enabled}
   A.job=job
+  local prepared,ready=xpcall(Live.prepare_offline,debug.traceback)
+  if not prepared or not ready then
+    cancel_job()
+    if not prepared then Live.message(public_error(ready),true) end
+    return
+  end
   job.co=coroutine.create(function()
-    -- Let the controller paint before opening REAPER's synchronous render window.
+
     coroutine.yield()
     assert(R.EnumProjects(-1,'')==job.project,'測定開始前にプロジェクトが切り替わりました。')
-    if source then assert(R.ValidatePtr2(job.project,source,'MediaTrack*'),'測定元トラックが削除されました。') end
     local current_first,current_last=R.GetSet_LoopTimeRange2(job.project,false,false,0,0,false)
     assert(math.abs(current_first-first)<=1e-9 and math.abs(current_last-last)<=1e-9,'測定開始前に時間選択が変更されました。')
     local base=Platform.tempDirectory()
     job.dir=base:gsub('[/\\]+$','')
     job.prefix='LoudnessTrace_'..R.genGuid():gsub('[^%w]','')
     job.phase='render'
-    job.path=Core.render(R,job.project,source,first,last,job.dir,job.prefix)
+    job.path=Core.render(R,job.project,first,last,job.dir,job.prefix)
     job.renderState=R.GetProjectStateChangeCount(job.project)
     job.file=assert(io.open(job.path,'rb'),'レンダーがキャンセルされたか、一時音声を開けません。')
     job.phase='analyze'
@@ -3089,8 +3980,7 @@ local function measure()
     local data=Core.analyze(job.file,last-first,tick)
     data.first,data.last,data.source,data.name=first,last,job.source,name
     job.file:close(); job.file=nil
-    -- Audio analysis no longer needs the rendered WAV. Delete the GUID-scoped temp
-    -- files immediately; normal completion/error/close cleanup retries harmlessly.
+
     clean_temp(job)
     data=Core.replace_range(A.data,data)
     job.prunedRows=Core.trim_history(data,MAX_HISTORY_ROWS)
@@ -3101,9 +3991,10 @@ end
 local function step_job()
   local job=A.job
   if not job then return end
+  if not Media.ready() then return end
   local ok,err=coroutine.resume(job.co)
   if not ok then
-    clean_temp(job); A.job=nil
+    cancel_job()
     Language.mb(public_error(err),'LOUDNESS TRACE | 解析',0); return
   end
   if coroutine.status(job.co)=='dead' then
@@ -3115,22 +4006,9 @@ local function step_job()
     A.data=job.result
     collectgarbage('step',800)
     A.stale=changed; A.revision=A.revision+1; A.baseline=R.GetProjectStateChangeCount(A.project)
-    if not saved then Language.mb(public_error(why),'LOUDNESS TRACE | 保存',0) end
+    if not saved then Live.dirty=true;Language.mb(public_error(why),'LOUDNESS TRACE | 保存',0) end
+    Live.restore_after_measure(job)
   end
-end
-local function choose_source()
-  if A.job then return end
-  gfx.x,gfx.y=gfx.mouse_x,gfx.mouse_y
-  local menu=(S.source=='master' and '!' or '')..'MASTER OUT 1/2|選択中のトラック / バスを指定'
-  local n=gfx.showmenu(Language.menu(menu))
-  if n==1 then S.source='master'
-  elseif n==2 then
-    if R.CountSelectedTracks(A.project)~=1 then return end
-    local tr=R.GetSelectedTrack(A.project,0)
-    if tr==A.track then return end
-    S.source=R.GetTrackGUID(tr)
-  else return end
-  save_settings();load_data();A.revision=A.revision+1;A.cache=''
 end
 
 local function icon(x,y)
@@ -3370,8 +4248,7 @@ local function auto_axis_range()
   for _,k in ipairs({'s','m','i','rms','peak'}) do if S.show[k] then enabled[#enabled+1]=k end end
   for _,seg in ipairs(data.segments) do
     local duration=seg.last-seg.first
-    -- Ignore the unstable opening portion. For long ranges allow up to 3 s to
-    -- settle; for short ranges preserve enough data to still derive a range.
+
     local settle=min(3.0,max(.5,duration*.16))
     local stableStart=seg.first+settle
     local added=0
@@ -3382,8 +4259,7 @@ local function auto_axis_range()
         end
       end
     end
-    -- Very short measurements may have no post-settle values; fall back to all
-    -- finite non-silence values rather than treating -inf as a graph boundary.
+
     if added==0 then
       for _,r in ipairs(seg.rows) do
         for _,k in ipairs(enabled) do push(r[k]) end
@@ -3456,10 +4332,6 @@ local function reset_window_size()
   if ok then BLT.position(hwnd,l,t,W,H+A.titleH,'','') end
 end
 
--- The POPUP style removes Windows' native resize frame together with the caption.
--- Re-create a thin resize hit area inside the client rectangle so the custom
--- title bar keeps its clean look. Bottom corners and straight edges remain draggable;
--- upper corners stay reserved for title-bar controls.
 local function resize_hit(mx,my)
   if A.collapsed or A.windowTransition then return nil end
   local w,h=gfx.w,gfx.h
@@ -3481,8 +4353,7 @@ local function resize_hit(mx,my)
   if nearB then return 'b' end
   return nil
 end
--- Match Windows' native resize feedback even though the standard frame is hidden.
--- Cursor IDs are the standard Windows IDC resize cursors loaded through js_ReaScriptAPI.
+
 local function resize_cursor_kind(mode)
   if not mode then return nil end
   if mode=='l' or mode=='r' then return 'we' end
@@ -3538,15 +4409,7 @@ local function update_resize()
   BLT.position(hwnd,floor(l+.5),floor(t+.5),max(A.minWindowW,floor(r-l+.5)),max(A.minWindowH,floor(b-t+.5)),'','')
 end
 
-local LOUDNESS_TOOLTIPS={
-  close="閉じる",
-  reset="ウィンドウサイズ初期化",
-  chameleon="カメレオンモード（配色をテーマへ擬態）",
-  fold="折りたたむ",
-}
-
 local function clear_loudness_tooltip() BLT.clearTooltip() end
-
 local function custom_titlebar() BLT.bar() end
 
 local function fold_control(id,x,y,w,h,upward,fn)
@@ -3638,8 +4501,7 @@ local function collapse_window()
   local hwnd=gfx_window_handle()
   if not hwnd then return end
   local dock,dx,dy,dw,dh=gfx.dock(-1,0,0,0,0)
-  -- A docked gfx window is owned by REAPER's docker and cannot be reduced to a
-  -- free compact bar without changing the user's docking layout.
+
   if dock and (dock&1)~=0 then
     Language.mb('ドッキング中はウィンドウを縮小できません。\nフローティング表示で使用してください。','LOUDNESS TRACE',0)
     return
@@ -3677,6 +4539,50 @@ local function expand_window()
   begin_window_transition('expand',from,target,.30)
 end
 
+function Live.button_motion(now)
+  local target=Live.enabled and 1 or 0
+  local u=Live.buttonState
+  if not u then u={value=target,target=target};Live.buttonState=u end
+  local previous=u.value
+  if u.started then
+    local t=Core.clamp((now-u.started)/.18,0,1);local ease=t*t*(3-2*t)
+    u.value=u.from+(u.target-u.from)*ease
+    if t>=1 then u.value=u.target;u.started=nil end
+  end
+  if target~=u.target then u.from=u.value;u.target=target;u.started=now;redraw_dirty=true end
+
+  if previous~=u.value then
+    redraw_dirty=true;if not u.started then next_draw_time=now end
+  end
+  return u.value,u.started~=nil
+end
+function Live.draw_button(x,y,w,h,compact)
+  local enabled=not A.job or Live.enabled
+  local hot=enabled and A.active and not BLT.blocked() and not A.titleMouseActive and inside(x,y,w,h)
+  local state=Live.button_motion(R.time_precise())
+  local accent=C.accent2 or C.ice
+  local shift=hot and A.pressed=='live' and (gfx.mouse_cap&1)~=0 and 1 or 0
+  local yy=y+shift
+  gradient(x,yy,w,h,C.panel,C.field,.74,.96)
+  if enabled and state>0 then rect(x+1,yy+1,w-2,h-2,C.accent,.055*state) end
+  if hot then rect(x+1,yy+1,w-2,h-2,C.accent,.065) end
+  line(x,yy,x+w,yy,enabled and accent or C.edge,enabled and (.25+.42*state) or .22)
+  line(x,yy+h,x+w-7,yy+h,C.edge,.52)
+  finish_corners(x,yy,w,h,7,false,enabled and accent or C.edge,enabled and (.34+.26*state) or .22)
+  BLT.switch(x+(compact and 2 or 5),yy+(h-24)*.5,state,enabled)
+  local tx=x+(compact and 30 or 36);local tw=w-(compact and 34 or 42)
+  local ty=yy+(h-(compact and 24 or 30))*.5
+  if compact then
+    text('LIVE',tx,ty,8.5,enabled and C.text or C.faint,tw,nil,true)
+    text(Live.enabled and 'ON' or 'OFF',tx,ty+13,8,enabled and (Live.enabled and accent or C.muted) or C.faint,tw,nil,true)
+  else
+    text('リアルタイム',tx,ty,12.5,enabled and C.text or C.muted,tw,nil,true)
+    local caption=Live.enabled and (Live.phase=='writing' and 'ON / RECORDING' or 'ON / WAIT') or 'OFF'
+    text(caption,tx,ty+18,8.5,enabled and (Live.enabled and accent or C.faint) or C.faint,tw,nil,true)
+  end
+  if enabled then widgets[#widgets+1]={id='live',x=x,y=y,w=w,h=h,fn=function() if commit_edit() then Live.toggle() end end} end
+end
+
 local function collapsed_controller()
   local contentH=max(1,gfx.h-A.titleH)
   scale=min(gfx.w/COLLAPSED_W,contentH/COLLAPSED_H);ox=(gfx.w-COLLAPSED_W*scale)/2;oy=A.titleH+(contentH-COLLAPSED_H*scale)/2
@@ -3687,10 +4593,11 @@ local function collapsed_controller()
   local pulse=A.job and (.55+.45*sin(A.anim*5.2)^2) or .45
   disc(15,16,A.job and 4.2 or 3.4,C.accent,.055+.045*pulse)
   disc(15,16,1.7,A.job and C.ice or C.mint,A.job and .92 or .72)
-  text('LOUDNESS TRACE',28,7,12.2,C.text,190,3,true)
-  local state=A.job and ('ANALYZING  '..floor(A.job.progress*100)..'%') or 'TRACE ACTIVE'
-  text(state,29,25,7.7,A.job and C.ice or C.faint,178,3,true)
-  fold_control('expand',(COLLAPSED_W-48)*.5,39,48,16,false,expand_window)
+  text('LOUDNESS TRACE',28,7,12.2,C.text,145,3,true)
+  local state=A.job and ('ANALYZING  '..floor(A.job.progress*100)..'%') or (Live.enabled and 'LIVE / '..(Live.phase=='writing' and 'RECORDING' or 'WAIT') or 'TRACE ACTIVE')
+  text(state,29,25,7.7,(A.job or Live.enabled) and C.ice or C.faint,140,3,true)
+  fold_control('expand',78,39,48,16,false,expand_window)
+  Live.draw_button(183,15,60,28,true)
 
   button('measure',A.job and '中止' or '解析',
     COMPACT_MEASURE_X,COMPACT_MEASURE_Y,COMPACT_MEASURE_W,COMPACT_MEASURE_H,
@@ -3703,8 +4610,6 @@ local function collapsed_controller()
   inputs_mouse()
 end
 
--- Optional TCP child control. All native coordinates deliberately bypass the
--- floating-window platform adapter; SWELL child positions use client coordinates.
 local TCP={width=88,height=24}
 local function tcp_dispose()
  if TCP.window then
@@ -3789,15 +4694,15 @@ local function controller()
   BLT.title('LOUDNESS TRACE','ARRANGE LOUDNESS ANALYSIS  アレンジビュー上でラウドネスを解析・表示',W)
   BLT.drawIcon();widgets={}
 
-  local _,name=source_track()
-  source_selector(name,24,107,598,44,choose_source)
+  source_display(source_name(),24,107,598,44)
   local data=A.data
   local savedText=data and ('保存済み：'..data.name..'  /  '..#data.segments..'区間  ·  選択範囲だけ置換') or '時間範囲を選択して解析。範囲外の解析結果は保持します。'
+  if Live.enabled then savedText='共通グラフ：再生・解析した範囲を更新し、範囲外は保持します。' end
   text(savedText,25,158,11.5,C.muted,596)
 
   local pos=R.GetCursorPositionEx(A.project)
   if (R.GetPlayStateEx(A.project)&1)==1 then pos=R.GetPlayPositionEx(A.project) end
-  local sample=A.hover or Core.row(data,pos)
+  local sample=A.hover or ((Live.enabled and Live.wasPlaying) and Live.latest) or Core.row(data,pos)
   local cardW=190
   for j,q in ipairs({{'s','LUFS-S  /  3 sec',C.ice},{'m','LUFS-M  /  400 ms',C.mint},{'i','Integrated',C.purple}}) do
     local x=24+(j-1)*204;local key,label,c=q[1],q[2],q[3]
@@ -3852,31 +4757,46 @@ local function controller()
     set_graph_track_visible(not graph_track_is_visible())
   end)
 
-  button('clear','グラフをクリア',108,560,126,32,function() clear_measurement() end,false,false,nil,'gold')
-  button('measure',A.job and ('解析を中止  '..floor(A.job.progress*100)..'%') or '選択範囲を解析',250,550,276,42,function()
+  button('clear','グラフをクリア',24,555,126,32,function() clear_measurement() end,false,false,nil,'gold')
+  Live.draw_button(180,554,146,34,false)
+  button('measure',A.job and ('解析を中止  '..floor(A.job.progress*100)..'%') or '選択範囲を解析',356,550,266,42,function()
     if A.job then cancel_job() else measure() end
   end,true,false,A.job and 'CANCEL' or 'ANALYZE')
-  if A.job then rect(250,594,276*A.job.progress,2,C.ice,.8) end
+  if A.job then rect(356,594,266*A.job.progress,2,C.ice,.8) end
   fold_control('collapse',(W-64)*.5,603,64,18,true,function() A.requestFold=true end)
 
-  BLT.footer(A.job and string.format('解析中 %d%%',math.floor(A.job.progress*100)) or (A.stale and 'プロジェクトが変更されています。再解析してください。' or (A.data and '解析結果を表示しています。' or '時間範囲を選択してください。')),A.stale,W,H+22,'0.5.6')
+  local status,bad
+  if not A.job and (Live.enabled or Live.noticeBad) then status,bad=Live.status() else status=A.job and string.format('解析中 %d%%',math.floor(A.job.progress*100)) or (A.stale and 'プロジェクトが変更されています。再解析してください。' or (A.data and '解析結果を表示しています。' or '時間範囲を選択してください。'));bad=A.stale end
+  BLT.footer(status,bad,W,H+22,VERSION)
   inputs_mouse();custom_titlebar()
 end
 
 BLT.factorySettings={lo=-60,hi=0,visible=true,height=280,show={s=true,m=true,i=true,rms=false,peak=false},targets={s={-23,3},m={-23,3},i={-23,1}},source="master",alertUpper=false,alertLower=false,alertPeak=false}
-BLT.warningCompute=warning_durations;warning_durations=function(data) local c=BLT.warningCache;local a,b=S.targets.s,S.targets.m;if c and c.data==data and c.rows==(data and data.rows) and c.count==(data and #data.rows or 0) and c.a==a[1] and c.b==a[2] and c.c==b[1] and c.d==b[2] then return c[1],c[2],c[3] end;local x,y,z=BLT.warningCompute(data);BLT.warningCache={x,y,z,data=data,rows=data and data.rows,count=data and #data.rows or 0,a=a[1],b=a[2],c=b[1],d=b[2]};return x,y,z end
-function BLT.pick(obj,keys) local v=BLT.valueView or {};BLT.valueView=v;for k in pairs(keys) do v[k]=obj[k] end;return v end
+function Live.warnings(data)
+  local run=Live.run;local h=run.summary;local a,b=S.targets.s,S.targets.m
+  if h.targets.s[1]~=a[1] or h.targets.s[2]~=a[2] or h.targets.m[1]~=b[1] or h.targets.m[2]~=b[2] then
+    h=Core.history_summary(Live.previous,run.first,S.targets)
+    for _,row in ipairs(run.rows) do run.integrated,run.lra=h.feed(row) end
+    run.summary=h
+  end
+  return h.warning[1]*.1,h.warning[2]*.1,h.warning[3]*.1
+end
+local chromeKeys={mouseDown='titleMouseDown',drag='titleDrag',resize='resizeDrag',mouseActive='titleMouseActive',
+ closePressed='titleClosePressed',resetPressed='titleResetPressed',chameleonPressed='titleChameleonPressed',
+ requestClose='requestClose',requestReset='requestReset'}
 BLT.chrome=setmetatable({font=Platform.chromeFont,mint=C.mint,red=C.red,titleText='L O U D N E S S   T R A C E'}, {
- __index=function(_,k) local m={titleH='titleH',mouseDown='titleMouseDown',drag='titleDrag',resize='resizeDrag',mouseActive='titleMouseActive',closePressed='titleClosePressed',resetPressed='titleResetPressed',chameleonPressed='titleChameleonPressed',requestClose='requestClose',requestReset='requestReset'};return A[m[k] or k] end,
- __newindex=function(t,k,v) local m={mouseDown='titleMouseDown',drag='titleDrag',resize='resizeDrag',mouseActive='titleMouseActive',closePressed='titleClosePressed',resetPressed='titleResetPressed',chameleonPressed='titleChameleonPressed',requestClose='requestClose',requestReset='requestReset'};A[m[k] or k]=v end})
+ __index=function(_,k) return A[chromeKeys[k] or k] end,
+ __newindex=function(_,k,v) A[chromeKeys[k] or k]=v end})
  C.accent2=C.ice;C.edge2=C.edge
 
+Media.state=A;Media.onchange=function() if BLT.host and BLT.host.wake then BLT.host.wake() end end
+Media.all_items=true
 BLT.attach({
  R=R,C=C,Chrome=BLT.chrome,Chameleon=Chameleon,section=SECTION,faces=Platform.faces,font=function(sz,k,b) BLT.font(sz,k,b,scale,Platform.faces) end,
  geometry=function() return scale,ox,oy end,active=function() local f=gfx.getchar(65536);return (f&1)==0 or (f&2)~=0 end,
  wake=function() A.content_dirty=true;redraw_dirty=true;next_draw_time=0;wake_visuals() end,
  defaults=BLT.factorySettings,capture=function() return S end,
- valid=function(v) if v.lo< -120 or v.hi>24 or v.lo>=v.hi or v.height<100 or v.height>1000 or (v.source~='master' and not v.source:match('^%{[%x%-]+%}$')) then return false end;for _,t in pairs(v.targets) do if #t~=2 or t[1]< -120 or t[1]>24 or t[2]<0 or t[2]>120 then return false end end;return true end,apply=function(v) local hc,vc=S.height~=v.height,S.visible~=v.visible;for k,x in pairs(v) do S[k]=x end;if hc then change_height(S.height) end;if vc then set_graph_track_visible(S.visible) end;edited() end,
+ valid=function(v) if v.lo< -120 or v.hi>24 or v.lo>=v.hi or v.height<100 or v.height>1000 or v.source~='master' then return false end;for _,t in pairs(v.targets) do if #t~=2 or t[1]< -120 or t[1]>24 or t[2]<0 or t[2]>120 then return false end end;return true end,apply=function(v) local hc,vc=S.height~=v.height,S.visible~=v.visible;for k,x in pairs(v) do S[k]=x end;if hc then change_height(S.height) end;if vc then set_graph_track_visible(S.visible) end;edited() end,
  undoRefresh=function() A.revision=A.revision+1;A.cache='';A.stale=A.data~=nil end,
  busy=function() return A.job~=nil or A.windowTransition~=nil end,commit=function() return commit_edit() end,
  cancelEdit=function() A.edit=nil;A.fieldDrag=nil end,editing=function() return A.edit~=nil end,
@@ -3885,25 +4805,23 @@ BLT.attach({
  cursor=set_resize_cursor,beginResize=begin_resize,resize=update_resize,
  compactChrome=function() return A.collapsed end,transition=function() return A.windowTransition~=nil end,fold=function() A.requestFold=true end,collapsed=function() return A.collapsed end,prepareMenu=function() if A.collapsed then A.requestFold=true;BLT.openAfterExpand=true;return false end;return not A.windowTransition end,
 })
-if ...=='blt_test' then function BLT.testDraw(now) controller(now or R.time_precise()) end end
 function BLT.drawIcon()
-
  local bs,bx,by=scale,ox,oy;ox,oy=ox+(W-102)*scale,oy+31*scale;scale=scale*.78
  icon(0,0)
 
  scale,ox,oy=bs,bx,by
 end
 
-if ...=='blt_test' then return {BLT=BLT,A=A,Core=Core,S=S} end
 local _,_,sectionID,commandID=R.get_action_context()
 local function close()
- -- Teardown errors must not leave a dead graphics window on screen.
  local ok,err=xpcall(function()
   if A.closed then return end; A.closed=true
   clear_loudness_tooltip()
   set_resize_cursor(nil)
-  cancel_job()
+  Live.stop()
+  cancel_job(false)
   retry_temp_deletes(true)
+  Live.restore_fx_preference()
   tcp_dispose()
   dispose_bitmap()
   if A.font then R.JS_LICE_DestroyFont(A.font); A.font=nil end
@@ -3932,7 +4850,9 @@ local function close()
  end
 end
 R.atexit(close)
+-- Application lifecycle
 local function startup()
+  Live.prepare_install()
   local tempDirectory=(Platform.tempDirectory()):gsub('[/\\]+$','')
   recover_stale_temp_files(tempDirectory)
   A.gdiFont=R.JS_GDI_CreateFont(14,400,0,false,false,false,Platform.graphFont)
@@ -3943,14 +4863,13 @@ local function startup()
   adopt_project(true)
   local ww=Core.clamp(extnum("window_w",W),520,1200)
   local hh=Core.clamp(extnum("window_h",H),300,1000)
-  -- Mac controller uses logical points, matching SWELL window sizes and hit targets.
-  -- The OS scales the backing surface; Windows keeps its original HiDPI path.
+
   gfx.ext_retina=Platform.mac and 0 or 1
   local wx,wy=extnum("window_x",100),extnum("window_y",100)
   gfx.init("LOUDNESS TRACE",ww,hh+A.titleH,0,wx,wy)
   A.uiReady=true; A.gfxWindow=R.JS_Window_Find("LOUDNESS TRACE",true)
   if A.gfxWindow then
-    -- Replace the operating-system caption with the controller's own title bar.
+
     R.JS_Window_SetStyle(A.gfxWindow,"POPUP")
     if Platform.mac then
       local ok,l,t=WindowGeometry.JS_Window_GetRect(A.gfxWindow)
@@ -3969,6 +4888,7 @@ local function frame()
   if k<0 or (k==27 and not A.edit and not BLT.presets.open) then close(); return end
   local now=R.time_precise(); Chameleon.tick(now); A.realDt=Core.clamp(now-A.clock,0,.1); A.clock=now
   retry_temp_deletes(false)
+  Live.restore_fx_preference()
   local active=(gfx.getchar(65536)&2)==2
   if last_active_state==nil or active~=last_active_state then last_active_state=active; wake_visuals(now) end
   A.active=active
@@ -3980,8 +4900,7 @@ local function frame()
   local wheel_activity=raw_wheel~=0
   local pointer_activity=raw_x~=last_raw_mouse_x or raw_y~=last_raw_mouse_y or cap_changed or wheel_activity
   if pointer_activity then wake_visuals(now) end
-  -- Button/wheel transitions are input events, not decoration. Render them on
-  -- the current defer pass so short clicks cannot fall between capped frames.
+
   if cap_changed or wheel_activity then next_draw_time=now end
   last_raw_mouse_x,last_raw_mouse_y,last_raw_mouse_cap=raw_x,raw_y,raw_cap
   if gfx.w~=last_window_w or gfx.h~=last_window_h then last_window_w,last_window_h=gfx.w,gfx.h; wake_visuals(now) end
@@ -3989,9 +4908,9 @@ local function frame()
   local key_activity=k>0
   if key_activity then wake_visuals(now) end
   local project_changed=R.EnumProjects(-1,"")~=A.project
-  if project_changed then cancel_job(); adopt_project(false); redraw_dirty=true end
+  if project_changed then cancel_job(false); adopt_project(false); redraw_dirty=true end
   local was_stale=A.stale
-  if A.data and R.GetProjectStateChangeCount(A.project)~=A.baseline then A.stale=true end
+  if A.data and not Live.enabled and R.GetProjectStateChangeCount(A.project)~=A.baseline then A.stale=true end
   if A.stale~=was_stale then redraw_dirty=true end
 
   local consumed=edit_key(k)
@@ -3999,6 +4918,7 @@ local function frame()
   local had_job=A.job~=nil
   step_job()
   if had_job~=(A.job~=nil) then redraw_dirty=true end
+  Live.tick(now)
   local transition_active=A.windowTransition~=nil
   step_window_transition(now)
   if transition_active~=(A.windowTransition~=nil) then redraw_dirty=true end
@@ -4012,7 +4932,8 @@ local function frame()
 
   local dragging=A.resizeDrag~=nil or A.titleDrag~=nil or A.fieldDrag~=nil or ((raw_cap or 0)&1)~=0
   if dragging then wake_visuals(now) end
-  local forced=A.job~=nil or A.windowTransition~=nil
+  local _,live_motion=Live.button_motion(now)
+  local forced=A.job~=nil or A.windowTransition~=nil or live_motion
   local speed=forced and 1 or visual_speed(now)
   local animateNow=forced or (A.active and speed>0)
   A.dt=animateNow and A.realDt*(forced and 1 or speed) or 0

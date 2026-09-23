@@ -1,18 +1,335 @@
 -- @description SPECTRAL NORMALIZER
--- @version 0.2.2
+-- @version 0.2.10
 -- @author Balrulu
 -- @provides
 --   . > ../
 -- @changelog
---   Increase preset capacity and show shared overflow dialogs.
+--   BLT SERIES Beta TEST UPLOAD
 -- @about
 --   BLT SERIES Beta TEST UPLOAD
+
+-- BLT external storage 1.1.0. Embedded; large data stays beside this script.
+local function create_external_storage(api,section,source,state_keys)
+ local P=setmetatable({}, {__index=api})
+ local wanted={};for _,key in ipairs(state_keys) do wanted[key]='state' end
+ wanted.preset_count='presets';wanted.current_preset='presets'
+ for i=1,200 do
+  wanted['preset_'..i]='presets';wanted['preset_name_'..i]='presets';wanted['preset_data_'..i]='presets'
+ end
+ local path=source:match('^@(.+)$')
+ if not path and api.get_action_context then local _,p=api.get_action_context();if p and p~='' then path=p end end
+ local base=path and path:match('^(.*)[.]lua$')
+ local stores={};local warned={};local cap=268435456
+ local function report(kind,detail)
+  if warned[kind] then return end;warned[kind]=true
+  local en=api.GetExtState(section,'ui_language')=='EN'
+  api.MB((en and 'BLT could not save/load its data file. Existing files are retained. Check folder permissions and free disk space.\n\n' or 'BLTのデータファイルを保存・読み込みできません。既存ファイルは保持しています。フォルダの書き込み権限と空き容量を確認してください。\n\n')..tostring(detail),'BLT DATA',0)
+ end
+ local function exists(p)
+  if api.file_exists then return api.file_exists(p) end
+  local f=io.open(p,'rb');if f then f:close();return true end
+  return os.rename(p,p) and true or false
+ end
+ local function value_limit(key)
+  if key=='preset_count' then return 3 end
+  if key=='current_preset' or key:match('^preset_name_%d+$') then return 2048 end
+  if key=='preferences_v1' or key=='curve_guide_data' then return 131072 end
+  if key=='settings' then return 2097152 end
+  return 16777216
+ end
+ local function read(p)
+  local f,err=io.open(p,'rb');if not f then return nil,err end
+  local ok,raw=pcall(function()
+   local size=f:seek('end')
+   if not size or size>cap or not f:seek('set',0) then return nil end
+   local data=f:read(size+1)
+   if not data or #data~=size then return nil end
+   return data
+  end)
+  pcall(f.close,f)
+  if not ok or not raw then return nil,'Cannot read data file safely: '..p end
+  if raw:sub(1,12)~='BLT_DATA_V1\n' or raw:sub(-4)~='END\n' then return nil,'Invalid data file: '..p end
+  local values={};local pos=13;local count=0
+  while pos<=#raw-4 do
+   local a,b,klen,vlen=raw:find('^(%d+) (%d+)\n',pos)
+   klen,vlen=tonumber(klen),tonumber(vlen)
+   if not a or not klen or not vlen or klen>128 or vlen>16777216 or b+klen+vlen>#raw-4 then return nil,'Invalid data record: '..p end
+   local key=raw:sub(b+1,b+klen)
+   if not wanted[key] or vlen>value_limit(key) then return nil,'Invalid data key/size: '..p end
+   local value=raw:sub(b+klen+1,b+klen+vlen)
+   if values[key]~=nil then return nil,'Duplicate data record: '..p end
+   if key=='preset_count' and (not value:match('^%d+$') or tonumber(value)>200) then return nil,'Invalid preset count: '..p end
+   values[key]=value;pos=b+klen+vlen+1;count=count+1
+   if count>1024 then return nil,'Too many data records: '..p end
+  end
+  return values
+ end
+ local function encode(values)
+  local keys={};for key in pairs(values) do keys[#keys+1]=key end;table.sort(keys)
+  local rows={'BLT_DATA_V1\n'};local size=16
+  for _,key in ipairs(keys) do
+   local value=values[key];local h=#key..' '..#value..'\n';size=size+#h+#key+#value
+   if size>cap or #value>16777216 then return nil,'Local data capacity exceeded' end
+   rows[#rows+1]=h;rows[#rows+1]=key;rows[#rows+1]=value
+  end
+  rows[#rows+1]='END\n';return table.concat(rows)
+ end
+ for _,kind in ipairs({'presets','state'}) do
+  local p=base and (base..'.'..kind..'.dat')
+  local s={path=p,values={},pending={}};stores[kind]=s
+  if not p then s.blocked=true;report(kind,'Cannot locate the Lua script file')
+  elseif exists(p) then
+   local values,err=read(p)
+   if values then s.values=values else
+    s.values=read(p..'.bak') or {};s.blocked=true;report(kind,err..'\nBackup: '..p..'.bak')
+   end
+  elseif exists(p..'.bak') then
+   local values,err=read(p..'.bak')
+   if values then s.values=values else s.blocked=true;report(kind,err) end
+  end
+ end
+ local function mark(s,key,value)
+  s.values[key]=value;s.pending[key]=value;s.due=s.due or (api.time_precise()+0.75)
+ end
+ local function flush(s,kind)
+  if s.blocked or not s.due then return end
+  local values={}
+  if exists(s.path) then
+   local current,err=read(s.path);if not current then s.blocked=true;report(kind,err);return end
+   values=current
+  else for k,v in pairs(s.values) do values[k]=v end end
+  for k,v in pairs(s.pending) do values[k]=v end
+  local raw,err=encode(values)
+  local temp=s.path..'.tmp'
+  local ok=false
+  if raw then
+   local f;f,err=io.open(temp,'wb')
+   if f then
+    local success,wrote,werr=pcall(f.write,f,raw);local closing,closed,cerr=pcall(f.close,f);if not closing then cerr=closed;closed=nil end
+    if not success then werr=wrote;wrote=nil end
+    if wrote and closed then
+     local check;check,err=read(temp)
+     if check then
+      ok=true;for k,v in pairs(values) do if check[k]~=v then ok=false;err='Data verification failed';break end end
+     end
+    else err=werr or cerr end
+   end
+  end
+  if ok then
+   local had=exists(s.path)
+   if had then
+    if exists(s.path..'.bak') then ok,err=os.remove(s.path..'.bak') end
+    if ok then ok,err=os.rename(s.path,s.path..'.bak') end
+   end
+   if ok then
+    ok,err=os.rename(temp,s.path)
+    if not ok and had then os.rename(s.path..'.bak',s.path) end
+   end
+  end
+  if not ok then s.due=api.time_precise()+5;report(kind,(s.path or '')..'\n'..tostring(err));return end
+  s.values=values;s.pending={};s.due=nil;warned[kind]=nil
+
+ end
+ function P.BLT_FlushStorage(force)
+  local now=api.time_precise()
+  for kind,s in pairs(stores) do
+   if not s.blocked and s.due and (force or now>=s.due) then
+    local ok,err=pcall(flush,s,kind)
+    if not ok then s.due=now+5;pcall(report,kind,tostring(s.path)..'\n'..tostring(err)) end
+   end
+  end
+ end
+ function P.GetExtState(sec,key)
+  local kind=sec==section and wanted[key]
+  if kind then return stores[kind].values[key] or '' end
+  return api.GetExtState(sec,key)
+ end
+ function P.SetExtState(sec,key,value,persist)
+  local kind=sec==section and wanted[key]
+  if not kind then return api.SetExtState(sec,key,value,persist) end
+  local s=stores[kind];value=tostring(value)
+  if persist and s.values[key]~=value then mark(s,key,value) else s.values[key]=value end
+ end
+ function P.DeleteExtState(sec,key,persist)
+  if sec==section and wanted[key] then return P.SetExtState(sec,key,'',persist) end
+  return api.DeleteExtState(sec,key,persist)
+ end
+ function P.HasExtState(sec,key)
+  if sec==section and wanted[key] then return P.GetExtState(sec,key)~='' end
+  return api.HasExtState(sec,key)
+ end
+ function P.defer(fn)
+  local ok,err=pcall(P.BLT_FlushStorage,false)
+  if not ok then pcall(report,'runtime',err) end
+  return api.defer(fn)
+ end
+ function P.atexit(fn)
+  return api.atexit(function()
+   local ok,err=xpcall(fn,debug.traceback);pcall(P.BLT_FlushStorage,true)
+   if not ok then error(err) end
+  end)
+ end
+ return P
+end
+
+local reaper=create_external_storage(reaper,'BLT_SPECTRAL_NORMALIZER',debug.getinfo(1,'S').source,{'settings'})
 
 -- BLT preset transfer limits 1.1.0. Embedded; no runtime dependency.
 local BLTPresetLimits={bytes=16777216,stringBytes=2097152,nodes=262144,entries=8192}
 function BLTPresetLimits.show(english)
  reaper.MB(english and 'Preset capacity limit exceeded. Export presets individually instead of as a bundle.' or '容量上限オーバーです。一括ではなく個別に保存してください。','BLT PRESET',0)
 end
+
+-- BLT media availability 1.0.2. Pause audio work, never the UI defer loop.
+local function create_media_gate(api,graphics)
+ local M={waiting=false,epoch=0};local P=setmetatable({}, {__index=api})
+ local accessors={};local next_check=0;local ready=true;local settle=0;local last_active
+ local function valid(project,p,kind)
+  return p and (not api.ValidatePtr2 or api.ValidatePtr2(project,p,kind))
+ end
+ local function application_active()
+  if graphics and graphics.getchar then
+   local flags=graphics.getchar(65537)
+   if flags>=0 and ((flags&1)==0 or (flags&2)~=0) then return true end
+  end
+  if not (api.JS_Window_GetForeground and api.GetMainHwnd and api.JS_Window_GetParent) then return nil end
+  local foreground=api.JS_Window_GetForeground();local main=api.GetMainHwnd()
+  for _=1,32 do
+   if not foreground then return false end
+   if foreground==main then return true end
+   local parent=api.JS_Window_GetParent(foreground)
+   if parent==foreground then return nil end;foreground=parent
+  end
+  return nil
+ end
+ local function offline(project,take)
+  -- targets() resolves or validates each pointer in this same defer pass.
+  if not take then return false end
+  if api.TakeIsMIDI and api.TakeIsMIDI(take) then return false end
+  if not api.GetMediaItemTake_Source then return false end
+  local source=api.GetMediaItemTake_Source(take);local seen={}
+  for _=1,32 do
+   if not source or seen[source] then break end;seen[source]=true
+   local is_offline=false
+   if api.CF_GetMediaSourceOnline then
+    is_offline=not api.CF_GetMediaSourceOnline(source)
+   elseif api.GetMediaSourceSampleRate and api.GetMediaSourceNumChannels then
+    is_offline=api.GetMediaSourceSampleRate(source)<=0 or api.GetMediaSourceNumChannels(source)<=0
+   end
+   if is_offline then
+    local file=api.GetMediaSourceFileName and api.GetMediaSourceFileName(source,'') or ''
+    if file~='' and (not api.file_exists or api.file_exists(file)) then return true end
+   end
+   source=api.GetMediaSourceParent and api.GetMediaSourceParent(source) or nil
+  end
+  return false
+ end
+ local fields={'info','v','source','snapshot','plans','items','list','queue','entries','reader','data','p','left','right','parts','sources','source_items'}
+ local function targets(project,all_items)
+  local takes,seen,items={},{},{};local invalid=false
+  local function item(p,fresh)
+   if p and items[p] then return end
+   if not p or (not fresh and not valid(project,p,'MediaItem*')) then invalid=true;return end
+   items[p]=true
+   local take=api.GetActiveTake and api.GetActiveTake(p)
+   if take then takes[take]=true end
+  end
+  local function visit(v,depth)
+   if type(v)~='table' or seen[v] or depth>12 then return end;seen[v]=true
+   if v.project and v.project~=project then invalid=true;return end
+   if v.item then item(v.item) end
+   if v.take then
+    if takes[v.take] or valid(project,v.take,'MediaItem_Take*') then takes[v.take]=true else invalid=true end
+   end
+   if v.temp_take and (takes[v.temp_take] or valid(project,v.temp_take,'MediaItem_Take*')) then takes[v.temp_take]=true end
+   for _,key in ipairs(fields) do visit(v[key],depth+1) end
+   for _,entry in ipairs(v) do if type(entry)=='table' then visit(entry,depth+1) end end
+  end
+  if api.CountSelectedMediaItems and api.GetSelectedMediaItem then
+   for i=0,api.CountSelectedMediaItems(project)-1 do item(api.GetSelectedMediaItem(project,i),true) end
+  end
+  local a=M.state
+  if a then
+   for _,key in ipairs({'job','analysis','batch','source_job','wave_job','pjob','xjob','ajob'}) do visit(a[key],0) end
+   if a.job or a.batch or a.source_job then visit(a.items,0);visit(a.queue,0) end
+  end
+  if (all_items or (M.all_items and M.state and M.state.job)) and api.CountMediaItems and api.GetMediaItem then
+   for i=0,api.CountMediaItems(project)-1 do item(api.GetMediaItem(project,i),true) end
+  end
+  return takes,invalid
+ end
+ function M.ready(force,all_items)
+  local now=api.time_precise()
+  if not force and now<next_check then return ready end
+  next_check=now+.10
+  local project=api.EnumProjects(-1,'')
+  local takes,invalid=targets(project,all_items);local blocked=false
+  if M.state and M.state.project and M.state.project~=project then invalid=true end
+  if not invalid then
+   if next(takes) and not api.CF_GetMediaSourceOnline and application_active()==false then blocked=true
+   else for take in pairs(takes) do if offline(project,take) then blocked=true;break end end end
+  end
+  if invalid or not next(takes) then settle=0 end
+  if blocked then settle=now+.25 end
+  local waiting=not invalid and (blocked or now<settle)
+  ready=not waiting
+  if waiting~=M.waiting then
+   M.waiting=waiting;if not waiting then M.epoch=M.epoch+1 end
+   if M.onchange then M.onchange() end
+  end
+  return ready
+ end
+ function M.tick()
+  local active=application_active()
+  if active~=last_active then next_check=0;last_active=active end
+  return M.ready()
+ end
+ function M.message(section)
+  return api.GetExtState(section,'ui_language')=='EN' and 'Waiting for media to come online…' or 'メディアのオンライン復帰を待っています…'
+ end
+ local function signature(take)
+  if not (api.GetMediaItemTake_Item and api.GetItemStateChunk) then return nil end
+  local item=api.GetMediaItemTake_Item(take);if not item then return nil end
+  local ok,chunk=api.GetItemStateChunk(item,'',false)
+  return ok and chunk or nil
+ end
+ if api.CreateTakeAudioAccessor then
+  function P.CreateTakeAudioAccessor(take)
+   local aa=api.CreateTakeAudioAccessor(take)
+   if aa then accessors[aa]={take=take,project=api.EnumProjects(-1,''),signature=signature(take),revision=api.GetProjectStateChangeCount and api.GetProjectStateChangeCount(api.EnumProjects(-1,'')),epoch=M.epoch} end
+   return aa
+  end
+ end
+ if api.CreateTrackAudioAccessor then
+  function P.CreateTrackAudioAccessor(track)
+   local aa=api.CreateTrackAudioAccessor(track);local project=api.EnumProjects(-1,'')
+   if aa then accessors[aa]={track=track,project=project,revision=api.GetProjectStateChangeCount(project),epoch=M.epoch} end
+   return aa
+  end
+ end
+ local function resume(aa)
+  local state=accessors[aa]
+  if not state or state.epoch==M.epoch or M.waiting then return end
+  state.epoch=M.epoch
+  if api.EnumProjects(-1,'')~=state.project then return end
+  local unchanged=state.take and valid(state.project,state.take,'MediaItem_Take*') and state.signature and signature(state.take)==state.signature
+  if state.take and state.revision and api.GetProjectStateChangeCount(state.project)~=state.revision then unchanged=false end
+  if state.track then unchanged=valid(state.project,state.track,'MediaTrack*') and api.GetProjectStateChangeCount(state.project)==state.revision end
+  if unchanged and api.AudioAccessorUpdate then api.AudioAccessorUpdate(aa) end
+ end
+ if api.AudioAccessorStateChanged then
+  function P.AudioAccessorStateChanged(aa) resume(aa);return api.AudioAccessorStateChanged(aa) end
+ end
+ if api.GetAudioAccessorSamples then
+  function P.GetAudioAccessorSamples(...) local aa=...;resume(aa);return api.GetAudioAccessorSamples(...) end
+ end
+ if api.DestroyAudioAccessor then
+  function P.DestroyAudioAccessor(aa) accessors[aa]=nil;return api.DestroyAudioAccessor(aa) end
+ end
+ return M,P
+end
+local Media,reaper=create_media_gate(reaper,gfx)
+
 
 -- BLT window geometry 1.0.0. Embedded; screen coordinates only.
 local function create_window_geometry(api,graphics)
@@ -39,7 +356,7 @@ end
 local WindowGeometry=create_window_geometry(reaper,gfx)
 local BLT_MAC=(reaper.GetOS() or ''):match('OSX')~=nil or (reaper.GetOS() or ''):match('macOS')~=nil
 
-local Core={VERSION='0.2.2',SECTION='BLT_SPECTRAL_NORMALIZER',MAX_POINTS=1024}
+local Core={VERSION='0.2.10',SECTION='BLT_SPECTRAL_NORMALIZER',MAX_POINTS=1024}
 local abs,min,max,sqrt,log,pi,floor,ceil=math.abs,math.min,math.max,math.sqrt,math.log,math.pi,math.floor,math.ceil
 local function clamp(x,a,b) return min(b,max(a,x)) end
 local function finite(x) return type(x)=='number' and x==x and abs(x)<math.huge end
@@ -90,7 +407,7 @@ function Core.preset_index(s)
  return 0
 end
 function Core.defaults()
- local s={fft=4096,overlap=8,strength=100,threshold=-72,knee=6,boost=48,cut=96,smooth=0,ceiling=-1,scale=1,maxfreq=96000}
+ local s={fft=4096,overlap=8,strength=100,threshold=-72,knee=6,boost=48,cut=96,smooth=0,ceiling=-1,scale=1,maxfreq=24000}
  s.analysis_method=1;s.period_percent=100;s.period_shape=1;s.pattern=1;s.direction=3;s.shape_envelope=1;s.height=100
  s.curve={points={{x=0,y=-42},{x=96000,y=-42}},kind='linear',smoothness=0}
  return s
@@ -360,7 +677,7 @@ function Core.decode(text)
  end
  for _,k in ipairs(Core.REQUIRED_KEYS) do assert(seen[k],'設定が不足しています。') end
  s.curve.points={}
- for token in (raw_curve..','):gmatch('(.-),') do local x,y=token:match('^([^:]+):([^:]+)$');assert(x and y,'カーブの値が不正です。');s.curve.points[#s.curve.points+1]={x=assert(tonumber(x),'数値が不正です。'),y=assert(tonumber(y),'数値が不正です。')} end
+ for token in (raw_curve..','):gmatch('(.-),') do assert(#s.curve.points<Core.MAX_POINTS,'カーブの点数が多すぎます。');local x,y=token:match('^([^:]+):([^:]+)$');assert(x and y,'カーブの値が不正です。');s.curve.points[#s.curve.points+1]={x=assert(tonumber(x),'数値が不正です。'),y=assert(tonumber(y),'数値が不正です。')} end
  return Core.validate(s)
 end
 local R=reaper
@@ -584,11 +901,21 @@ function App.check_job(j,force)
  end
  j.checked_revision=revision
 end
+-- Shared generated-audio destination. Keep project recording settings unchanged.
+local function blt_output_directory(project)
+ local root=R.GetProjectPathEx(project,'')
+ assert(type(root)=='string' and root~='' and not root:find('%z'),
+  '音声の保存先を取得できません。プロジェクトのメディア保存先を設定してください。')
+ assert(root:match('^%a:[/\\]') or root:sub(1,1)=='/' or root:sub(1,2)=='\\\\',
+  '音声の保存先が絶対パスではありません。プロジェクトのメディア保存先を確認してください。')
+ local dir=root:gsub('[/\\]+$','')..'/BLT'
+ R.RecursiveCreateDirectory(dir,0) -- Existing BLT folders are reused.
+ return dir
+end
 function App.plan()
- local project,projectFile=R.EnumProjects(-1,'')
+ local project=R.EnumProjects(-1,'')
  assert((R.GetPlayStateEx(project)&5)==0,'再生・録音を停止してから処理してください。')
- assert(projectFile~='','先にREAPERプロジェクトを保存してください。')
- local dir=projectFile:match('^(.*)[/\\]');assert(dir,'プロジェクトフォルダが不明です。')
+ local dir=blt_output_directory(project)
  local plans={};local token=R.genGuid():gsub('[^%w]','');local total_seconds=0
  for i=0,R.CountSelectedMediaItems(project)-1 do
   local item=R.GetSelectedMediaItem(project,i);local take=R.GetActiveTake(item)
@@ -628,11 +955,28 @@ function App.start_item(j,p)
  assert(R.GetAudioAccessorEndTime(j.aa)-j.start>=p.len-1/p.sr,'音声範囲が不足しています。先にGlueしてください。')
  local targets=j.targets_by_rate[p.sr];if not targets then targets=Core.targets(j.s,p.sr);j.targets_by_rate[p.sr]=targets end
  j.audio_cache=nil;j.buffer=R.new_array(max(32768,j.s.fft)*p.ch);j.proc=Core.processor(j.s,p.sr,p.ch,p.frames,targets);j.packed={}
- p.temp=p.path..'.blt-part';j.raw=assert(io.open(p.temp,'wb'),'作業WAVを作成できません。')
+ p.temp=p.path..'.blt-part';j.raw=assert(io.open(p.temp,'wb'),'出力先BLTフォルダーへ書き込めません。保存先とアクセス権を確認してください。')
+end
+function App.build_peaks(j,p)
+ assert(type(R.PCM_Source_BuildPeaks)=='function','波形ピーク構築APIを利用できません。REAPERを更新してください。')
+ if not p.pendingSource then
+  p.pendingSource=assert(R.PCM_Source_CreateFromFile(p.path),'処理WAVを読み込めません。')
+  local remaining=R.PCM_Source_BuildPeaks(p.pendingSource,0)
+  assert(type(remaining)=='number' and remaining>=0,'波形ピークの作成を開始できません。')
+  p.peaksBuilding=remaining~=0
+  if not p.peaksBuilding then j.index=j.index+1;j.phase='render';j.progress=0;return end
+ end
+ local remaining=R.PCM_Source_BuildPeaks(p.pendingSource,1)
+ assert(type(remaining)=='number' and remaining>=0,'波形ピークを作成できません。')
+ j.progress=.95+.05*(1-clamp(remaining/100,0,1))
+ if remaining==0 then
+  R.PCM_Source_BuildPeaks(p.pendingSource,2);p.peaksBuilding=nil
+  j.index=j.index+1;j.phase='render';j.progress=0
+ end
 end
 function App.commit(j)
  App.check_job(j,true);local created={}
- for _,p in ipairs(j.plans) do p.pendingSource=assert(R.PCM_Source_CreateFromFile(p.path),'処理WAVを読み込めません。') end
+ for _,p in ipairs(j.plans) do assert(p.pendingSource,'処理WAVの波形ピークを準備できません。') end
  R.Undo_BeginBlock2(j.project);R.PreventUIRefresh(1)
  local ok,err=xpcall(function()
   for _,p in ipairs(j.plans) do
@@ -657,6 +1001,7 @@ end
 function App.step(j)
  App.check_job(j);local p=j.plans[j.index]
  if not p then App.commit(j);return true end
+ if j.phase=='peaks' then App.build_peaks(j,p);return false end
  if j.phase=='render' then
   if not j.proc then App.start_item(j,p) end
   assert(not R.AudioAccessorStateChanged(j.aa),'処理中に音声が変更されました。')
@@ -665,11 +1010,11 @@ function App.step(j)
   local out,done=Core.frame(proc,samples,offset);local packed=j.packed;for i=#packed,1,-1 do packed[i]=nil end
   for i,v in ipairs(out) do assert(abs(v)<=3.4028234e38,'32-bit floatで保存できない音声値です。');packed[i]=string.pack('<f',v) end
   if #packed>0 then assert(j.raw:write(table.concat(packed))) end
-  j.progress=clamp(proc.flushed/p.frames,0,1)*.9
+  j.progress=clamp(proc.flushed/p.frames,0,1)*.88
   if done then
    assert(j.raw:close());j.raw=nil;R.DestroyAudioAccessor(j.aa);j.aa=nil
    p.peak=proc.peak;p.scale=min(1,amp(j.s.ceiling)/max(p.peak,1e-15));j.proc=nil
-   j.input=assert(io.open(p.temp,'rb'));j.output=assert(io.open(p.path,'wb'))
+   j.input=assert(io.open(p.temp,'rb'));j.output=assert(io.open(p.path,'wb'),'出力WAVへ書き込めません。保存先の空き容量とアクセス権を確認してください。')
    assert(j.output:write(App.wav_header(p.sr,p.ch,p.frames)));j.written=0;j.phase='write'
   end
  else
@@ -679,16 +1024,17 @@ function App.step(j)
    if p.scale==1 then assert(j.output:write(raw)) else
     for offset=1,#raw,4 do packed[#packed+1]=string.pack('<f',string.unpack('<f',raw,offset)*p.scale) end
     assert(j.output:write(table.concat(packed)))
-   end;j.written=j.written+#raw;j.progress=.9+.1*j.written/(p.frames*p.ch*4)
+   end;j.written=j.written+#raw;j.progress=.88+.07*j.written/(p.frames*p.ch*4)
   else
    assert(j.written==p.frames*p.ch*4,'書き込みサンプル数が一致しません。')
    assert(j.input:close());j.input=nil;assert(j.output:close());j.output=nil;pcall(os.remove,p.temp);j.packed=nil
-   j.index=j.index+1;j.phase='render';j.progress=0
+   j.phase='peaks';j.progress=.95
   end
  end
  return false
 end
 function App.begin_processing()
+ if not Media.ready() then return end
  local candidate=App.plan()
  if candidate.total_seconds>=1500 then A.pending_job=candidate;A.modal='long';A.dirty=true
  else A.job=candidate;App.notice('処理中…',false,3600) end
@@ -718,6 +1064,7 @@ function Core.analysis_value(bin,method)
  return 0
 end
 function App.begin_analysis()
+ if not Media.ready() then return end
  if A.job then return end
  UI.commit_edit()
  local project=R.EnumProjects(-1,'');local plans={};local total=0;local upper=0
@@ -800,6 +1147,7 @@ function App.finish_analysis(j)
 end
 
 function App.process(now)
+ if not Media.ready() then return end
  local current=A.job;if not current then return end
  local ok,done=xpcall(function()
   local deadline=now+.014
@@ -981,7 +1329,7 @@ function UI.metrics(text,size,kind,bold)
  if UI.metric_count>=1024 then UI.metric_cache={};UI.metric_count=0 end
  UI.metric_cache[key]={w,h};UI.metric_count=UI.metric_count+1;return w,h
 end
-function UI.measure(text,size,kind,bold) local w,h=UI.metrics(L.text(text),size,kind,bold);return w/scale,h/scale end
+
 function UI.fit(text,width,size,kind,bold)
  local shown=L.text(text);local limit=width*scale;local key=UI.font(size,kind,bold)..':'..limit..':'..shown
  local cached=UI.fit_cache[key];if cached then return cached end
@@ -1401,8 +1749,11 @@ Chrome.title='BLT Spectral Normalizer';Chrome.text='S P E C T R A L   N O R M A 
 Chrome.drag=nil;Chrome.resize=nil;Chrome.press=nil;Chrome.resize_cursor=nil;Chrome.isWindows=R.GetOS():match('Win')~=nil
 Chrome.cursor_ids={we=32644,ns=32645,nwse=32642,nesw=32643,arrow=32512};Chrome.cursors={}
 function Chrome.layout()
+ if Chrome.layoutWidth==gfx.w then return Chrome.layoutCache end
  local close=gfx.w-38;local reset=close-34;local theme=reset-34;local language=theme-26;local nextp=language-20;local prev=nextp-20;local preset=prev-84
- return {close=close,reset=reset,theme=theme,language=language,next=nextp,prev=prev,preset=preset}
+ Chrome.layoutWidth=gfx.w
+ Chrome.layoutCache={close=close,reset=reset,theme=theme,language=language,next=nextp,prev=prev,preset=preset}
+ return Chrome.layoutCache
 end
 function Chrome.handle()
  if Chrome.window and R.JS_Window_IsWindow(Chrome.window) then return Chrome.window end
@@ -1525,6 +1876,7 @@ PrimaryButton.painter.motion=function(now)
  local q=A.active and clamp(((A.effect_until or 0)-now)/.70,0,1) or 0;return mx,my,q*q*(3-2*q)
 end
 function App.poll_selection(now)
+ if not Media.ready() then return end
  if A.job or now<A.selection_poll then return end;A.selection_poll=now+.5
  local project=R.EnumProjects(-1,'');local revision=R.GetProjectStateChangeCount(project);local count=R.CountSelectedMediaItems(project);local item=count>0 and R.GetSelectedMediaItem(project,0) or nil;local take=item and R.GetActiveTake(item) or nil
  if project==A.selection_project and revision==A.selection_revision and count==A.selection_count and item==A.selection_item and take==A.selection_take then return end
@@ -1696,6 +2048,7 @@ function UI.draw(now)
  UI.label('1 / 2 / 3：範囲選択 / ペン / ライン生成  ·  数値欄ドラッグ／ホイール：変更  ·  Ctrl+Z / Ctrl+Y：履歴',212,786,9,C.faint,1,false,410)
  local status=A.status;if A.job then local progress=A.job.kind=='analysis' and A.job.progress or ((A.job.index-1)+(A.job.progress or 0))/#A.job.plans;status=string.format(L.text('処理中 %d / %d   %.1f%%  — 対象素材の編集は避けてください。'),min(A.job.index,#A.job.plans),#A.job.plans,progress*100)
  elseif R.time_precise()>A.status_until then status='音声アイテムを選択し、目標カーブを描いてください。' end
+ if Media.waiting then status=Media.message(SECTION) end
  UI.line(24,H-22,W-24,H-22,C.edge,.34);UI.label(status,24,H-17,10,A.warning and C.warn or C.muted,1,false,850)
  UI.label('v'..Core.VERSION,W-100,H-17,9,C.faint,3,true,76,'right');UI.draw_modal();Chrome.draw();Presets.draw();gfx.update()
 end
@@ -1937,14 +2290,18 @@ function UI.key(k)
 end
 function App.close()
  if A.closed then return end;A.closed=true
- if A.edit then UI.commit_edit() end;if A.job then App.cleanup(A.job);A.job=nil end;A.pending_job=nil;pcall(App.persist)
- local hwnd=Chrome.handle();if hwnd then local ok,l,t,r,b=WindowGeometry.JS_Window_GetRect(hwnd);if ok then
-  App.store(SECTION,'window_x',tostring(math.floor(l+.5)),true);App.store(SECTION,'window_y',tostring(math.floor(t+.5)),true)
-  App.store(SECTION,'window_w',tostring(math.floor(r-l+.5)),true);App.store(SECTION,'window_h',tostring(math.floor(b-t+.5)),true)
- end end
- Chrome.cursor(nil);pcall(gfx.quit)
+ if A.edit then pcall(UI.commit_edit) end
+ pcall(App.cleanup,A.job);A.job=nil;A.pending_job=nil;pcall(App.persist)
+ pcall(function()
+  local hwnd=Chrome.handle();if hwnd then local ok,l,t,r,b=WindowGeometry.JS_Window_GetRect(hwnd);if ok then
+   App.store(SECTION,'window_x',tostring(math.floor(l+.5)),true);App.store(SECTION,'window_y',tostring(math.floor(t+.5)),true)
+   App.store(SECTION,'window_w',tostring(math.floor(r-l+.5)),true);App.store(SECTION,'window_h',tostring(math.floor(b-t+.5)),true)
+  end end
+ end)
+ pcall(Chrome.cursor,nil);pcall(gfx.quit)
 end
 function App.loop()
+ Media.tick()
  if A.closing then App.close();return end
  local key=gfx.getchar();if key<0 then A.closing=true;App.close();return end
  local now=R.time_precise();local flags=gfx.getchar(65537);local active=(flags&1)==0 or (flags&2)~=0
@@ -1966,12 +2323,25 @@ end
 function App.tick()
  local ok,err=xpcall(App.loop,debug.traceback)
  if not ok then
-  UI.release_capture();App.notice(App.public_error(err),true)
-  if A.job then App.cleanup(A.job);A.job=nil end
-  if not A.closed then R.defer(App.tick) else pcall(gfx.quit) end
- end
+  gfx.dest=-1;gfx.mode=0;gfx.a=1
+  pcall(UI.release_capture);pcall(App.notice,App.public_error(err),true)
+  pcall(App.cleanup,A.job);A.job=nil;A.pending_job=nil;A.modal=nil
+  Presets.open=false;Presets.swallow=false;Presets.pressed=nil
+  pcall(Chrome.cursor,nil)
+  -- Independent close edges survive failures before normal input dispatch.
+  local down=((gfx.mouse_cap or 0)&1)~=0
+  local hit=gfx.mouse_y>=0 and gfx.mouse_y<26 and gfx.mouse_x>=gfx.w-38 and gfx.mouse_x<gfx.w
+  if down and not A.emergencyDown then A.emergencyClose=hit end
+  if not down and A.emergencyDown then
+   if A.emergencyClose and hit then A.closing=true end
+   A.emergencyClose=nil
+  end
+  A.emergencyDown=down;pcall(Chrome.draw);pcall(gfx.update)
+  if A.closing then App.close() elseif not A.closed then R.defer(App.tick) else pcall(gfx.quit) end
+ else A.emergencyDown=nil;A.emergencyClose=nil end
 end
-if ... == 'blt_test' then return {Presets=Presets,Core=Core,A=A,UI=UI,App=App,Chrome=Chrome,Theme=Theme,L=L,BLT={testDraw=UI.draw},Geometry=WindowGeometry} end
+Media.state=A;Media.onchange=function() A.dirty=true end
+if ... == 'blt_test' then return {Media=Media,Presets=Presets,Core=Core,A=A,UI=UI,App=App,Chrome=Chrome,Theme=Theme,L=L,BLT={testDraw=UI.draw},Geometry=WindowGeometry} end
 local required={'JS_Window_Find' ,'JS_Window_IsWindow','JS_Window_GetRect','JS_Window_SetPosition','JS_Window_SetStyle','JS_Dialog_BrowseForSaveFile'}
 if Chrome.isWindows then required[#required+1]='JS_Mouse_LoadCursor';required[#required+1]='JS_Mouse_SetCursor' end
 for _,name in ipairs(required) do if type(R[name])~='function' then R.MB(L.text('カスタムアプリバーには js_ReaScriptAPI が必要です。\nReaPack から js_ReaScriptAPI をインストールしてください。'),'BLT Spectral Normalizer',0);return end end

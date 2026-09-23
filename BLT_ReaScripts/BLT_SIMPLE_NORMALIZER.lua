@@ -1,10 +1,10 @@
 -- @description SIMPLE NORMALIZER
--- @version 0.5.3
+-- @version 0.5.16
 -- @author Balrulu
 -- @provides
 --   . > ../
 -- @changelog
---   Increase preset capacity and show shared overflow dialogs.
+--   BLT SERIES Beta TEST UPLOAD
 -- @about
 --   BLT SERIES Beta TEST UPLOAD
 
@@ -13,6 +13,157 @@ local BLTPresetLimits={bytes=16777216,stringBytes=2097152,nodes=262144,entries=8
 function BLTPresetLimits.show(english)
  reaper.MB(english and 'Preset capacity limit exceeded. Export presets individually instead of as a bundle.' or '容量上限オーバーです。一括ではなく個別に保存してください。','BLT PRESET',0)
 end
+
+-- BLT media availability 1.0.2. Pause audio work, never the UI defer loop.
+local function create_media_gate(api,graphics)
+ local M={waiting=false,epoch=0};local P=setmetatable({}, {__index=api})
+ local accessors={};local next_check=0;local ready=true;local settle=0;local last_active
+ local function valid(project,p,kind)
+  return p and (not api.ValidatePtr2 or api.ValidatePtr2(project,p,kind))
+ end
+ local function application_active()
+  if graphics and graphics.getchar then
+   local flags=graphics.getchar(65537)
+   if flags>=0 and ((flags&1)==0 or (flags&2)~=0) then return true end
+  end
+  if not (api.JS_Window_GetForeground and api.GetMainHwnd and api.JS_Window_GetParent) then return nil end
+  local foreground=api.JS_Window_GetForeground();local main=api.GetMainHwnd()
+  for _=1,32 do
+   if not foreground then return false end
+   if foreground==main then return true end
+   local parent=api.JS_Window_GetParent(foreground)
+   if parent==foreground then return nil end;foreground=parent
+  end
+  return nil
+ end
+ local function offline(project,take)
+  -- targets() resolves or validates each pointer in this same defer pass.
+  if not take then return false end
+  if api.TakeIsMIDI and api.TakeIsMIDI(take) then return false end
+  if not api.GetMediaItemTake_Source then return false end
+  local source=api.GetMediaItemTake_Source(take);local seen={}
+  for _=1,32 do
+   if not source or seen[source] then break end;seen[source]=true
+   local is_offline=false
+   if api.CF_GetMediaSourceOnline then
+    is_offline=not api.CF_GetMediaSourceOnline(source)
+   elseif api.GetMediaSourceSampleRate and api.GetMediaSourceNumChannels then
+    is_offline=api.GetMediaSourceSampleRate(source)<=0 or api.GetMediaSourceNumChannels(source)<=0
+   end
+   if is_offline then
+    local file=api.GetMediaSourceFileName and api.GetMediaSourceFileName(source,'') or ''
+    if file~='' and (not api.file_exists or api.file_exists(file)) then return true end
+   end
+   source=api.GetMediaSourceParent and api.GetMediaSourceParent(source) or nil
+  end
+  return false
+ end
+ local fields={'info','v','source','snapshot','plans','items','list','queue','entries','reader','data','p','left','right','parts','sources','source_items'}
+ local function targets(project,all_items)
+  local takes,seen,items={},{},{};local invalid=false
+  local function item(p,fresh)
+   if p and items[p] then return end
+   if not p or (not fresh and not valid(project,p,'MediaItem*')) then invalid=true;return end
+   items[p]=true
+   local take=api.GetActiveTake and api.GetActiveTake(p)
+   if take then takes[take]=true end
+  end
+  local function visit(v,depth)
+   if type(v)~='table' or seen[v] or depth>12 then return end;seen[v]=true
+   if v.project and v.project~=project then invalid=true;return end
+   if v.item then item(v.item) end
+   if v.take then
+    if takes[v.take] or valid(project,v.take,'MediaItem_Take*') then takes[v.take]=true else invalid=true end
+   end
+   if v.temp_take and (takes[v.temp_take] or valid(project,v.temp_take,'MediaItem_Take*')) then takes[v.temp_take]=true end
+   for _,key in ipairs(fields) do visit(v[key],depth+1) end
+   for _,entry in ipairs(v) do if type(entry)=='table' then visit(entry,depth+1) end end
+  end
+  if api.CountSelectedMediaItems and api.GetSelectedMediaItem then
+   for i=0,api.CountSelectedMediaItems(project)-1 do item(api.GetSelectedMediaItem(project,i),true) end
+  end
+  local a=M.state
+  if a then
+   for _,key in ipairs({'job','analysis','batch','source_job','wave_job','pjob','xjob','ajob'}) do visit(a[key],0) end
+   if a.job or a.batch or a.source_job then visit(a.items,0);visit(a.queue,0) end
+  end
+  if (all_items or (M.all_items and M.state and M.state.job)) and api.CountMediaItems and api.GetMediaItem then
+   for i=0,api.CountMediaItems(project)-1 do item(api.GetMediaItem(project,i),true) end
+  end
+  return takes,invalid
+ end
+ function M.ready(force,all_items)
+  local now=api.time_precise()
+  if not force and now<next_check then return ready end
+  next_check=now+.10
+  local project=api.EnumProjects(-1,'')
+  local takes,invalid=targets(project,all_items);local blocked=false
+  if M.state and M.state.project and M.state.project~=project then invalid=true end
+  if not invalid then
+   if next(takes) and not api.CF_GetMediaSourceOnline and application_active()==false then blocked=true
+   else for take in pairs(takes) do if offline(project,take) then blocked=true;break end end end
+  end
+  if invalid or not next(takes) then settle=0 end
+  if blocked then settle=now+.25 end
+  local waiting=not invalid and (blocked or now<settle)
+  ready=not waiting
+  if waiting~=M.waiting then
+   M.waiting=waiting;if not waiting then M.epoch=M.epoch+1 end
+   if M.onchange then M.onchange() end
+  end
+  return ready
+ end
+ function M.tick()
+  local active=application_active()
+  if active~=last_active then next_check=0;last_active=active end
+  return M.ready()
+ end
+ function M.message(section)
+  return api.GetExtState(section,'ui_language')=='EN' and 'Waiting for media to come online…' or 'メディアのオンライン復帰を待っています…'
+ end
+ local function signature(take)
+  if not (api.GetMediaItemTake_Item and api.GetItemStateChunk) then return nil end
+  local item=api.GetMediaItemTake_Item(take);if not item then return nil end
+  local ok,chunk=api.GetItemStateChunk(item,'',false)
+  return ok and chunk or nil
+ end
+ if api.CreateTakeAudioAccessor then
+  function P.CreateTakeAudioAccessor(take)
+   local aa=api.CreateTakeAudioAccessor(take)
+   if aa then accessors[aa]={take=take,project=api.EnumProjects(-1,''),signature=signature(take),revision=api.GetProjectStateChangeCount and api.GetProjectStateChangeCount(api.EnumProjects(-1,'')),epoch=M.epoch} end
+   return aa
+  end
+ end
+ if api.CreateTrackAudioAccessor then
+  function P.CreateTrackAudioAccessor(track)
+   local aa=api.CreateTrackAudioAccessor(track);local project=api.EnumProjects(-1,'')
+   if aa then accessors[aa]={track=track,project=project,revision=api.GetProjectStateChangeCount(project),epoch=M.epoch} end
+   return aa
+  end
+ end
+ local function resume(aa)
+  local state=accessors[aa]
+  if not state or state.epoch==M.epoch or M.waiting then return end
+  state.epoch=M.epoch
+  if api.EnumProjects(-1,'')~=state.project then return end
+  local unchanged=state.take and valid(state.project,state.take,'MediaItem_Take*') and state.signature and signature(state.take)==state.signature
+  if state.take and state.revision and api.GetProjectStateChangeCount(state.project)~=state.revision then unchanged=false end
+  if state.track then unchanged=valid(state.project,state.track,'MediaTrack*') and api.GetProjectStateChangeCount(state.project)==state.revision end
+  if unchanged and api.AudioAccessorUpdate then api.AudioAccessorUpdate(aa) end
+ end
+ if api.AudioAccessorStateChanged then
+  function P.AudioAccessorStateChanged(aa) resume(aa);return api.AudioAccessorStateChanged(aa) end
+ end
+ if api.GetAudioAccessorSamples then
+  function P.GetAudioAccessorSamples(...) local aa=...;resume(aa);return api.GetAudioAccessorSamples(...) end
+ end
+ if api.DestroyAudioAccessor then
+  function P.DestroyAudioAccessor(aa) accessors[aa]=nil;return api.DestroyAudioAccessor(aa) end
+ end
+ return M,P
+end
+local Media,reaper=create_media_gate(reaper,gfx)
+
 
 -- BLT window geometry 1.0.0. Embedded; screen coordinates only.
 local function create_window_geometry(api,graphics)
@@ -137,7 +288,7 @@ local LanguageCatalog={en={
  ["解析中...%d%%"]="Analyzing...%d%%",
  ["解析中...100%"]="Analyzing...100%",
  ["ゲート付きIntegrated Loudness。全体平均を基準にします。"]="Gated integrated loudness, based on the overall average.",
- ["有音・発話主体の区間だけを平均します。"]="Average only active, speech-dominant sections.",
+ ["音量で無音・小音量区間を除外して平均します。"]="Exclude quiet sections using a level gate; average the remaining sections.",
  ["1秒窓の中央値。突出した一部に引っ張られにくい方式です。"]="Median of 1-second windows. Less affected by isolated loud sections.",
  ["1秒窓の中央60%だけをパワー平均。両端の外れ値を除外します。"]="Power average of the middle 60% of 1-second windows; excludes outliers at both ends.",
  ["1秒窓の80パーセンタイル。やや強い発話を基準にします。"]="80th percentile of 1-second windows; favors stronger speech.",
@@ -147,9 +298,16 @@ local LanguageCatalog={en={
  ["Sample Peakを指定値へ一致させます。"]="Match sample peak to the target.",
  ["音声サンプルが不正です。"]="Invalid audio samples.",
  ["音声を取得できません"]="Cannot read audio",
- ["音声アイテムは1000件まで対応します。"]="Up to 1,000 audio items supported.",
+ ["音声アイテムは5000件まで対応します。"]="Up to 5,000 audio items supported.",
  ["モノ／ステレオのみ対応"]="Mono/stereo only",
- ["再生速度1.0のみ対応"]="Playback rate 1.0 only",
+ ["一時解析トラックを作成できません。"]="Could not create the analysis track.",
+ ["一時解析アイテムを作成できません。"]="Could not create the analysis item.",
+ ["一時解析データを解放できません。"]="Could not release temporary analysis data.",
+ ["再生速度が不正です"]="Invalid playback rate",
+ ["1.0倍速換算"]="At source speed",
+ ["速度変更あり：1.0倍速換算の測定値です（実再生値とは異なる場合があります）"]="Rate changed: measured at source speed; playback levels may differ",
+ ["1.0倍速換算で30分まで対応"]="Source-speed duration limit: 30 min",
+ ["1.0倍速換算の合計は2時間まで対応します。"]="Source-speed duration exceeds 2 hours.",
  ["ミュート／音量0"]="Muted / zero volume",
  ["既存のTake Volumeカーブあり（対象外）"]="Existing take volume curve (skipped)",
  ["長さ0秒超〜30分に対応"]="Length must be >0 s and <=30 min",
@@ -187,14 +345,26 @@ local LanguageCatalog={en={
  ["CHAMELEON  オリジナル配色"]="CHAMELEON  Original colors",
  ["カスタムタイトルバーには js_ReaScriptAPI が必要です。\nReaPack から js_ReaScriptAPI をインストールしてください。"]="The app bar requires js_ReaScriptAPI.\nInstall js_ReaScriptAPI via ReaPack.",
  ["数値を入力できなかったため、元の値へ戻しました。"]="Invalid input. Previous value restored.",
- ["クリック入力 ／ 上下ドラッグ：1刻み（Shift：0.1） ／ ホイール：0.1"]="Click: type / Drag vertically: 1 (Shift: 0.1) / Wheel: 0.1",
+ ["クリック入力 ／ ドラッグ・ホイール：1刻み（Shift：0.1）"]="Click: type / Drag or wheel: 1 (Shift: 0.1)",
  ["選択アイテムの波形"]="SELECTED WAVEFORM",
  ["選択アイテムを自動解析しています"]="Analyzing selected items automatically",
  ["アイテム"]="Item",
  ["現在"]="Current",
- ["目標"]="Target",
+ ["チャンネル"]="Channels",
  ["補正"]="Gain",
  ["Peak後"]="Peak after",
+ ["TP後"]="TP after",
+ ["4倍補間でサンプル間のピークを推定します。"]="Estimate inter-sample peaks with 4x interpolation.",
+ ["全区間・全チャンネルの二乗平均。無音を含みます。"]="Unweighted RMS across time and channels, including silence.",
+ ["個別適用"]="Individual",
+ ["全体適用"]="Together",
+ ["モノラルの場合追加で-3 dB補正"]="Mono: extra -3 dB",
+ ["各アイテムを個別に目標値へ合わせます。"]="Normalize each item to its target.",
+ ["選択内の最大測定値を目標に合わせ、全対象に共通ゲインを適用します。"]="Match the highest measured item to the target using common gain.",
+ ["ノーマライズ後、モノラル素材だけ追加で-3 dBします。全体適用でも追加補正します。"]="Apply an extra -3 dB to mono sources after normalization, including Together mode.",
+ ["TRUE PEAK予測"]="TRUE PEAK AFTER",
+ ["無音のため測定できません"]="Cannot measure silence",
+
  ["状態"]="Status",
  ["指定基準"]="Reference",
  ["変更なし"]="Unchanged",
@@ -522,6 +692,7 @@ function Presets.decode(data)
  local prefix=host.section..'_PRESET_V1\n'
  if data:sub(1,#prefix)~=prefix then return nil end
  local p=B.unpack(data:sub(#prefix+1))
+ if type(p)=='table' and host.upgrade then host.upgrade(p.values) end
  if type(p)~='table' or not Presets.name(p.name) or not B.shape(p.values,host.defaults) or not host.valid(p.values) then return nil end
  return p
 end
@@ -640,18 +811,8 @@ local function update_window_resize() host.resize() end
 local function clear_chrome_tooltip() B.popupUntil=nil;if R.TrackCtl_SetToolTip then R.TrackCtl_SetToolTip('',0,0,true) end end
 B.clearTooltip=clear_chrome_tooltip
 -- Non-modal dependency hint. Uses the existing tick, with no extra defer loop.
-function B.inputNotice()
- local x,y=gfx.clienttoscreen(gfx.mouse_x,gfx.mouse_y+18)
- R.TrackCtl_SetToolTip(Language.message('ReaImGui 0.10以降が必要です。ReaPackで導入・更新してください。'),x,y,true)
- B.popupUntil=R.time_precise()+1;B.tip=nil;B.tipVisible=false
-end
-function B.requireInput(ime)
- if ime.api then return true end
- if type(R.ImGui_GetBuiltinPath)~='function' then B.inputNotice();return false end
- local ok,api=pcall(function() return dofile(R.ImGui_GetBuiltinPath()..'/imgui.lua')('0.10') end)
- if not ok or type(api)~='table' then B.inputNotice();return false end
- ime.api=api;return true
-end
+
+
 function B.switch(x,y,state,enabled)
  local s,bx,by=host.geometry();local cy=by+(y+12)*s;local cx=bx+(x+7+12*state)*s
  local c=C.edge2;gfx.set(c[1],c[2],c[3],enabled and .45 or .2);gfx.line(bx+(x+3)*s,cy,bx+(x+23)*s,cy,1)
@@ -942,8 +1103,6 @@ local function custom_titlebar(blocked)
   end
   local rcx,rcy=resetX+resetW*.5,Chrome.titleH*.5
   local rcol=hoverReset and Chrome.mint or C.muted
-
-  -- Reference-style outlined window; arrow explicitly points LOWER LEFT.
   gfx.set(rcol[1],rcol[2],rcol[3],hoverReset and .98 or .82)
   gfx.roundrect(rcx-6,rcy-6,12,12,1,1)
   gfx.line(rcx+3,rcy-3,rcx-3,rcy+3,1)
@@ -1073,6 +1232,7 @@ local project_undo=create_project_undo(R,{
  after=function(project) if host.undoRefresh then host.undoRefresh(project) end;wake_visuals() end,
 })
 function B.key(k)
+ if k<0 then return k end
  if Presets.open then Presets.key(k);return 0 end
  if host and not host.localUndo then
   if host.undoAction then
@@ -1086,6 +1246,7 @@ function B.key(k)
  return k
 end
 function B.tick(now)
+ Media.tick()
  if not host then return end
  if B.windowW~=gfx.w or B.windowH~=gfx.h then B.windowW,B.windowH=gfx.w,gfx.h;B.lastRect=nil;wake_visuals() end
  B.viewport(host.geometry(),gfx.ext_retina or 1)
@@ -1139,13 +1300,26 @@ function B.cleanup(fn,...)
 end
 function B.recoverInput(state,err)
  gfx.dest=-1;gfx.mode=0;gfx.a=1
- for _,key in ipairs({'drag','number_drag','pointer_capture','field_drag','fieldDrag','curve_drag','scroll_drag','seam_drag','seam_hold','pressed','popup','name_dialog','duplicate_modal'}) do state[key]=nil end
+ for _,key in ipairs({'drag','number_drag','pointer_capture','field_drag','fieldDrag','scrollDrag','source_wave_drag','curve_drag','scroll_drag','seam_drag','seam_hold','pressed','popup','name_dialog','duplicate_modal'}) do state[key]=nil end
  if host.cancelEdit then B.cleanup(host.cancelEdit) end
- Presets.open=false;Presets.swallow=false
+ Presets.open=false;Presets.swallow=false;Presets.pressed=nil;Presets.hoverSince=nil
+ Chrome.drag=nil;Chrome.resize=nil
+ if host.cursor then B.cleanup(host.cursor,nil) end
  B.recoveryMode=true
  local ok,why=pcall(B.bar)
  B.recoveryMode=nil
- if not ok then B.logError(why) end
+ if not ok then
+  B.logError(why)
+  -- A failed font, preset or theme draw must still allow closing the window.
+  local down=((gfx.mouse_cap or 0)&1)~=0
+  local hit=gfx.mouse_y>=0 and gfx.mouse_y<26 and gfx.mouse_x>=gfx.w-38 and gfx.mouse_x<gfx.w
+  if down and not B.emergencyDown then B.emergencyClose=hit end
+  if not down and B.emergencyDown then
+   if B.emergencyClose and hit then Chrome.requestClose=true end
+   B.emergencyClose=nil
+  end
+  B.emergencyDown=down
+ else B.emergencyDown=nil;B.emergencyClose=nil end
  pcall(B.footer,B.publicError(err),true,gfx.w,0,B.footerVersion or '')
  pcall(gfx.update)
  if Chrome.requestClose then state.closing=true end
@@ -1160,33 +1334,10 @@ function B.title(title,subtitle,width,divider)
  B.font(10,1,false,scale,host.faces);gfx.set(C.accent2[1],C.accent2[2],C.accent2[3],1);gfx.x=ox+26*scale;gfx.y=origin+44*scale;gfx.drawstr(UI.fit(Language.text(subtitle),(width-155)*scale))
  if divider~=false then gfx.set(C.edge2[1],C.edge2[2],C.edge2[3],.26);gfx.line(ox+24*scale,origin+62*scale,ox+(width-24)*scale,origin+62*scale,1) end
 end
-function B.chaosButton(cx,cy,cw,ch,enabled,hot,pushed,time,glow)
- local d=host.chaosPainter
- local violet=Chameleon.enabled and C.accent2 or B.chaosViolet
- local ember=Chameleon.enabled and C.accent or B.chaosEmber
- local pale=Chameleon.enabled and C.text or B.chaosPale
- local surface=Chameleon.enabled and C.field or B.chaosSurface
- local alive=enabled and 1 or .25
- local breath=(.5+.5*math.sin(time*.85))*alive
- local y=cy+(pushed and 1 or 0);local center=ch/2
- -- Keep both the outer glow and the pressed face inside the registered bounds.
- d.cut(cx,cy,cw,ch,11,violet,.025*alive,violet,.10+.07*breath)
- d.cut(cx,y+2,cw,ch-4,9,surface,1,violet,(.45+.3*glow)*alive)
- d.gradient(cx+2,y+4,cw-4,ch-8,violet,C.bg,.12+.15*glow,.015,true)
- for i=1,6 do
-  local phase=time*.3+i*1.7;local px=cx+12+(i-1)*(cw-29)/5
-  local py=y+center+math.sin(phase)*(center-6)
-  local alpha=(.18+.22*math.sin(phase*.7)^2)*alive
-  if px<cx+36 or px>cx+cw-36 or math.abs(py-y-center)>11 then
-   d.disc(px,py,3,violet,alpha*.08);d.disc(px,py,.7,i%2==0 and ember or pale,alpha)
-  end
- end
- d.line(cx+cw*.335,y+ch-5,cx+cw*.665,y+ch-5,violet,(.18+.22*breath+.2*glow)*alive)
- d.label('C H A O S',cx+24,y+center-9,17,enabled and pale or C.faint,2,cw-48,22,1,true)
-end
-B.chaosViolet={.62,.23,.94};B.chaosEmber={.92,.27,.65};B.chaosPale={.87,.69,1};B.chaosSurface={.038,.014,.068}
+
 
 function B.footer(message,bad,width,height,version,progress)
+ if Media.waiting then message=Media.message(host.section);bad=false;progress=nil end
  if version~='' then B.footerVersion=version end
  scale,ox,oy=host.geometry();message=Language.message(B.notice or tostring(message or ''))
  if B.notice then bad=B.noticeBad end
@@ -1194,7 +1345,7 @@ function B.footer(message,bad,width,height,version,progress)
  B.font(8,3,true,scale,host.faces);local ver=version~='' and 'v'..version or '';local vw=UI.textMetrics(ver)
  local available=(width-48)*scale-vw-14*scale
  local progressing=type(progress)=='number'
- B.font(9,1,false,scale,host.faces);local shown=progressing and '' or UI.fit(message,available)
+ B.font(11,1,false,scale,host.faces);local shown=progressing and '' or UI.fit(message,available)
  B.footerText=progressing and '' or message;B.footerClipped=not progressing and shown~=message;B.footerBounds={ox+24*scale,y,ox+24*scale+available,y+14*scale}
  gfx.set(C.edge[1],C.edge[2],C.edge[3],.26);gfx.line(ox+24*scale,y-3*scale,ox+(width-24)*scale,y-3*scale)
  if progressing then
@@ -1235,10 +1386,10 @@ local function mean_power(blocks,gate)
   return n>0 and sum/n or nil,n
 end
 
-local Core={SR=48000,HOP=960,DT=.02,READ_BLOCK=16384,PEAK_READ_BLOCK=131072,MAX_ITEMS=1000,MAX_SECONDS=7200,MAX_GAIN=60,WAVEFORM_BINS=1024}
+local Core={SR=48000,HOP=960,DT=.02,READ_BLOCK=16384,PEAK_READ_BLOCK=131072,MAX_ITEMS=5000,MAX_SECONDS=7200,MAX_GAIN=60,WAVEFORM_BINS=1024}
 Core.modes={
   {key="integrated",name="LUFS-I",code="I",unit="LUFS",default=-24,desc="ゲート付きIntegrated Loudness。全体平均を基準にします。"},
-  {key="speech",name="SPEECH",code="VOICE",unit="LUFS",default=-24,desc="有音・発話主体の区間だけを平均します。"},
+  {key="speech",name="SPEECH",code="VOICE",unit="LUFS",default=-24,desc="音量で無音・小音量区間を除外して平均します。"},
   {key="median",name="MEDIAN",code="P50",unit="LUFS",default=-24,desc="1秒窓の中央値。突出した一部に引っ張られにくい方式です。"},
   {key="robust",name="ROBUST",code="TRIM",unit="LUFS",default=-24,desc="1秒窓の中央60%だけをパワー平均。両端の外れ値を除外します。"},
   {key="p80",name="P80",code="P80",unit="LUFS",default=-20,desc="1秒窓の80パーセンタイル。やや強い発話を基準にします。"},
@@ -1247,10 +1398,12 @@ Core.modes={
   {key="max400",name="LUFS-M",code="M MAX",unit="LUFS",default=-16,desc="400msの最大LUFS-M。400ms未満は測定対象外です。"},
   {key="peak",name="PEAK",code="SP",unit="dBFS",default=-1,desc="Sample Peakを指定値へ一致させます。"},
   {key="shortterm",name="LUFS-S",code="S MAX",unit="LUFS",default=-18,desc="3秒の最大LUFS-S。3秒未満は測定対象外です。"},
+  {key="truepeak",name="TRUE PEAK",code="TP 4x",unit="dBTP",default=-1,desc="4倍補間でサンプル間のピークを推定します。"},
+  {key="rms",name="RMS",code="RMS-I",unit="dBFS",default=-20,desc="全区間・全チャンネルの二乗平均。無音を含みます。"},
 }
 
 -- Display order is independent of persisted mode IDs and per-mode targets.
-Core.mode_order={9,1,8,10,2,3,4,5,6,7}
+Core.mode_order={9,11,12,1,8,10,2,3,4,5,6,7}
 
 local function biquad(b0,b1,b2,a1,a2) return {b0,b1,b2,a1,a2,0,0} end
 local function run(f,x)
@@ -1401,7 +1554,7 @@ function Core.measure(frames)
   return {
     valid=integrated~=nil or speech~=nil or median~=nil or peak>0,
     integrated=integrated,speech=speech,median=median,robust=robust,p80=p80,p95=p95,max1s=max1s,max400=max400,shortterm=shortterm,duration=dt,
-    peak=dba(peak),whole=whole,activeRatio=activeRatio
+    peak=dba(peak),whole=whole,activeRatio=activeRatio,sampleRate=Core.SR
   }
 end
 
@@ -1500,14 +1653,14 @@ end
 
 function Core.collect(project)
   local n=R.CountSelectedMediaItems(project)
-  local result,seconds={},0
+  local result,seconds,sourceSeconds={},0,0
   for i=0,n-1 do
     local item=R.GetSelectedMediaItem(project,i)
     local take,source,channels=audio_take(item)
     if take then
-      if #result>=Core.MAX_ITEMS then error("音声アイテムは1000件まで対応します。",0) end
+      if #result>=Core.MAX_ITEMS then error("音声アイテムは5000件まで対応します。",0) end
       local track=R.GetMediaItemTrack(item)
-      local v={item=item,take=take,track=track,
+      local v={item=item,take=take,track=track,project=project,loop=R.GetMediaItemInfo_Value(item,"B_LOOPSRC"),
         tracknum=R.GetMediaTrackInfo_Value(track,"IP_TRACKNUMBER"),
         pos=R.GetMediaItemInfo_Value(item,"D_POSITION"),len=R.GetMediaItemInfo_Value(item,"D_LENGTH"),
         volume=R.GetMediaItemInfo_Value(item,"D_VOL"),mute=R.GetMediaItemInfo_Value(item,"B_MUTE"),index=R.GetMediaItemInfo_Value(item,"IP_ITEMNUMBER"),
@@ -1517,22 +1670,26 @@ function Core.collect(project)
       v.name=R.GetTakeName(take) or "Audio item"
       v.takevol=R.GetMediaItemTakeInfo_Value(take,"D_VOL")
       v.rate=R.GetMediaItemTakeInfo_Value(take,"D_PLAYRATE")
+      v.rateWarning=finite(v.rate) and abs(v.rate-1)>1e-9
+      v.measureLen=v.len*(v.rateWarning and v.rate or 1)
       v.fxCount,v.fxEnabled=take_fx_state(take)
       v.transformState=take_transform_state(take)
       if v.ch~=1 and v.ch~=2 then v.reason="モノ／ステレオのみ対応"
-      elseif abs(v.rate-1)>1e-9 then v.reason="再生速度1.0のみ対応"
+      elseif not finite(v.rate) or v.rate<=0 then v.reason="再生速度が不正です"
       elseif R.GetMediaItemInfo_Value(item,"B_MUTE")~=0 or v.volume<=0 or abs(v.takevol)<1e-12 then v.reason="ミュート／音量0"
       elseif not Core.neutral(take) then v.reason="既存のTake Volumeカーブあり（対象外）"
-      elseif v.len<=0 or v.len>1800 then v.reason="長さ0秒超〜30分に対応"
+      elseif not finite(v.len) or v.len<=0 or v.len>1800 then v.reason="長さ0秒超〜30分に対応"
+      elseif not finite(v.measureLen) or v.measureLen>1800 then v.reason="1.0倍速換算で30分まで対応"
       else
         for fx=0,R.TakeFX_GetCount(take)-1 do
           if R.TakeFX_GetEnabled(take,fx) then v.reason="有効なTake FXあり（対象外）"; break end
         end
       end
-      if not v.reason then seconds=seconds+v.len end
+      if not v.reason then seconds=seconds+v.len;sourceSeconds=sourceSeconds+v.measureLen end
       result[#result+1]=v
     end
   end
+  if sourceSeconds>Core.MAX_SECONDS then error("1.0倍速換算の合計は2時間まで対応します。",0) end
   if seconds>Core.MAX_SECONDS then error("選択した音声の合計は2時間まで対応します。",0) end
   table.sort(result,function(a,b)
     if a.tracknum~=b.tracknum then return a.tracknum<b.tracknum end
@@ -1556,6 +1713,7 @@ function Core.selection_signature(project)
         stable_num(R.GetMediaItemInfo_Value(item,"D_LENGTH")),
         stable_num(R.GetMediaItemInfo_Value(item,"D_VOL")),
         stable_num(R.GetMediaItemInfo_Value(item,"B_MUTE")),
+        stable_num(R.GetMediaItemInfo_Value(item,"B_LOOPSRC")),
       }
       local _,tguid=R.GetSetMediaItemTakeInfo_String(take,"GUID","",false)
       parts[#parts+1]=tguid or tostring(take)
@@ -1607,6 +1765,7 @@ function Core.check(project,items,allowSelectionChange)
       or (not allowSelectionChange and not R.IsMediaItemSelected(v.item)) then return nil,"音声アイテムの選択が変わりました。自動更新します。" end
     if not v.reason and (R.GetActiveTake(v.item)~=v.take or R.GetMediaItemTrack(v.item)~=v.track
       or R.GetMediaItemInfo_Value(v.item,"D_POSITION")~=v.pos or R.GetMediaItemInfo_Value(v.item,"D_LENGTH")~=v.len
+      or R.GetMediaItemInfo_Value(v.item,"B_LOOPSRC")~=v.loop
       or R.GetMediaItemInfo_Value(v.item,"D_VOL")~=v.volume or R.GetMediaItemInfo_Value(v.item,"B_MUTE")~=v.mute) then return nil,"対象アイテム自体が変更されています。" end
     if v.take and not v.reason then
       local source=R.GetMediaItemTake_Source(v.take);local fxCount,fxEnabled=take_fx_state(v.take)
@@ -1622,7 +1781,71 @@ function Core.check(project,items,allowSelectionChange)
   return true
 end
 
+-- A temporary unrouted source-speed copy exists only during this synchronous read.
+-- Never retain temporary project objects across defer, cancellation or user edits.
+function Core.source_samples(reader,n)
+  local v=reader.v;local sr=reader.sr or Core.SR
+  if not reader.cache or reader.n<reader.cacheAt or reader.n+n>reader.cacheAt+reader.cacheFrames then
+    if R.EnumProjects(-1,"")~=v.project or not R.ValidatePtr2(v.project,v.take,"MediaItem_Take*")
+      or not R.ValidatePtr2(v.project,v.item,"MediaItem*")
+      or R.GetMediaItemTake_Source(v.take)~=v.source then
+      error("解析中にアイテムが変更されました。",0)
+    end
+    local track,aa
+    local count=min(Core.PEAK_READ_BLOCK,reader.total-reader.n)
+    R.PreventUIRefresh(1)
+    local ok,result=pcall(function()
+      R.InsertTrackAtIndex(0,false)
+      track=R.GetTrack(v.project,0)
+      if not track then error("一時解析トラックを作成できません。",0) end
+      R.SetMediaTrackInfo_Value(track,"B_MAINSEND",0)
+      R.SetMediaTrackInfo_Value(track,"B_MUTE",1)
+      R.SetMediaTrackInfo_Value(track,"B_SHOWINTCP",0)
+      R.SetMediaTrackInfo_Value(track,"B_SHOWINMIXER",0)
+      local item=R.AddMediaItemToTrack(track)
+      local take=item and R.AddTakeToMediaItem(item)
+      if not take then error("一時解析アイテムを作成できません。",0) end
+      R.SetMediaItemTake_Source(take,v.source)
+      R.SetMediaItemInfo_Value(item,"D_POSITION",0)
+      R.SetMediaItemInfo_Value(item,"D_LENGTH",v.measureLen)
+      R.SetMediaItemInfo_Value(item,"D_VOL",1)
+      R.SetMediaItemInfo_Value(item,"B_LOOPSRC",v.loop)
+      R.SetMediaItemTakeInfo_Value(take,"D_PLAYRATE",1)
+      R.SetMediaItemTakeInfo_Value(take,"D_STARTOFFS",v.startoffs)
+      R.SetMediaItemTakeInfo_Value(take,"I_CHANMODE",v.chanmode)
+      R.SetMediaItemTakeInfo_Value(take,"D_VOL",1)
+      aa=R.CreateTakeAudioAccessor(take)
+      if not aa then error("音声アクセサーを作成できません。",0) end
+      local start,finish=R.GetAudioAccessorStartTime(aa),R.GetAudioAccessorEndTime(aa)
+      if not finite(start) or not finite(finish) or finish-start<v.measureLen-1/sr then
+        error("取得できる音声範囲がアイテム長と一致しません。",0)
+      end
+      reader.buffer.clear()
+      local rv=R.GetAudioAccessorSamples(aa,sr,v.ch,start+reader.n/sr,count,reader.buffer)
+      if type(rv)~="number" or rv<0 then error("音声サンプルの取得に失敗しました。",0) end
+      return reader.buffer.table(1,count*v.ch)
+    end)
+    local destroyed,removed=true,true
+    if aa then destroyed=pcall(R.DestroyAudioAccessor,aa) end
+    if track then removed=pcall(R.DeleteTrack,track) end
+    R.PreventUIRefresh(-1)
+    if not destroyed or not removed then error("一時解析データを解放できません。",0) end
+    if not ok then error(result,0) end
+    reader.cache,reader.cacheAt,reader.cacheFrames=result,reader.n,count
+  end
+  local samples={};local first=(reader.n-reader.cacheAt)*v.ch
+  for i=1,n*v.ch do samples[i]=reader.cache[first+i] end
+  return samples
+end
+function Core.unit_reader(v,peak)
+  local buffer=R.new_array(Core.PEAK_READ_BLOCK*v.ch)
+  if not buffer then error("音声解析用バッファを作成できません。",0) end
+  return {unitRate=true,v=v,n=0,total=floor(v.measureLen*Core.SR+.5),buffer=buffer,
+    dsp=not peak and Core.analyzer(v.ch,v.volume*abs(v.takevol)) or nil,
+    peak=0,gain=v.volume*abs(v.takevol)}
+end
 function Core.reader(v)
+  if v.rateWarning then return Core.unit_reader(v,false) end
   local aa=R.CreateTakeAudioAccessor(v.take)
   if not aa then error("音声アクセサーを作成できません。",0) end
   local start,finish=R.GetAudioAccessorStartTime(aa),R.GetAudioAccessorEndTime(aa)
@@ -1641,16 +1864,23 @@ function Core.reader_progress(reader)
   return reader and reader.total>0 and clamp(reader.n/reader.total,0,1) or 0
 end
 function Core.dispose(reader)
+  if reader then reader.cache=nil; if reader.reader then Core.dispose(reader.reader);reader.reader=nil end end
   if reader and reader.aa then local aa=reader.aa;reader.aa=nil;pcall(R.DestroyAudioAccessor,aa) end
 end
 function Core.read_step(reader)
-  local n=min(Core.READ_BLOCK,reader.total-reader.n)
+  local n=min(reader.level and 2048 or Core.READ_BLOCK,reader.total-reader.n)
   if n<=0 then return true end
+  local samples
+  if reader.unitRate then samples=Core.source_samples(reader,n)
+  else
   if R.AudioAccessorStateChanged(reader.aa) then error("解析中にアイテムが変更されました。",0) end
   reader.buffer.clear()
   local rv=R.GetAudioAccessorSamples(reader.aa,Core.SR,reader.v.ch,reader.start+reader.n/Core.SR,n,reader.buffer)
   if type(rv)~="number" or rv<0 then error("音声サンプルの取得に失敗しました。",0) end
-  Core.feed(reader.dsp,reader.buffer.table(1,n*reader.v.ch),n)
+    samples=reader.buffer.table(1,n*reader.v.ch)
+  end
+  Core.feed(reader.dsp,samples,n)
+  if reader.level then Core.level_feed(reader.level,samples,n) end
   reader.n=reader.n+n
   return reader.n>=reader.total
 end
@@ -1658,25 +1888,31 @@ end
 -- PEAK mode fast path: scan only absolute sample peaks. This deliberately skips
 -- K-weighting, rolling windows, gating and percentile statistics.
 function Core.peak_reader(v)
+  local sr=finite(v.sourceRate) and max(1,floor(v.sourceRate+.5)) or Core.SR
+  if v.rateWarning then local reader=Core.unit_reader(v,true);reader.sr=sr;reader.total=floor(v.measureLen*sr+.5);return reader end
   local aa=R.CreateTakeAudioAccessor(v.take)
   if not aa then error("音声アクセサーを作成できません。",0) end
   local start,finish=R.GetAudioAccessorStartTime(aa),R.GetAudioAccessorEndTime(aa)
-  if not finite(start) or not finite(finish) or finish-start<v.len-1/Core.SR then
+  if not finite(start) or not finite(finish) or finish-start<v.len-1/sr then
     pcall(R.DestroyAudioAccessor,aa); error("取得できる音声範囲がアイテム長と一致しません。",0)
   end
   local buffer_ok,buffer=pcall(R.new_array,Core.PEAK_READ_BLOCK*v.ch)
   if not buffer_ok or not buffer then pcall(R.DestroyAudioAccessor,aa); error("ピーク解析用バッファを作成できません。",0) end
-  return {aa=aa,v=v,start=start,n=0,total=floor(v.len*Core.SR+.5),
+  return {aa=aa,v=v,sr=sr,start=start,n=0,total=floor(v.len*sr+.5),
     buffer=buffer,peak=0,gain=v.volume*abs(v.takevol)}
 end
 function Core.peak_read_step(reader)
   local n=min(Core.PEAK_READ_BLOCK,reader.total-reader.n)
   if n<=0 then return true end
+  local samples
+  if reader.unitRate then samples=Core.source_samples(reader,n)
+  else
   if R.AudioAccessorStateChanged(reader.aa) then error("解析中にアイテムが変更されました。",0) end
   reader.buffer.clear()
-  local rv=R.GetAudioAccessorSamples(reader.aa,Core.SR,reader.v.ch,reader.start+reader.n/Core.SR,n,reader.buffer)
+  local rv=R.GetAudioAccessorSamples(reader.aa,reader.sr,reader.v.ch,reader.start+reader.n/reader.sr,n,reader.buffer)
   if type(rv)~="number" or rv<0 then error("音声サンプルの取得に失敗しました。",0) end
-  local samples=reader.buffer.table(1,n*reader.v.ch)
+    samples=reader.buffer.table(1,n*reader.v.ch)
+  end
   local peak=reader.peak
   for i=1,#samples do
     local x=samples[i]
@@ -1691,10 +1927,160 @@ end
 function Core.finish_peak_reader(reader)
   local p=(reader.peak or 0)*(reader.gain or 1)
   if p<=0 then return {valid=false,reason="Sample Peakを測定できません",peak=nil,peakOnly=true} end
-  return {valid=true,peak=dba(p),peakOnly=true,frames=nil}
+  return {valid=true,peak=dba(p),peakOnly=true,frames=nil,sampleRate=reader.sr}
 end
 
-function Core.plan(items,mode,targetMode,targetValue,referenceIndex)
+-- BS.1770-4 Annex 2: four-phase, 12-tap interpolator (floating-point path).
+-- https://www.itu.int/rec/R-REC-BS.1770
+Core.TP_FIR={
+ { .001708984375,.010986328125,-.0196533203125,.033203125,-.0594482421875,.1373291015625,.97216796875,-.102294921875,.047607421875,-.026611328125,.014892578125,-.00830078125},
+ {-.0291748046875,.029296875,-.0517578125,.089111328125,-.16650390625,.465087890625,.77978515625,-.2003173828125,.1015625,-.0582275390625,.0330810546875,-.0189208984375},
+ {-.0189208984375,.0330810546875,-.0582275390625,.1015625,-.2003173828125,.77978515625,.465087890625,-.16650390625,.089111328125,-.0517578125,.029296875,-.0291748046875},
+ {-.00830078125,.014892578125,-.026611328125,.047607421875,-.102294921875,.97216796875,.1373291015625,-.0594482421875,.033203125,-.0196533203125,.010986328125,.001708984375},
+}
+function Core.level_analyzer(ch,gain,truepeak,sr)
+ local a={ch=ch,gain=gain,peak=0,energy=0,frames=0,history={},cursor=1,tp=0,truepeak=truepeak,sr=sr,waveform={},wavePeak=0,waveCount=0}
+ if truepeak then for c=1,ch do local h={};for i=1,24 do h[i]=0 end;a.history[c]=h end end
+ return a
+end
+function Core.tp_sample(a,c,x)
+ local h=a.history[c];local j=a.cursor;h[j]=x;h[j+12]=x
+ local peak=a.tp
+ for phase=1,4 do
+  local k=Core.TP_FIR[phase]
+  local v=k[1]*h[j+11]+k[2]*h[j+10]+k[3]*h[j+9]+k[4]*h[j+8]
+   +k[5]*h[j+7]+k[6]*h[j+6]+k[7]*h[j+5]+k[8]*h[j+4]
+   +k[9]*h[j+3]+k[10]*h[j+2]+k[11]*h[j+1]+k[12]*h[j]
+  peak=max(peak,abs(v))
+ end
+ a.tp=peak
+end
+function Core.level_feed(a,samples,n)
+ local p=1
+ for _=1,n do
+  for c=1,a.ch do
+   local x=samples[p];p=p+1
+   if not finite(x) then error('音声サンプルが不正です。',0) end
+   x=x*a.gain;a.energy=a.energy+x*x;a.peak=max(a.peak,abs(x));a.wavePeak=max(a.wavePeak,abs(x))
+   if a.truepeak then Core.tp_sample(a,c,x) end
+  end
+  a.cursor=a.cursor%12+1;a.frames=a.frames+1;a.waveCount=a.waveCount+1
+  if a.waveCount>=a.waveHop then a.waveform[#a.waveform+1]=a.wavePeak;a.waveCount=0;a.wavePeak=0 end
+ end
+end
+function Core.level_finish(a)
+ if a.truepeak and not a.flushed then
+  -- Include FIR latency/tail without adding silence to the RMS denominator.
+  for _=1,12 do for c=1,a.ch do Core.tp_sample(a,c,0) end;a.cursor=a.cursor%12+1 end
+ end
+ if not a.flushed and a.waveCount>0 then a.waveform[#a.waveform+1]=a.wavePeak end
+ a.flushed=true
+ local power=a.frames>0 and a.energy/(a.frames*a.ch) or 0
+ return {valid=a.peak>0,reason=a.peak<=0 and '無音のため測定できません' or nil,
+  peak=a.peak>0 and dba(a.peak) or nil,rms=power>0 and dbp(power) or nil,
+  truepeak=a.truepeak and a.peak>0 and dba(max(a.peak,a.tp)) or nil,
+  levelOnly=true,tpComplete=a.truepeak,duration=a.frames/a.sr,sampleRate=a.sr}
+end
+function Core.level_reader(v,truepeak)
+ local sr=truepeak and max(Core.SR,floor(v.sourceRate+.5)) or max(1,floor(v.sourceRate+.5))
+ local reader=Core.peak_reader(v)
+ reader.sr=sr;reader.total=floor((v.rateWarning and v.measureLen or v.len)*sr+.5)
+ reader.level=Core.level_analyzer(v.ch,v.volume*abs(v.takevol),truepeak,sr)
+ reader.level.waveHop=max(1,math.ceil(reader.total/Core.WAVEFORM_BINS))
+ return reader
+end
+function Core.level_read_step(reader)
+ local n=min(reader.level.truepeak and 2048 or Core.READ_BLOCK,reader.total-reader.n)
+ if n<=0 then return true end
+ local samples
+ if reader.unitRate then samples=Core.source_samples(reader,n)
+ else
+  if R.AudioAccessorStateChanged(reader.aa) then error('解析中にアイテムが変更されました。',0) end
+  reader.buffer.clear()
+  local rv=R.GetAudioAccessorSamples(reader.aa,reader.sr,reader.v.ch,reader.start+reader.n/reader.sr,n,reader.buffer)
+  if type(rv)~='number' or rv<0 then error('音声サンプルの取得に失敗しました。',0) end
+  samples=reader.buffer.table(1,n*reader.v.ch)
+ end
+ Core.level_feed(reader.level,samples,n);reader.n=reader.n+n
+ return reader.n>=reader.total
+end
+
+-- Keep all measurement methods for the same immutable item snapshot.
+function Core.all_reader(v)
+  local r=Core.reader(v)
+  local a={v=v,reader=r,n=0,total=1,phase=1,phases=v.sourceRate==Core.SR and 1 or 2}
+  if v.sourceRate<=Core.SR then
+    r.level=Core.level_analyzer(v.ch,v.volume*abs(v.takevol),true,Core.SR)
+    r.level.waveHop=max(1,math.ceil(r.total/Core.WAVEFORM_BINS))
+  end
+  return a
+end
+function Core.all_read_step(a)
+  local r=a.reader
+  if a.phase==1 then
+    local done=Core.read_step(r)
+    a.n=Core.reader_progress(r)/a.phases
+    if not done then return false end
+    local frames=Core.finish(r.dsp)
+    a.metrics=Core.measure(frames);a.waveform=Core.waveform_preview(frames)
+    if r.level then
+      local m=Core.level_finish(r.level)
+      a.metrics.truepeak=m.truepeak;a.metrics.tpComplete=true
+      if a.phases==1 then a.metrics.peak=m.peak;a.metrics.rms=m.rms end
+    end
+    Core.dispose(r);a.reader=nil
+    if a.phases==1 then a.n=1;return true end
+    a.phase=2
+    a.reader=Core.level_reader(a.v,a.v.sourceRate>Core.SR)
+    return false
+  end
+  local done=Core.level_read_step(r)
+  a.n=(1+Core.reader_progress(r))/a.phases
+  if not done then return false end
+  local m=Core.level_finish(r.level)
+  a.metrics.peak=m.peak;a.metrics.rms=m.rms;a.metrics.sampleRate=m.sampleRate
+  if m.tpComplete then a.metrics.truepeak=m.truepeak;a.metrics.tpComplete=true end
+  Core.dispose(r);a.reader=nil;a.n=1
+  return true
+end
+
+function Core.execution_reader(v,mode)
+  local r
+  if mode==9 then r=Core.peak_reader(v)
+  elseif mode==11 or mode==12 then r=Core.level_reader(v,mode==11)
+  else r=Core.reader(v) end
+  r.executionMode=mode
+  return r
+end
+function Core.execution_read_step(r)
+  if r.executionMode==9 then return Core.peak_read_step(r) end
+  if r.executionMode==11 or r.executionMode==12 then return Core.level_read_step(r) end
+  return Core.read_step(r)
+end
+function Core.execution_finish(r)
+  local mode=r.executionMode
+  if mode==9 then return Core.finish_peak_reader(r) end
+  if mode==11 or mode==12 then return Core.level_finish(r.level),r.level.waveform end
+  local frames=Core.finish(r.dsp);local key=Core.modes[mode].key
+  local peak=0
+  for _,f in ipairs(frames) do peak=max(peak,f.peak or 0) end
+  local m={valid=peak>0,peak=peak>0 and dba(peak) or nil,sampleRate=Core.SR}
+  if key=='integrated' then m[key]=Core.integrated(frames)
+  elseif key=='speech' then m[key],m.activeRatio=Core.speech(frames)
+  elseif key=='max400' then m[key]=Core.max_momentary(frames)
+  elseif key=='shortterm' then m[key]=Core.max_window(frames,3)
+  else m.median,m.p80,m.p95,m.max1s,m.robust=Core.short_stats(frames) end
+  return m,Core.waveform_preview(frames)
+end
+
+function Core.channel_label(ch)
+  if not ch or ch<1 then return "—" end
+  if ch==1 then return "mono" end
+  if ch==2 then return "stereo" end
+  return string.format("%dch",ch)
+end
+
+function Core.plan(items,mode,targetMode,targetValue,referenceIndex,applyMode,monoComp)
   -- Unmeasurable is a completed result, not an unfinished analysis.
   for _,v in ipairs(items) do
     local reason=v.reason or (v.metrics and not v.metrics.valid and (v.metrics.reason or "この方式で測定できません"))
@@ -1707,21 +2093,32 @@ function Core.plan(items,mode,targetMode,targetValue,referenceIndex)
     reference=ref and ref.metrics and Core.metric(ref.metrics,mode) or nil
     if not reference then return nil,ref and (ref.metrics or ref.reason) and "基準ファイルは選択方式で測定できません。尺と方式を確認してください。" or "任意ファイルを基準にするため、そのファイルの解析完了を待っています。" end
   end
+  local commonMax
+  if targetMode~=2 and applyMode==2 then
+    for _,v in ipairs(items) do
+      local m=not v.reason and v.metrics and v.metrics.valid and Core.metric(v.metrics,mode)
+      if finite(m) then commonMax=commonMax and max(commonMax,m) or m end
+    end
+  end
   local changed=0
   for i,v in ipairs(items) do
     if v.metrics and v.metrics.valid and not v.reason then
       local current=Core.metric(v.metrics,mode)
       if current then
         local target=(targetMode==2) and reference or targetValue
-        local gain=target-current
+        local gain=clamp(target-(commonMax or current),-Core.MAX_GAIN,Core.MAX_GAIN)
+        local mono= v.ch==1 or v.chanmode==2 or v.chanmode==3 or v.chanmode==4
+        local monoOffset=monoComp and mono and -3 or 0
+        gain=gain+monoOffset
+        if commonMax then target=current+(target-commonMax)+monoOffset else target=target+monoOffset end
         local refHold=(targetMode==2 and i==refIndex)
-        if refHold then gain=0 end
-        gain=clamp(gain,-Core.MAX_GAIN,Core.MAX_GAIN)
+        if refHold then gain=0;target=current;monoOffset=0 end
         local predicted=current+gain
-        local peakAfter=finite(v.metrics.peak) and (v.metrics.peak+gain) or nil
+        local predictedPeak=Core.modes[mode].key=='truepeak' and v.metrics.truepeak or v.metrics.peak
+        local peakAfter=finite(predictedPeak) and (predictedPeak+gain) or nil
         local doesChange=not refHold and abs(gain)>.005
         if doesChange then changed=changed+1 end
-        v.plan={valid=true,current=current,target=target,gain=gain,predicted=predicted,peakAfter=peakAfter,reference=refHold,changed=doesChange}
+        v.plan={valid=true,current=current,target=target,gain=gain,predicted=predicted,peakAfter=peakAfter,reference=refHold,changed=doesChange,monoOffset=monoOffset,common=commonMax~=nil}
       else
         local key=Core.modes[mode] and Core.modes[mode].key
         local short=v.metrics.duration and v.metrics.duration<(key=="max400" and .4 or key=="shortterm" and 3 or 0)-1e-7
@@ -1771,7 +2168,7 @@ local SECTION="BLT_SIMPLE_NORMALIZER"
 local function extnum(key,default)
   local n=tonumber(R.GetExtState(SECTION,key)); return finite(n) and n or default
 end
-local S={mode=clamp(floor(extnum("mode",1)+.5),1,#Core.modes),targetMode=clamp(floor(extnum("targetMode",1)+.5),1,2),targets={}}
+local S={mode=clamp(floor(extnum("mode",1)+.5),1,#Core.modes),targetMode=clamp(floor(extnum("targetMode",1)+.5),1,2),applyMode=clamp(floor(extnum("applyMode",1)+.5),1,2),monoComp=extnum("monoComp",0)~=0,targets={}}
 local function field_round(n) return (n<0 and math.ceil(n*100-.5) or floor(n*100+.5))/100 end
 local function field_text(n)
   local text=string.format('%.2f',field_round(n))
@@ -1787,6 +2184,8 @@ local function status(text,bad) A.message=bad and BLT.publicError(text) or tostr
 local function save_settings()
   BLT.store(SECTION,"mode",tostring(S.mode),true)
   BLT.store(SECTION,"targetMode",tostring(S.targetMode),true)
+  BLT.store(SECTION,"applyMode",tostring(S.applyMode),true)
+  BLT.store(SECTION,"monoComp",S.monoComp and "1" or "0",true)
   for i,v in ipairs(S.targets) do BLT.store(SECTION,"target"..i,tostring(v),true) end
 end
 local function target_value() return S.targets[S.mode] end
@@ -1810,7 +2209,7 @@ local function replan(partial)
     local ok,err=Core.check(A.project,A.items,A.executionLocked)
     if not ok then invalidate_snapshot(err); return end
   end
-  local n,e=Core.plan(A.items,S.mode,S.targetMode,target_value(),A.selected)
+  local n,e=Core.plan(A.items,S.mode,S.targetMode,target_value(),A.selected,S.applyMode,S.monoComp)
   if not n then
     A.changeCount=0; A.dirty=false
     if not A.job then status(e,true) end
@@ -1820,12 +2219,13 @@ local function replan(partial)
   if not A.job then status(string.format("%s · %d件を処理できます。",Core.modes[S.mode].name,n)) end
 end
 local function cancel_auto(message)
-  if A.job then Core.dispose(A.job.reader); A.job=nil end
+  if A.job then BLT.cleanup(Core.dispose,A.job.reader); A.job=nil end
   A.needsAnalyze=true; A.dirty=true; A.changeCount=0; A.analysisSig=nil; A.applyWhenReady=false; A.executionLocked=false; A.forceFinish=false; A.analyzedCount=0
   if message then status(message,false) end
   collectgarbage("step",400)
 end
 local function begin_auto_analysis(sig)
+ if not Media.ready() then return end
   if A.job then return end
   A.project=R.EnumProjects(-1,"")
   local count=Core.audio_selection_count(A.project)
@@ -1849,46 +2249,21 @@ local function begin_auto_analysis(sig)
   status(string.format("%d件をバックグラウンド解析しています…",#A.items),false)
 end
 
+
 local apply_ready -- forward declaration
-
-local function begin_peak_fast_apply(sig)
-  local project=R.EnumProjects(-1,"")
-  if Core.audio_selection_count(project)<=0 then status("ノーマライズする音声アイテムを選択してください。",true); return false end
-
-  -- Cancel the ordinary analyzer immediately. Fully completed rows keep their
-  -- metrics; the unfinished reader is discarded and replaced by a peak-only scan.
-  if A.job then Core.dispose(A.job.reader); A.job=nil end
-  A.project=project
-
-  -- If the REAPER selection changed before the click reached us, lock the selection
-  -- that exists at the exact moment Execute was pressed.
-  if #A.items==0 or A.selectionSig~=sig then
-    local ok,items,total=pcall(function() local a,b=Core.collect(project); return a,b end)
-    if not ok then status(tostring(items),true); return false end
-    A.items,A.total=items,total
-    A.selected=clamp(A.selected or 1,1,max(1,#A.items)); A.offset=0
+local function prepare_execution()
+  local job=A.job
+  if job and not job.executionMode then
+    -- Completed rows remain reusable; only the unfinished reader is replaced.
+    Core.dispose(job.reader);job.reader=nil
+    job.executionMode=S.mode
   end
-
-  A.analysisSig=sig; A.selectionSig=sig; A.pendingSig=nil
-  A.needsAnalyze=true; A.dirty=true; A.changeCount=0; A.analyzedCount=0
-  A.applyWhenReady=true; A.executionLocked=true; A.forceFinish=true
-
-  local missing=false
-  for _,v in ipairs(A.items) do
-    if not v.reason and not (v.metrics and finite(v.metrics.peak)) then missing=true; break end
-  end
-  if not missing then
-    A.needsAnalyze=false; A.applyWhenReady=false; A.forceFinish=false
-    replan(false); apply_ready()
-    return true
-  end
-
-  A.job={index=1,done=0,kind="peak_fast",lastSig=sig,validateAt=0}
-  status("PEAK Fast Path：通常解析を停止し、未取得分のSample Peakだけを高速取得しています…",false)
-  return true
+  A.applyWhenReady=true;A.executionLocked=true;A.forceFinish=true
 end
 
+
 local function advance()
+ if not Media.ready() then return end
   local job=A.job; if not job then return end
   if R.EnumProjects(-1,"")~=A.project then
     cancel_auto("プロジェクトが切り替わりました。自動更新します。"); A.selectionSig=nil; return
@@ -1901,10 +2276,15 @@ local function advance()
       cancel_auto("選択が変わりました。自動更新します。"); A.selectionSig=nil; A.pendingSig=currentSig; A.pendingSince=now; return
     end
   end
-  local peakFast=job.kind=="peak_fast"
+  local function update_plan()
+    local now=R.time_precise()
+    if now>=(job.nextPlanAt or 0) then
+      replan(true);job.nextPlanAt=R.time_precise()+.1
+    end
+  end
   local started=R.time_precise()
-  local loops=peakFast and 256 or (A.forceFinish and 64 or 4)
-  local budget=peakFast and .080 or (A.forceFinish and .050 or .012)
+  local loops=A.forceFinish and 64 or 4
+  local budget=A.forceFinish and .050 or .012
   for _=1,loops do
     local v=A.items[job.index]
     if not v then
@@ -1915,38 +2295,24 @@ local function advance()
       if A.applyWhenReady and apply_ready then A.applyWhenReady=false; apply_ready() end
       return
     end
-    if v.reason then
-      job.index=job.index+1; A.analyzedCount=A.analyzedCount+1; replan(true)
-    elseif peakFast and v.metrics and finite(v.metrics.peak) then
-      -- A completed ordinary analysis already contains the exact Sample Peak we need.
-      job.index=job.index+1; job.done=job.done+v.len; A.analyzedCount=A.analyzedCount+1; replan(true)
-    elseif peakFast then
-      local ok,done=xpcall(function()
-        if not job.reader then job.reader=Core.peak_reader(v) end
-        return Core.peak_read_step(job.reader)
-      end,debug.traceback)
-      if not ok then
-        Core.dispose(job.reader); job.reader=nil; v.reason=tostring(done):match("^[^\n]+")
-        job.index=job.index+1; job.done=job.done+v.len; A.analyzedCount=A.analyzedCount+1; replan(true)
-      elseif done then
-        local reader=job.reader; v.waveform=nil; v.metrics=Core.finish_peak_reader(reader)
-        Core.dispose(reader); job.reader=nil; job.index=job.index+1; job.done=job.done+v.len; A.analyzedCount=A.analyzedCount+1
-        replan(true)
-      end
+    if v.reason or (v.metrics and v.metrics.allComplete) then
+      job.index=job.index+1;job.done=job.done+v.len; A.analyzedCount=A.analyzedCount+1; update_plan()
     else
       local ok,done=xpcall(function()
-        if not job.reader then job.reader=Core.reader(v) end
-        return Core.read_step(job.reader)
+        if not job.reader then job.reader=job.executionMode and Core.execution_reader(v,job.executionMode) or Core.all_reader(v) end
+        if job.executionMode then return Core.execution_read_step(job.reader) end
+        return Core.all_read_step(job.reader)
       end,debug.traceback)
       if not ok then
         Core.dispose(job.reader); job.reader=nil; v.reason=tostring(done):match("^[^\n]+")
-        job.index=job.index+1; job.done=job.done+v.len; A.analyzedCount=A.analyzedCount+1; replan(true)
+        job.index=job.index+1; job.done=job.done+v.len; A.analyzedCount=A.analyzedCount+1; update_plan()
       elseif done then
-        local reader=job.reader;local frames=Core.finish(reader.dsp)
-        v.waveform=Core.waveform_preview(frames);v.metrics=Core.measure(frames);frames=nil
+        local reader=job.reader
+        if job.executionMode then v.metrics,v.waveform=Core.execution_finish(reader)
+        else v.waveform=reader.waveform;v.metrics=reader.metrics;v.metrics.allComplete=true end
         Core.dispose(reader); job.reader=nil; job.index=job.index+1; job.done=job.done+v.len; A.analyzedCount=A.analyzedCount+1
         collectgarbage("step",600)
-        replan(true) -- finished rows become visible immediately
+        update_plan() -- Batch interim plans; final completion always updates immediately.
       end
     end
     if R.time_precise()-started>budget then return end
@@ -1956,8 +2322,9 @@ end
 local commit
 
 apply_ready=function()
+ if not A.job and not Media.ready() then return end
   if A.job then
-    A.applyWhenReady=true; A.executionLocked=true; A.forceFinish=true
+    prepare_execution()
     status("対象を固定して、残りを解析後そのままノーマライズします…")
     return
   end
@@ -1989,36 +2356,32 @@ local function request_apply()
   if not commit() then return end
 
   if A.applyWhenReady and A.job then
-    local wasPeakFast=A.job.kind=="peak_fast"
-    if wasPeakFast then Core.dispose(A.job.reader); A.job=nil end
     A.applyWhenReady=false; A.executionLocked=false; A.forceFinish=false
-    if wasPeakFast then
-      A.needsAnalyze=true; A.analysisSig=nil; A.selectionSig=nil
-      A.pendingSig=Core.selection_signature(R.EnumProjects(-1,"")); A.pendingSince=R.time_precise()
-      status("PEAK高速実行をキャンセルしました。通常の自動解析へ戻ります。",false)
-    else
-      status("ノーマライズ実行をキャンセルしました。自動解析は継続します。",false)
-    end
+    Core.dispose(A.job.reader)
+    A.job={index=1,done=0,lastSig=A.analysisSig,validateAt=0};A.analyzedCount=0
+    status("ノーマライズ実行をキャンセルしました。自動解析は継続します。",false)
     return
   end
 
   local project=R.EnumProjects(-1,""); local sig=Core.selection_signature(project)
   if Core.audio_selection_count(project)<=0 then status("ノーマライズする音声アイテムを選択してください。",true); return end
-
-  if Core.modes[S.mode].key=="peak" then
-    begin_peak_fast_apply(sig)
-    return
+  if not Media.ready() then return end
+  if A.project~=project or A.selectionSig~=sig then
+    cancel_auto(nil)
+    begin_auto_analysis(sig)
+    if not A.job then return end
   end
 
+
   if A.job then
-    A.applyWhenReady=true; A.executionLocked=true; A.forceFinish=true
+    prepare_execution()
     status("対象を固定して、残りを解析後そのままノーマライズします…")
     return
   end
   if #A.items==0 or A.selectionSig~=sig or A.needsAnalyze then
     begin_auto_analysis(sig)
     if A.job then
-      A.applyWhenReady=true; A.executionLocked=true; A.forceFinish=true
+      prepare_execution()
       status("対象を固定して、残りを解析後そのままノーマライズします…")
       return
     end
@@ -2028,6 +2391,7 @@ local function request_apply()
 end
 
 local function auto_watch()
+ if not Media.ready() then return end
   local project=R.EnumProjects(-1,"")
   if project~=A.project and not A.job then
     A.project=project; A.items={}; A.selected=1; A.offset=0; A.changeCount=0; A.analyzedCount=0
@@ -2098,11 +2462,11 @@ local function rect(x,y,w,h,c,a) color(c,a); gfx.rect(sx(x),sy(y),w*scale,h*scal
 local function line(x,y,xx,yy,c,a) color(c,a); gfx.line(sx(x),sy(y),sx(xx),sy(yy),1) end
 local function disc(x,y,r,c,a) color(c,a); gfx.circle(sx(x),sy(y),r*scale,1,1) end
 
-local function font(size,kind,bold) BLT.font(size,kind,bold,scale,fonts) end
+local function font(size,kind,bold) BLT.font(size<14 and max(11,size+2) or size,kind,bold,scale,fonts) end
 local function label(text,x,y,w,h,size,c,bold,flags,kind,literal)
   local shown=literal and tostring(text) or Language.message(text)
   font(size,kind,bold); color(c or C.text); gfx.x,gfx.y=sx(x),sy(y)
-  if shown~=tostring(text) and w then shown=BLT.ui.fit(shown,w*scale) end
+  if w then shown=BLT.ui.fit(shown,w*scale) end
   gfx.drawstr(BLT.cleanText(shown),flags or 0,sx(x+w),sy(y+h))
 end
 local function measure(text,size,kind,bold) font(size,kind,bold);return BLT.metricsFor(Language.message(text))/scale end
@@ -2211,7 +2575,7 @@ end
 
 -- CHAMELEON THEME ADAPTER
 --
--- Porting contract for other BLT scripts:
+-- Theme adapter interface:
 --   Required palette tables : C, C_DEFAULT
 --   Optional chrome colors   : Chrome, CHROME_DEFAULT
 --   Persistence              : SECTION / ExtState key "chameleon"
@@ -2219,8 +2583,6 @@ end
 --   UI integration           : Chameleon.enabled / Chameleon.set(...)
 --   Main-loop integration    : Chameleon.tick(now)
 --
--- Keep this block intact when porting; normally only the title-bar button
--- placement and the host hooks need adapting in another BLT script.
 Chameleon.keys={
   -- Main/surface colors
   "col_main_bg2","col_main_bg","col_arrangebg","col_tracklistbg","col_mixerbg",
@@ -2983,11 +3345,13 @@ local function number_field(id,title,unitText,x,y,w,enabled)
   if editing and E.all then local tw=min(fw-14,measure(txt,15,3,true)+8);rect(fx+7,y+6,tw,19,C.focus2,.88);label(txt,fx+9,y+4,fw-16,24,15,C.ink,true,0,3)
   else label(txt,fx+9,y+4,fw-16,24,15,enabled and C.text or C.quiet,true,0,3) end
   label(unitText,fx+fw+7,y+7,40,20,9,enabled and C.faint or C.quiet,true)
-  register(id,fx,y,fw,31,function() edit(id) end,"クリック入力 ／ 上下ドラッグ：1刻み（Shift：0.1） ／ ホイール：0.1",enabled)
+  register(id,fx,y,fw,31,function() edit(id) end,"クリック入力 ／ ドラッグ・ホイール：1刻み（Shift：0.1）",enabled)
   local f=widgets[#widgets];f.field=true;f.key=id;f.get=function() return value_for_edit(id) end
 end
 local function fmt(n,d) return finite(n) and string.format("%."..(d or 1).."f",n) or "—" end
 local function signed(n) return finite(n) and string.format("%+.1f",n) or "—" end
+local function peak_unit() return S.mode==11 and 'dBTP' or 'dBFS' end
+local function peak_color(value,normal) return finite(value) and value>0 and C.red or normal end
 
 local function analysis_progress()
   if not A.job then return nil end
@@ -3014,20 +3378,20 @@ local function waveform(v)
   end
   local p=v.plan; local m=v.metrics
   label(Core.modes[S.mode].name.."  "..fmt(p and p.current).." → "..fmt(p and p.predicted).."  /  Gain "..signed(p and p.gain).." dB",px,y+157,570,18,10,C.accent2,true)
-  right_label("Peak "..fmt(m and m.peak).." → "..fmt(p and p.peakAfter).." dBFS",x+w-15,y+157,9,C.faint,3,true)
+  right_label((S.mode==11 and "True Peak " or "Peak ")..fmt(m and (S.mode==11 and m.truepeak or m.peak)).." → "..fmt(p and p.peakAfter).." "..peak_unit(),x+w-15,y+157,9,peak_color(p and p.peakAfter,C.faint),3,true)
 end
 local function metric_card(title,value,x,y,w,accent)
   gradient(x,y,w,56,C.panel2,C.panel,.34,.82); line(x,y,x+w,y,C.edge2,.24); line(x,y+56,x+w,y+56,C.edge,.34); finish_corners(x,y,w,56,7,false,C.edge2,.26)
   label(title,x+11,y+8,w-22,16,9,C.muted,true); right_label(value,x+w-11,y+23,17,accent or C.text,3,true)
 end
 
-local rowsY,rowH,shown=425,26,9
+local rowsY,rowH,shown=425,34,7
 local tableX,tableW=360,738
 local function draw_table()
-  local columns={{"#",368,34},{"アイテム",405,226},{"現在",635,68},{"目標",707,68},{"補正",779,62},{"Peak後",845,70},{"状態",919,164}}
+  local columns={{"#",368,34},{"アイテム",405,226},{"現在",635,68},{"チャンネル",707,68},{"補正",779,62},{S.mode==11 and "TP後" or "Peak後",845,70},{"状態",919,164}}
   gradient(tableX,401,tableW,294,C.field,C.field,.98,.98); gradient(tableX,401,tableW,24,C.panel2,C.panel,.62,.88)
   line(tableX,401,tableX+tableW,401,C.edge2,.30); line(tableX,695,tableX+tableW,695,C.edge,.42); finish_corners(tableX,401,tableW,294,8,false,C.edge2,.28)
-  for _,c in ipairs(columns) do label(c[1],c[2],405,c[3],16,9,C.muted,true) end
+  for _,c in ipairs(columns) do label(c[1],c[2],405,c[3],18,12,C.muted,true) end
   A.offset=clamp(A.offset,0,max(0,#A.items-shown))
   for slot=1,shown do
     local i=A.offset+slot; local row=A.items[i]; local yy=rowsY+(slot-1)*rowH
@@ -3047,14 +3411,15 @@ local function draw_table()
         rect(tableX,yy,tableW-14,rowH,C.panel,.36)
       end
       local p=row.plan or {}; local reason=row.reason or p.reason
-      local state=reason or p.reference and "指定基準" or p.changed and "NORMALIZE" or p.valid and "変更なし" or (A.job and i==A.job.index and "解析中") or "解析待ち"
-      local vals={i,row.name,fmt(p.current),fmt(p.target),signed(p.gain),fmt(p.peakAfter),state}
+      local state=reason or row.rateWarning and "1.0倍速換算" or p.reference and "指定基準" or p.changed and "NORMALIZE" or p.valid and "変更なし" or (A.job and i==A.job.index and "解析中") or "解析待ち"
+      local vals={i,row.name,fmt(p.current),Core.channel_label(row.ch),signed(p.gain),fmt(p.peakAfter),state}
       for ci,c in ipairs(columns) do
         local cc
-        if reason then cc=C.warn
+        if reason or (row.rateWarning and ci==7) then cc=C.warn
         elseif selected and S.targetMode==2 then cc=(ci==2 or ci==7) and C.text or C.focus2
         else cc=(ci>=3 and ci<=6 and C.accent2 or C.muted) end
-        label(vals[ci],c[2],yy+3,c[3],18,10,cc,ci==5 or (selected and S.targetMode==2),nil,nil,ci==2)
+        if ci==6 then cc=peak_color(p.peakAfter,cc) end
+        label(vals[ci],c[2],yy+7,c[3]-4,22,14,cc,ci==5 or (selected and S.targetMode==2),nil,nil,ci==2)
       end
       register("row"..i,tableX,yy,tableW-14,rowH,function()
         if commit() then
@@ -3077,6 +3442,7 @@ end
 
 local function set_mode(i)
   if not commit() then return end
+  if A.executionLocked then return end
   S.mode=i; save_settings(); A.dirty=true; replan(A.job~=nil)
 end
 local function set_target_mode(i)
@@ -3103,24 +3469,36 @@ local function draw()
   label("NORMALIZE METHOD",34,124,190,18,9,C.accent2,true,0,3)
   for row,i in ipairs(Core.mode_order) do
     local m=Core.modes[i]
-    local yy=149+(row-1)*30
-    segment_button("mode"..i,m.name,34,yy,294,26,S.mode==i,function() set_mode(i) end,m.desc,true)
+    local yy=149+(row-1)*26
+    segment_button("mode"..i,m.name,34,yy,294,24,S.mode==i,function() set_mode(i) end,m.desc,not A.executionLocked)
     right_label(m.code,316,yy+5,7,S.mode==i and C.accent2 or C.faint,3,true)
   end
-  label(mode.desc,35,459,290,38,9.0,C.muted,false)
+  label(mode.desc,35,466,290,30,9.0,C.muted,false)
 
   section_title("TARGET",35,505,326)
   segment_button("target_abs","数値指定",35,527,137,35,S.targetMode==1,function() set_target_mode(1) end,"指定した値へ揃えます。",true)
   segment_button("target_ref","任意ファイル",181,527,146,35,S.targetMode==2,function() set_target_mode(2) end,"右側のリストで選んだファイルを基準にします。",true)
   number_field("target","目標値",unit(),35,572,292,S.targetMode==1)
-  label(S.targetMode==2 and "右のリストでReferenceにするファイルを選択します。" or "選択した方式の目標値です。",35,610,290,22,8.5,S.targetMode==2 and C.quiet or C.faint,false)
+  local groupEnabled=S.targetMode==1 and not A.executionLocked
+  segment_button("apply_individual","個別適用",35,616,137,31,(S.targetMode==2 or S.applyMode==1) and groupEnabled,function()
+    if commit() then S.applyMode=1;save_settings();replan(A.job~=nil) end
+  end,"各アイテムを個別に目標値へ合わせます。",groupEnabled)
+  segment_button("apply_group","全体適用",181,616,146,31,S.applyMode==2 and groupEnabled,function()
+    if commit() then S.applyMode=2;save_settings();replan(A.job~=nil) end
+  end,"選択内の最大測定値を目標に合わせ、全対象に共通ゲインを適用します。",groupEnabled)
+  local monoEnabled=not A.executionLocked
+  BLT.switch(35,658,animate('monoComp',S.monoComp and 1 or 0),monoEnabled)
+  label("モノラルの場合追加で-3 dB補正",66,661,260,23,11,monoEnabled and C.muted or C.quiet,false)
+  register('monoComp',35,655,292,33,function()
+    if commit() then S.monoComp=not S.monoComp;save_settings();replan(A.job~=nil) end
+  end,"ノーマライズ後、モノラル素材だけ追加で-3 dBします。全体適用でも追加補正します。",monoEnabled)
 
   waveform(v)
   local p=v and v.plan or {}
   metric_card(mode.name,fmt(p and p.current).." "..mode.unit,360,335,174,C.text)
   metric_card(S.targetMode==2 and "任意ファイル" or "TARGET",fmt(p and p.target).." "..mode.unit,540,335,174,S.targetMode==2 and C.focus2 or C.text)
   metric_card("GAIN",signed(p and p.gain).." dB",720,335,174,C.accent2)
-  metric_card("PEAK予測",fmt(p and p.peakAfter).." dBFS",900,335,198,C.accent2)
+  metric_card(S.mode==11 and "TRUE PEAK予測" or "PEAK予測",fmt(p and p.peakAfter).." "..peak_unit(),900,335,198,peak_color(p and p.peakAfter,C.accent2))
   draw_table()
 
   local msg=A.message
@@ -3131,7 +3509,7 @@ local function draw()
 
   local ax,aw=390,340
   label(string.format("対象  %d件",count),258,720,120,18,10.5,C.accent2,true,2,3)
-  label(A.job and string.format(A.job.kind=="peak_fast" and "Peak取得  %d / %d" or "解析済み  %d / %d",A.analyzedCount or 0,#A.items) or "解析準備完了",258,739,120,16,8.5,C.muted,true,2,3)
+  label(A.job and string.format("解析済み  %d / %d",A.analyzedCount or 0,#A.items) or "解析準備完了",258,739,120,16,8.5,C.muted,true,2,3)
   local applyText=A.applyWhenReady and "実行をキャンセル" or "ノーマライズを実行"
   local applyHint=A.applyWhenReady
     and "クリックすると、予約中のノーマライズ実行をキャンセルします。自動解析は継続します。"
@@ -3141,7 +3519,10 @@ local function draw()
     742,720,230,18,9,A.applyWhenReady and C.accent2 or C.faint,true)
   label(S.targetMode==2 and "Reference：リスト選択" or "目標値：数値指定",
     742,739,190,16,8.5,S.targetMode==2 and C.focus2 or C.muted,false)
-  BLT.footer(msg,A.bad,W,H+22,'0.5.3',prog)
+  local rateWarning=false
+  for _,v in ipairs(A.items) do if v.rateWarning and not v.reason then rateWarning=true;break end end
+  if rateWarning and not A.bad then msg="速度変更あり：1.0倍速換算の測定値です（実再生値とは異なる場合があります）" end
+  BLT.footer(msg,A.bad or rateWarning,W,H+22,'0.5.16',prog)
   custom_titlebar()
 end
 
@@ -3175,7 +3556,7 @@ local function interact()
     if hit and hit.field and hit.enabled then
       if not E or commit() then
         local steps=max(1,floor(abs(wheel)/120+.5));local dir=wheel>0 and 1 or -1
-        A.apply_field(hit.key,hit.get()+dir*.1*steps,true)
+        A.apply_field(hit.key,hit.get()+dir*((gfx.mouse_cap&8)~=0 and .1 or 1)*steps,true)
       end
     elseif inside(tableX,401,tableW,294) then
       A.offset=clamp(A.offset+(wheel>0 and -3 or 3),0,max(0,#A.items-shown))
@@ -3214,17 +3595,24 @@ local function close()
  end
 end
 
-function BLT.normalizerDefaults() local t={mode=1,targetMode=1,targets={}};for i,m in ipairs(Core.modes) do t.targets[i]=m.default end;return t end
-function BLT.pick(obj,keys) local v=BLT.valueView or {};BLT.valueView=v;for k in pairs(keys) do v[k]=obj[k] end;return v end
+function BLT.normalizerDefaults() local t={mode=1,targetMode=1,applyMode=1,monoComp=false,targets={}};for i,m in ipairs(Core.modes) do t.targets[i]=m.default end;return t end
+
 PrimaryButton.painter={C=C,gradient=gradient,line=line,rect=rect,corners=finish_corners,disc=disc,label=function(text,x,y,size,c,kind,w,h,flags,bold) label(text,x,y,w,h,size,c,bold,flags,kind) end}
 PrimaryButton.painter.motion=function(now) return (gfx.mouse_x-ox)/scale,(gfx.mouse_y-oy)/scale,visual_speed(now) end
 PrimaryButton.wake=function() redraw_dirty=true;A.content_dirty=true;next_draw_time=0 end
+Media.state=A;Media.onchange=function() if BLT.host and BLT.host.wake then BLT.host.wake() end end
 BLT.attach({
  R=R,C=C,Chrome=Chrome,Chameleon=Chameleon,section=SECTION,faces=fonts,font=font,
  geometry=function() return scale,ox,oy end,active=function() local f=gfx.getchar(65536);return (f&1)==0 or (f&2)~=0 end,
  wake=function() A.content_dirty=true;redraw_dirty=true;next_draw_time=0;wake_visuals() end,
  defaults=BLT.normalizerDefaults(),capture=function() return S end,
- valid=function(v) if v.mode%1~=0 or not Core.modes[v.mode] or (v.targetMode~=1 and v.targetMode~=2) or #v.targets~=#Core.modes then return false end;for _,x in ipairs(v.targets) do if x < -80 or x>6 then return false end end;return true end,apply=function(v) for k,x in pairs(v) do S[k]=x end;save_settings();replan(false) end,
+ upgrade=function(v)
+  if type(v)~='table' or type(v.targets)~='table' then return end
+  if v.applyMode==nil then v.applyMode=1 end
+  if v.monoComp==nil then v.monoComp=false end
+  if #v.targets==10 then v.targets[11]=Core.modes[11].default;v.targets[12]=Core.modes[12].default end
+ end,
+ valid=function(v) if v.mode%1~=0 or not Core.modes[v.mode] or (v.targetMode~=1 and v.targetMode~=2) or (v.applyMode~=1 and v.applyMode~=2) or type(v.monoComp)~="boolean" or #v.targets~=#Core.modes then return false end;for _,x in ipairs(v.targets) do if x < -80 or x>6 then return false end end;return true end,apply=function(v) for k,x in pairs(v) do S[k]=x end;save_settings();replan(A.job~=nil) end,
  undoBefore=function() cancel_auto(nil);A.selectionSig=nil;A.watchAt=0 end,undoRefresh=function() A.selectionSig=nil;A.watchAt=0 end,
  busy=function() return A.executionLocked or A.applyWhenReady end,commit=function() return commit() end,
  cancelEdit=function() E=nil;A.fieldDrag=nil end,editing=function() return E~=nil end,
@@ -3242,7 +3630,7 @@ function BLT.drawIcon()
  scale,ox,oy=bs,bx,by
 end
 
-if ...=='blt_test' then return {BLT=BLT,A=A,Core=Core,S=S} end
+if ...=='blt_test' then return {Media=Media,BLT=BLT,A=A,Core=Core,S=S} end
 local chrome_ok,chrome_err=titlebar_api_ready()
 if not chrome_ok then Language.mb(BLT.publicError(chrome_err),"Simple Normalizer | エラー",0); return end
 local ww=clamp(floor(extnum("window_w",W)+.5),560,3000); local wh=clamp(floor(extnum("window_h",H+Chrome.titleH)+.5),415+Chrome.titleH,2200+Chrome.titleH)
@@ -3255,17 +3643,17 @@ if not apply_custom_window_style(ww,wh) then gfx.quit(); Language.mb("カスタ�
 if Chameleon.enabled then Chameleon.refresh(true) end
 
 local function loop()
- BLT.tick(R.time_precise());PrimaryButton.tick(R.time_precise(),BLT.host.active(),PrimaryButton.wake)
+  local ok,err=xpcall(function()
+ local now=R.time_precise();BLT.tick(now);PrimaryButton.tick(now,BLT.host.active(),PrimaryButton.wake)
 
-  local k=BLT.key(gfx.getchar()); if k<0 or A.closing then close(); return end
-  local now=R.time_precise()
-  Chameleon.tick(now)
+  local k=BLT.key(gfx.getchar()); if k<0 or A.closing then A.closing=true; return end
+    Chameleon.tick(now)
   local flags=gfx.getchar(65537)
   local window_active=((flags & 1)==0) or ((flags & 2)~=0)
   if last_window_active==nil or window_active~=last_window_active then last_window_active=window_active; wake_visuals(now) end
 
   local key_activity=false; local n=0
-  while k>0 and n<32 do key_activity=true; key(k); k=gfx.getchar(); n=n+1 end
+  while k>0 and n<32 do key_activity=true; key(k); k=BLT.key(gfx.getchar()); n=n+1 end
   if key_activity then wake_visuals(now) end
 
   local before_project=A.project; local before_sig=A.selectionSig; local before_pending=A.pendingSig; local before_job=A.job
@@ -3309,6 +3697,9 @@ local function loop()
     if Chrome.requestClose then Chrome.requestClose=false; A.closing=true end
   end
   if pointer_activity or key_activity or dragging then redraw_dirty=true end
+  end,debug.traceback)
+  if not ok then cancel_auto();BLT.cleanup(status,BLT.publicError(err),false);BLT.recoverInput(A,err) end
+  if A.closing then close();return end
   R.defer(loop)
 end
 R.atexit(close)

@@ -1,10 +1,10 @@
 -- @description MARKER REGION DESK
--- @version 0.5.4
+-- @version 0.5.6
 -- @author Balrulu
 -- @provides
 --   . > ../
 -- @changelog
---   Increase preset capacity and show shared overflow dialogs.
+--   BLT SERIES Beta TEST UPLOAD
 -- @about
 --   BLT SERIES Beta TEST UPLOAD
 
@@ -289,12 +289,7 @@ function B.unpack(data)
  end
  local ok,v=pcall(read,0);if capacity then BLTPresetLimits.show(Language.code=='EN') end;if ok and at==#data+1 then return v end
 end
-function B.cleanText(text)
- text=tostring(text);B.cleanCache=B.cleanCache or {};local v=B.cleanCache[text];if v then return v end
- v=text:gsub('[%z\1-\31\127]',' ')
- B.cleanCount=(B.cleanCount or 0)+1;if B.cleanCount>512 then B.cleanCache={};B.cleanCount=1 end
- B.cleanCache[text]=v;return v
-end
+
 function B.publicError(value,fallback)
  local text=tostring(value or '')
  text=text:match('^(.-)\nstack traceback:') or text
@@ -824,8 +819,6 @@ local function custom_titlebar(blocked)
   end
   local rcx,rcy=resetX+resetW*.5,Chrome.titleH*.5
   local rcol=hoverReset and Chrome.mint or C.muted
-
-  -- Reference-style outlined window; arrow explicitly points LOWER LEFT.
   gfx.set(rcol[1],rcol[2],rcol[3],hoverReset and .98 or .82)
   gfx.roundrect(rcx-6,rcy-6,12,12,1,1)
   gfx.line(rcx+3,rcy-3,rcx-3,rcy+3,1)
@@ -955,6 +948,7 @@ local project_undo=create_project_undo(R,{
  after=function(project) if host.undoRefresh then host.undoRefresh(project) end;wake_visuals() end,
 })
 function B.key(k)
+ if k<0 then return k end
  if Presets.open then Presets.key(k);return 0 end
  if host and not host.localUndo then
   if host.undoAction then
@@ -1021,13 +1015,26 @@ function B.cleanup(fn,...)
 end
 function B.recoverInput(state,err)
  gfx.dest=-1;gfx.mode=0;gfx.a=1
- for _,key in ipairs({'drag','number_drag','pointer_capture','field_drag','fieldDrag','curve_drag','scroll_drag','seam_drag','seam_hold','pressed','popup','name_dialog','duplicate_modal'}) do state[key]=nil end
+ for _,key in ipairs({'drag','number_drag','pointer_capture','field_drag','fieldDrag','scrollDrag','source_wave_drag','curve_drag','scroll_drag','seam_drag','seam_hold','pressed','popup','name_dialog','duplicate_modal'}) do state[key]=nil end
  if host.cancelEdit then B.cleanup(host.cancelEdit) end
- Presets.open=false;Presets.swallow=false
+ Presets.open=false;Presets.swallow=false;Presets.pressed=nil;Presets.hoverSince=nil
+ Chrome.drag=nil;Chrome.resize=nil
+ if host.cursor then B.cleanup(host.cursor,nil) end
  B.recoveryMode=true
  local ok,why=pcall(B.bar)
  B.recoveryMode=nil
- if not ok then B.logError(why) end
+ if not ok then
+  B.logError(why)
+  -- A failed font, preset or theme draw must still allow closing the window.
+  local down=((gfx.mouse_cap or 0)&1)~=0
+  local hit=gfx.mouse_y>=0 and gfx.mouse_y<26 and gfx.mouse_x>=gfx.w-38 and gfx.mouse_x<gfx.w
+  if down and not B.emergencyDown then B.emergencyClose=hit end
+  if not down and B.emergencyDown then
+   if B.emergencyClose and hit then Chrome.requestClose=true end
+   B.emergencyClose=nil
+  end
+  B.emergencyDown=down
+ else B.emergencyDown=nil;B.emergencyClose=nil end
  pcall(B.footer,B.publicError(err),true,gfx.w,0,B.footerVersion or '')
  pcall(gfx.update)
  if Chrome.requestClose then state.closing=true end
@@ -1042,31 +1049,7 @@ function B.title(title,subtitle,width,divider)
  B.font(10,1,false,scale,host.faces);gfx.set(C.accent2[1],C.accent2[2],C.accent2[3],1);gfx.x=ox+26*scale;gfx.y=origin+44*scale;gfx.drawstr(UI.fit(Language.text(subtitle),(width-155)*scale))
  if divider~=false then gfx.set(C.edge2[1],C.edge2[2],C.edge2[3],.26);gfx.line(ox+24*scale,origin+62*scale,ox+(width-24)*scale,origin+62*scale,1) end
 end
-function B.chaosButton(cx,cy,cw,ch,enabled,hot,pushed,time,glow)
- local d=host.chaosPainter
- local violet=Chameleon.enabled and C.accent2 or B.chaosViolet
- local ember=Chameleon.enabled and C.accent or B.chaosEmber
- local pale=Chameleon.enabled and C.text or B.chaosPale
- local surface=Chameleon.enabled and C.field or B.chaosSurface
- local alive=enabled and 1 or .25
- local breath=(.5+.5*math.sin(time*.85))*alive
- local y=cy+(pushed and 1 or 0);local center=ch/2
- -- Keep both the outer glow and the pressed face inside the registered bounds.
- d.cut(cx,cy,cw,ch,11,violet,.025*alive,violet,.10+.07*breath)
- d.cut(cx,y+2,cw,ch-4,9,surface,1,violet,(.45+.3*glow)*alive)
- d.gradient(cx+2,y+4,cw-4,ch-8,violet,C.bg,.12+.15*glow,.015,true)
- for i=1,6 do
-  local phase=time*.3+i*1.7;local px=cx+12+(i-1)*(cw-29)/5
-  local py=y+center+math.sin(phase)*(center-6)
-  local alpha=(.18+.22*math.sin(phase*.7)^2)*alive
-  if px<cx+36 or px>cx+cw-36 or math.abs(py-y-center)>11 then
-   d.disc(px,py,3,violet,alpha*.08);d.disc(px,py,.7,i%2==0 and ember or pale,alpha)
-  end
- end
- d.line(cx+cw*.335,y+ch-5,cx+cw*.665,y+ch-5,violet,(.18+.22*breath+.2*glow)*alive)
- d.label('C H A O S',cx+24,y+center-9,17,enabled and pale or C.faint,2,cw-48,22,1,true)
-end
-B.chaosViolet={.62,.23,.94};B.chaosEmber={.92,.27,.65};B.chaosPale={.87,.69,1};B.chaosSurface={.038,.014,.068}
+
 
 function B.footer(message,bad,width,height,version,progress)
  if version~='' then B.footerVersion=version end
@@ -2518,12 +2501,47 @@ local function visible() return floor((T.h-T.header)/T.row) end
 local function max_offset() return max(0,#A.rows-visible()) end
 local function scroll(delta) A.offset=clamp(A.offset+delta,0,max_offset()) end
 local open_rename
-local function short_time(seconds)
-  local ms=floor(math.abs(seconds)*1000+.5)
-  return (seconds<0 and "-" or "")..string.format("%02d:%02d.%03d",floor(ms/60000),floor(ms/1000)%60,ms%1000)
+-- Native project-default formatting follows the active project's primary ruler,
+-- including its tempo map, time offset, sample rate and frame-rate settings.
+local function update_row_time(row)
+  local v=row.info
+  local first=R.format_timestr_pos(v.pos,"",-1)
+  local last=v.isrgn and R.format_timestr_pos(v.ending,"",-1) or "—"
+  local text=row.text
+  if not text then
+    row.text={string.format("%.0f",v.id),first,last,display_name(v.before)}
+    return true
+  end
+  if text[2]==first and text[3]==last then return false end
+  text[2],text[3]=first,last
+  return true
+end
+-- Check only the visible rows, even when idle. A ruler-only change need not
+-- alter marker data or the project revision, so content polling is not enough.
+local function poll_time_display(now)
+  if now<(A.time_display_poll or 0) then return false end
+  A.time_display_poll=now+.12
+  if R.EnumProjects(-1,"")~=A.project then return false end
+  local first=clamp(A.offset,0,max_offset())+1
+  local changed=false
+  for i=first,min(#A.rows,first+visible()-1) do
+    if update_row_time(A.rows[i]) then changed=true end
+  end
+  return changed
+end
+local function table_columns()
+  local width=clamp(T.time_width or 75,75,max(75,(W-289)/2))
+  return {T.x+34,T.x+78,T.x+115,T.x+117+width,T.x+119+2*width},
+    {42,35,width,width,W-189-2*width}
 end
 local fitted_labels,fitted_count={},0
 local function fit_label(text,x,y,size,c,w,bold) font(size,1,bold);label(BLT.ui.fit(tostring(text),w*scale),x,y,size,c,1,w,size+8,0,bold,true) end
+local function time_label(text,x,y,c,w)
+  local size=13.5
+  local measured=measure(text,size,1,false)
+  if measured>w then size=max(9,size*w/measured) end
+  fit_label(text,x,y+(13.5-size)/2,size,c,w,false)
+end
 
 local function checkbox(id,text,x,y,w,checked,fn)
   rect(x,y+6,15,15,C.field,.95)
@@ -2632,7 +2650,8 @@ function IME.frame()
     for i,v in ipairs(A.items) do if v.guid==IME.target.guid then index=i;break end end
     if not index then IME.stop(false);return end
     if index<=A.offset or index>A.offset+visible() then IME.finish(true,false);return end
-    left,top,width,height=T.x+269,T.y+T.header+(index-A.offset-1)*T.row,W-347,T.row
+    local cols,widths=table_columns()
+    left,top,width,height=cols[5],T.y+T.header+(index-A.offset-1)*T.row,widths[5]-8,T.row
   end
   local nx,ny=gfx.clienttoscreen(sx(left),sy(top))
   local ex,ey=gfx.clienttoscreen(sx(left+width),sy(top+height))
@@ -2752,8 +2771,15 @@ local function draw_table()
   gradient(T.x,T.y,T.w,T.h,C.field,C.panel,1,.30,true)
   rect(T.x,T.y,T.w,T.header,C.panel2,.94)
   line(T.x,T.y,T.x+T.w,T.y,C.edge2,.65)
-  local cols={T.x+34,T.x+78,T.x+115,T.x+192,T.x+269}
-  local widths={42,35,75,75,W-339}
+  local time_width=75
+  for i=A.offset+1,min(#A.rows,A.offset+visible()) do
+    local row=A.rows[i];update_row_time(row)
+    time_width=max(time_width,math.ceil(measure(row.text[2],13.5,1,false))+4,
+      math.ceil(measure(row.text[3],13.5,1,false))+4)
+  end
+  -- Make room for timecode/samples without moving a live name editor.
+  if not (IME.active and IME.mode=="rename") then T.time_width=time_width end
+  local cols,widths=table_columns()
   local heads={"種別","ID","開始","終了","名前"}
 
   label("表示",T.x+2,T.y+7,13,C.text,1,30,20,0,true)
@@ -2775,10 +2801,6 @@ local function draw_table()
     if row then
       local v=row.info;local y=T.y+T.header+(slot-1)*T.row
       local text=row.text
-      if not text then
-        text={string.format("%.0f",v.id),short_time(v.pos),v.isrgn and short_time(v.ending) or "—",display_name(v.before)}
-        row.text=text
-      end
       if v.selected then
         local x,w=T.x+1,T.w-T.bar-1
         gradient(x,y,w,T.row,C.accent3,C.panel,.54,.88)
@@ -2795,8 +2817,8 @@ local function draw_table()
       if v.color~=0 then local r,g,b=R.ColorFromNative(v.color);rect(T.x+3,y+9,3,14,{r/255,g/255,b/255}) end
       label(v.isrgn and "R" or "M",cols[1],y+6,16,v.isrgn and C.accent2 or C.text,3,widths[1],24,0,true)
       fit_label(text[1],cols[2],y+6,16,C.text,widths[2]-2,false)
-      fit_label(text[2],cols[3],y+7,13.5,C.text,widths[3]-2,false)
-      fit_label(text[3],cols[4],y+7,13.5,v.isrgn and C.text or C.faint,widths[4]-2,false)
+      time_label(text[2],cols[3],y+7,C.text,widths[3]-2)
+      time_label(text[3],cols[4],y+7,v.isrgn and C.text or C.faint,widths[4]-2)
       fit_label(text[4],cols[5],y+4,18,C.text,widths[5]-8,false)
       widget("row_"..ri,T.x+30,y,T.w-T.bar-30,T.row,function()
         local now=R.time_precise()
@@ -2865,7 +2887,7 @@ local function draw()
   small_button("copy_info","全情報をコピー",178,930,142,30,function() copy_information(false) end,#A.items>0,true)
   small_button("paste_all","名前を貼付（先頭から）",332,930,W-356,30,function() paste_names(false) end,#A.items>0,true)
 
-  BLT.footer(A.blt_status or (#A.items==0 and 'マーカー／リージョンがありません。' or string.format('%d件  選択 %d件',#A.items,A.selected_count)),A.blt_bad,W,H+22,'0.5.4')
+  BLT.footer(A.blt_status or (#A.items==0 and 'マーカー／リージョンがありません。' or string.format('%d件  選択 %d件',#A.items,A.selected_count)),A.blt_bad,W,H+22,'0.5.6')
   custom_titlebar()
   drawn_layout={w=gfx.w,h=gfx.h,generation=A.generation,offset=A.offset}
 end
@@ -2961,7 +2983,7 @@ local function close()
  end
 end
 function BLT.captureScope() local v=BLT.scopeView or {};BLT.scopeView=v;v.seek=S.seek;v.move=S.move;v.kind=Core.scope.kind;v.query=Core.scope.query;v.exclude_loop=Core.scope.exclude_loop;return v end
-function BLT.pick(obj,keys) local v=BLT.valueView or {};BLT.valueView=v;for k in pairs(keys) do v[k]=obj[k] end;return v end
+
 BLT.attach({
  R=R,C=C,Chrome=Chrome,Chameleon=Chameleon,section=SECTION,faces=fonts,font=font,
  geometry=function() return scale,ox,oy end,active=function() local f=gfx.getchar(65536);return (f&1)==0 or (f&2)~=0 end,
@@ -3002,10 +3024,10 @@ if Chameleon.enabled then Chameleon.refresh(true) end
 R.atexit(close)
 guarded(refresh)
 local function loop()
+  guarded(function()
  BLT.tick(R.time_precise())
 
-  local k=BLT.key(gfx.getchar()); if k<0 or A.closing then close(); return end
-  guarded(function()
+  local k=BLT.key(gfx.getchar()); if k<0 or A.closing then A.closing=true; return end
     local now=R.time_precise()
     release_pending_rename()
     local ime_was_active=IME.active
@@ -3019,11 +3041,13 @@ local function loop()
     if last_window_active==nil or window_active~=last_window_active then last_window_active=window_active; wake_visuals(now) end
 
     local key_activity=false; local count=0
-    while k>0 and count<32 do key_activity=true; if not ime_was_active then keypress(k) end; count=count+1; k=gfx.getchar() end
+    while k>0 and count<32 do key_activity=true; if not ime_was_active then keypress(k) end; count=count+1; k=BLT.key(gfx.getchar()) end
     if key_activity then wake_visuals(now) end
     if A.closing then return end
 
-    if poll_selection(now) then wake_visuals(now);next_draw_time=now end
+    local selection_changed=poll_selection(now)
+    local time_changed=poll_time_display(now)
+    if selection_changed or time_changed then wake_visuals(now);next_draw_time=now end
     if now>=window_poll_at then window_poll_at=now+.25; save_window() end
 
     local raw_x,raw_y,raw_cap=gfx.mouse_x,gfx.mouse_y,gfx.mouse_cap

@@ -1,19 +1,319 @@
 -- @description VARIANT FORGE
--- @version 0.5.10
+-- @version 0.5.30
 -- @author Balrulu
 -- @provides
 --   . > ../
 -- @changelog
---   Increase preset capacity and show shared overflow dialogs.
---   Save texture references losslessly with a compact shared frequency grid.
+--   BLT SERIES Beta TEST UPLOAD
 -- @about
 --   BLT SERIES Beta TEST UPLOAD
+
+-- BLT external storage. Current-format data only.
+local function create_external_storage(api,section,source,state_keys)
+ local P=setmetatable({}, {__index=api})
+ local wanted={};for _,key in ipairs(state_keys) do wanted[key]='state' end
+ wanted.preset_count='presets';for i=1,200 do wanted['preset_'..i]='presets' end
+ local path=source:match('^@(.+)$')
+ if not path and api.get_action_context then local _,p=api.get_action_context();if p and p~='' then path=p end end
+ local base=path and path:match('^(.*)[.]lua$')
+ local stores={};local warned={};local cap=268435456
+ local function report(kind,detail)
+  if warned[kind] then return end;warned[kind]=true
+  local en=api.GetExtState(section,'ui_language')=='EN'
+  api.MB((en and 'BLT could not save/load its data file. Check folder permissions and free disk space.\n\n' or 'BLTのデータファイルを保存・読み込みできません。フォルダの書き込み権限と空き容量を確認してください。\n\n')..tostring(detail),'BLT DATA',0)
+ end
+ local function exists(p)
+  if api.file_exists then return api.file_exists(p) end
+  local f=io.open(p,'rb');if f then f:close();return true end
+  return os.rename(p,p) and true or false
+ end
+ local function value_limit(key)
+  if key=='preset_count' then return 3 end
+  if key=='curve_guide_data' then return 131072 end
+  return 16777216
+ end
+ local function read(p)
+  local f,err=io.open(p,'rb');if not f then return nil,err end
+  local ok,raw=pcall(function()
+   local size=f:seek('end')
+   if not size or size>cap or not f:seek('set',0) then return nil end
+   local data=f:read(size+1)
+   if not data or #data~=size then return nil end
+   return data
+  end)
+  pcall(f.close,f)
+  if not ok or not raw then return nil,'Cannot read data file safely: '..p end
+  if raw:sub(1,12)~='BLT_DATA_V1\n' or raw:sub(-4)~='END\n' then return nil,'Invalid data file: '..p end
+  local values={};local pos=13;local count=0
+  while pos<=#raw-4 do
+   local a,b,klen,vlen=raw:find('^(%d+) (%d+)\n',pos)
+   klen,vlen=tonumber(klen),tonumber(vlen)
+   if not a or not klen or not vlen or klen>128 or vlen>16777216 or b+klen+vlen>#raw-4 then return nil,'Invalid data record: '..p end
+   local key=raw:sub(b+1,b+klen);local value=raw:sub(b+klen+1,b+klen+vlen)
+   if wanted[key] then
+    if vlen>value_limit(key) then return nil,'Invalid data key/size: '..p end
+    if values[key]~=nil then return nil,'Duplicate data record: '..p end
+    if key=='preset_count' and (not value:match('^%d+$') or tonumber(value)>200) then return nil,'Invalid preset count: '..p end
+    values[key]=value
+   end
+   pos=b+klen+vlen+1;count=count+1
+   if count>1024 then return nil,'Too many data records: '..p end
+  end
+  return values
+ end
+ local function encode(values)
+  local keys={};for key in pairs(values) do keys[#keys+1]=key end;table.sort(keys)
+  local rows={'BLT_DATA_V1\n'};local size=16
+  for _,key in ipairs(keys) do
+   local value=values[key];local h=#key..' '..#value..'\n';size=size+#h+#key+#value
+   if size>cap or #value>16777216 then return nil,'Local data capacity exceeded' end
+   rows[#rows+1]=h;rows[#rows+1]=key;rows[#rows+1]=value
+  end
+  rows[#rows+1]='END\n';return table.concat(rows)
+ end
+ for _,kind in ipairs({'presets','state'}) do
+  local p=base and (base..'.'..kind..'.dat')
+  local s={path=p,values={},pending={}};stores[kind]=s
+  if not p then s.blocked=true;report(kind,'Cannot locate the Lua script file')
+  elseif exists(p) then
+   local values,err=read(p)
+   if values then s.values=values else
+    s.values=read(p..'.bak') or {};s.blocked=true;report(kind,err..'\nBackup: '..p..'.bak')
+   end
+  elseif exists(p..'.bak') then
+   local values,err=read(p..'.bak')
+   if values then s.values=values else s.blocked=true;report(kind,err) end
+  end
+ end
+ local function mark(s,key,value)
+  s.values[key]=value;s.pending[key]=value;s.due=s.due or (api.time_precise()+0.75)
+ end
+ local function flush(s,kind)
+  if s.blocked or not s.due then return end
+  local values={}
+  if exists(s.path) then
+   local current,err=read(s.path);if not current then s.blocked=true;report(kind,err);return end
+   values=current
+  else for k,v in pairs(s.values) do values[k]=v end end
+  for k,v in pairs(s.pending) do values[k]=v end
+  local raw,err=encode(values);local temp=s.path..'.tmp';local ok=false
+  if raw then
+   local f;f,err=io.open(temp,'wb')
+   if f then
+    local success,wrote,werr=pcall(f.write,f,raw);local closing,closed,cerr=pcall(f.close,f);if not closing then cerr=closed;closed=nil end
+    if not success then werr=wrote;wrote=nil end
+    if wrote and closed then
+     local check;check,err=read(temp)
+     if check then ok=true;for k,v in pairs(values) do if check[k]~=v then ok=false;err='Data verification failed';break end end end
+    else err=werr or cerr end
+   end
+  end
+  if ok then
+   local had=exists(s.path)
+   if had then
+    if exists(s.path..'.bak') then ok,err=os.remove(s.path..'.bak') end
+    if ok then ok,err=os.rename(s.path,s.path..'.bak') end
+   end
+   if ok then
+    ok,err=os.rename(temp,s.path)
+    if not ok and had then os.rename(s.path..'.bak',s.path) end
+   end
+  end
+  if not ok then s.due=api.time_precise()+5;report(kind,(s.path or '')..'\n'..tostring(err));return end
+  s.values=values;s.pending={};s.due=nil;warned[kind]=nil
+ end
+ function P.BLT_FlushStorage(force)
+  local now=api.time_precise()
+  for kind,s in pairs(stores) do
+   if not s.blocked and s.due and (force or now>=s.due) then
+    local ok,err=pcall(flush,s,kind)
+    if not ok then s.due=now+5;pcall(report,kind,tostring(s.path)..'\n'..tostring(err)) end
+   end
+  end
+ end
+ function P.GetExtState(sec,key)
+  local kind=sec==section and wanted[key]
+  if kind then return stores[kind].values[key] or '' end
+  return api.GetExtState(sec,key)
+ end
+ function P.SetExtState(sec,key,value,persist)
+  local kind=sec==section and wanted[key]
+  if not kind then return api.SetExtState(sec,key,value,persist) end
+  local s=stores[kind];value=tostring(value)
+  if persist and s.values[key]~=value then mark(s,key,value) else s.values[key]=value end
+ end
+ function P.defer(fn)
+  local ok,err=pcall(P.BLT_FlushStorage,false)
+  if not ok then pcall(report,'runtime',err) end
+  return api.defer(fn)
+ end
+ function P.atexit(fn)
+  return api.atexit(function()
+   local ok,err=xpcall(fn,debug.traceback);pcall(P.BLT_FlushStorage,true)
+   if not ok then error(err) end
+  end)
+ end
+ return P
+end
+
+local reaper=create_external_storage(reaper,'BLT_VARIANT_FORGE',debug.getinfo(1,'S').source,{'curve_guide_data'})
 
 -- BLT preset transfer limits 1.1.0. Embedded; no runtime dependency.
 local BLTPresetLimits={bytes=16777216,stringBytes=2097152,nodes=262144,entries=8192}
 function BLTPresetLimits.show(english)
  reaper.MB(english and 'Preset capacity limit exceeded. Export presets individually instead of as a bundle.' or '容量上限オーバーです。一括ではなく個別に保存してください。','BLT PRESET',0)
 end
+
+-- BLT media availability 1.0.2. Pause audio work, never the UI defer loop.
+local function create_media_gate(api,graphics)
+ local M={waiting=false,epoch=0};local P=setmetatable({}, {__index=api})
+ local accessors={};local next_check=0;local ready=true;local settle=0;local last_active
+ local function valid(project,p,kind)
+  return p and (not api.ValidatePtr2 or api.ValidatePtr2(project,p,kind))
+ end
+ local function application_active()
+  if graphics and graphics.getchar then
+   local flags=graphics.getchar(65537)
+   if flags>=0 and ((flags&1)==0 or (flags&2)~=0) then return true end
+  end
+  if not (api.JS_Window_GetForeground and api.GetMainHwnd and api.JS_Window_GetParent) then return nil end
+  local foreground=api.JS_Window_GetForeground();local main=api.GetMainHwnd()
+  for _=1,32 do
+   if not foreground then return false end
+   if foreground==main then return true end
+   local parent=api.JS_Window_GetParent(foreground)
+   if parent==foreground then return nil end;foreground=parent
+  end
+  return nil
+ end
+ local function offline(project,take)
+  -- targets() resolves or validates each pointer in this same defer pass.
+  if not take then return false end
+  if api.TakeIsMIDI and api.TakeIsMIDI(take) then return false end
+  if not api.GetMediaItemTake_Source then return false end
+  local source=api.GetMediaItemTake_Source(take);local seen={}
+  for _=1,32 do
+   if not source or seen[source] then break end;seen[source]=true
+   local is_offline=false
+   if api.CF_GetMediaSourceOnline then
+    is_offline=not api.CF_GetMediaSourceOnline(source)
+   elseif api.GetMediaSourceSampleRate and api.GetMediaSourceNumChannels then
+    is_offline=api.GetMediaSourceSampleRate(source)<=0 or api.GetMediaSourceNumChannels(source)<=0
+   end
+   if is_offline then
+    local file=api.GetMediaSourceFileName and api.GetMediaSourceFileName(source,'') or ''
+    if file~='' and (not api.file_exists or api.file_exists(file)) then return true end
+   end
+   source=api.GetMediaSourceParent and api.GetMediaSourceParent(source) or nil
+  end
+  return false
+ end
+ local fields={'info','v','source','snapshot','plans','items','list','queue','entries','reader','data','p','left','right','parts','sources','source_items'}
+ local function targets(project,all_items)
+  local takes,seen,items={},{},{};local invalid=false
+  local function item(p,fresh)
+   if p and items[p] then return end
+   if not p or (not fresh and not valid(project,p,'MediaItem*')) then invalid=true;return end
+   items[p]=true
+   local take=api.GetActiveTake and api.GetActiveTake(p)
+   if take then takes[take]=true end
+  end
+  local function visit(v,depth)
+   if type(v)~='table' or seen[v] or depth>12 then return end;seen[v]=true
+   if v.project and v.project~=project then invalid=true;return end
+   if v.item then item(v.item) end
+   if v.take then
+    if takes[v.take] or valid(project,v.take,'MediaItem_Take*') then takes[v.take]=true else invalid=true end
+   end
+   if v.temp_take and (takes[v.temp_take] or valid(project,v.temp_take,'MediaItem_Take*')) then takes[v.temp_take]=true end
+   for _,key in ipairs(fields) do visit(v[key],depth+1) end
+   for _,entry in ipairs(v) do if type(entry)=='table' then visit(entry,depth+1) end end
+  end
+  if api.CountSelectedMediaItems and api.GetSelectedMediaItem then
+   for i=0,api.CountSelectedMediaItems(project)-1 do item(api.GetSelectedMediaItem(project,i),true) end
+  end
+  local a=M.state
+  if a then
+   for _,key in ipairs({'job','analysis','batch','source_job','wave_job','pjob','xjob','ajob'}) do visit(a[key],0) end
+   if a.job or a.batch or a.source_job then visit(a.items,0);visit(a.queue,0) end
+  end
+  if (all_items or (M.all_items and M.state and M.state.job)) and api.CountMediaItems and api.GetMediaItem then
+   for i=0,api.CountMediaItems(project)-1 do item(api.GetMediaItem(project,i),true) end
+  end
+  return takes,invalid
+ end
+ function M.ready(force,all_items)
+  local now=api.time_precise()
+  if not force and now<next_check then return ready end
+  next_check=now+.10
+  local project=api.EnumProjects(-1,'')
+  local takes,invalid=targets(project,all_items);local blocked=false
+  if M.state and M.state.project and M.state.project~=project then invalid=true end
+  if not invalid then
+   if next(takes) and not api.CF_GetMediaSourceOnline and application_active()==false then blocked=true
+   else for take in pairs(takes) do if offline(project,take) then blocked=true;break end end end
+  end
+  if invalid or not next(takes) then settle=0 end
+  if blocked then settle=now+.25 end
+  local waiting=not invalid and (blocked or now<settle)
+  ready=not waiting
+  if waiting~=M.waiting then
+   M.waiting=waiting;if not waiting then M.epoch=M.epoch+1 end
+   if M.onchange then M.onchange() end
+  end
+  return ready
+ end
+ function M.tick()
+  local active=application_active()
+  if active~=last_active then next_check=0;last_active=active end
+  return M.ready()
+ end
+ function M.message(section)
+  return api.GetExtState(section,'ui_language')=='EN' and 'Waiting for media to come online…' or 'メディアのオンライン復帰を待っています…'
+ end
+ local function signature(take)
+  if not (api.GetMediaItemTake_Item and api.GetItemStateChunk) then return nil end
+  local item=api.GetMediaItemTake_Item(take);if not item then return nil end
+  local ok,chunk=api.GetItemStateChunk(item,'',false)
+  return ok and chunk or nil
+ end
+ if api.CreateTakeAudioAccessor then
+  function P.CreateTakeAudioAccessor(take)
+   local aa=api.CreateTakeAudioAccessor(take)
+   if aa then accessors[aa]={take=take,project=api.EnumProjects(-1,''),signature=signature(take),revision=api.GetProjectStateChangeCount and api.GetProjectStateChangeCount(api.EnumProjects(-1,'')),epoch=M.epoch} end
+   return aa
+  end
+ end
+ if api.CreateTrackAudioAccessor then
+  function P.CreateTrackAudioAccessor(track)
+   local aa=api.CreateTrackAudioAccessor(track);local project=api.EnumProjects(-1,'')
+   if aa then accessors[aa]={track=track,project=project,revision=api.GetProjectStateChangeCount(project),epoch=M.epoch} end
+   return aa
+  end
+ end
+ local function resume(aa)
+  local state=accessors[aa]
+  if not state or state.epoch==M.epoch or M.waiting then return end
+  state.epoch=M.epoch
+  if api.EnumProjects(-1,'')~=state.project then return end
+  local unchanged=state.take and valid(state.project,state.take,'MediaItem_Take*') and state.signature and signature(state.take)==state.signature
+  if state.take and state.revision and api.GetProjectStateChangeCount(state.project)~=state.revision then unchanged=false end
+  if state.track then unchanged=valid(state.project,state.track,'MediaTrack*') and api.GetProjectStateChangeCount(state.project)==state.revision end
+  if unchanged and api.AudioAccessorUpdate then api.AudioAccessorUpdate(aa) end
+ end
+ if api.AudioAccessorStateChanged then
+  function P.AudioAccessorStateChanged(aa) resume(aa);return api.AudioAccessorStateChanged(aa) end
+ end
+ if api.GetAudioAccessorSamples then
+  function P.GetAudioAccessorSamples(...) local aa=...;resume(aa);return api.GetAudioAccessorSamples(...) end
+ end
+ if api.DestroyAudioAccessor then
+  function P.DestroyAudioAccessor(aa) accessors[aa]=nil;return api.DestroyAudioAccessor(aa) end
+ end
+ return M,P
+end
+local Media,reaper=create_media_gate(reaper,gfx)
+
 
 -- BLT window geometry 1.0.0. Embedded; screen coordinates only.
 local function create_window_geometry(api,graphics)
@@ -141,11 +441,18 @@ local LanguageCatalog={en={
  ["下限は上限以下にしてください："]="Minimum must not exceed maximum: ",
  ["STARTはEND以下にしてください："]="START must not exceed END: ",
  ["対象アイテムが無効です。"]="Invalid target item.",
- ["音声アイテムだけが対象です。"]="Audio items only.",
+ ["音声またはMIDIアイテムを選択してください。"]="Select audio or MIDI items.",
+ ["MIDIアイテムはSOURCE解析の対象外です。"]="MIDI items do not support SOURCE analysis.",
+ ["MIDIでは使用できません。"]="Unavailable for MIDI items.",
+ ["MIDIでは全体ピッチ・タイミング・音量のみ使用できます。"]="MIDI supports Global Pitch, Timing, and Volume only.",
+ ["MIDIの音量はベロシティ倍率として適用します。"]="MIDI volume is applied as a velocity multiplier.",
+ ["MIDIの全体ピッチは半音単位へ丸めます。"]="MIDI global pitch is rounded to whole semitones.",
+ ["MIDIでは疑似発音数を使用できません。"]="Voice limit is unavailable for MIDI items.",
+ ["MIDIアイテム"]="MIDI item",
  ["音声ソースまたは長さを確認してください。"]="Check audio source and length.",
  ["音声を持たないアイテムは対象外です。"]="Items without audio are unsupported.",
  ["対象トラックを取得できません。"]="Cannot read target track.",
- ["元になる音声アイテムを選択してください。"]="Select source audio items.",
+ ["元になる音声またはMIDIアイテムを選択してください。"]="Select source audio or MIDI items.",
  ["アイテムの状態を取得できません（大きなFX状態を含む場合は先に整理してください）。"]="Cannot read item state (reduce large FX state first if present).",
  ["音声アイテム参照がありません"]="Missing audio item reference",
  ["音声アイテム参照が無効です"]="Invalid audio item reference",
@@ -173,12 +480,28 @@ local LanguageCatalog={en={
  ["素材全体の音声取得に失敗しました。"]="Failed to read full-source audio.",
  ["検出区間 0：バリエーションなし"]="0 sections detected: no variations",
  ["元の使用区間が検出区間に含まれません"]="Original range is outside detected sections",
- ["検出区間 %d / 使用可能 1：バリエーションなし"]="Detected %d / Usable 1: no variations",
  ["山より前"]="Before peak",
  ["山より後"]="After peak",
  ["区間相対 %s %.1f%%"]="Section-relative %s %.1f%%",
  ["山オフセット %.1f ms"]="Peak offset %.1f ms",
  ["候補 %d（同一素材 %d / 同一トラック %d） / %s"]="Candidates %d (same source %d / same track %d) / %s",
+ ["同一波形"]="Same waveform",
+ ["同一トラック"]="Same track",
+ ["候補数をクリック：同一波形 / 同一トラックを切替"]="Click candidate count: switch Same waveform / Same track",
+ ["同一トラック候補は選択アイテムより前に終了する音声アイテムだけです。"]="Same-track candidates are audio items ending before the selected item.",
+ ["SOURCE検出区間を削除しました。"]="SOURCE section deleted.",
+ ["SOURCE検出区間を調整しました。"]="SOURCE section adjusted.",
+ ["SOURCE検出区間を追加しました。"]="SOURCE section added.",
+ ["既存区間と重なるため追加しませんでした。"]="Section was not added because it overlaps an existing section.",
+ ["ズーム率リセット"]="Reset zoom",
+ ["波形の時間軸ズームを全体表示へ戻します。"]="Reset waveform time zoom to full view.",
+ ["再解析"]="Reanalyze",
+ ["手動編集したSOURCE区間を破棄し、素材全体を再解析します。"]="Discard manual SOURCE edits and reanalyze the full source.",
+ ["SOURCEを再解析しています。"]="Reanalyzing SOURCE.",
+ ["Ctrl＋ホイール：時間軸ズーム / Shift＋ホイール：左右スクロール"]="Ctrl+wheel: time zoom / Shift+wheel: horizontal scroll",
+ ["再生成のUndoを統合できません。生成後に別のUndo操作があります。"]="Cannot merge regeneration undo because another undoable edit occurred after generation.",
+ ["クリック：区間選択 / 内側ドラッグ：区間移動 / 右クリック：削除"]="Click: select / Drag inside: move / Right-click: delete",
+ ["ドラッグして時間を左右にスクロール"]="Drag to scroll horizontally",
  ["音声アイテム参照が無効です。"]="Invalid audio item reference.",
  ["音声Takeを取得できません。"]="Cannot read audio take.",
  ["スペクトル解析APIを利用できません。"]="Spectrum analysis API unavailable.",
@@ -209,16 +532,15 @@ local LanguageCatalog={en={
  ["ピッチ"]="Pitch",
  ["ピッチ変調を書き込めません。"]="Cannot write pitch modulation.",
  ["音量"]="Volume",
- ["解析後にプロジェクトが変更されました。再度実行してください。"]="Project changed after analysis. Run again.",
- ["対象が削除されました。"]="Target was deleted.",
  ["自由配置モードを有効化できません。"]="Cannot enable free item positioning.",
- ["元アイテムの発音フェードを設定できません。"]="Cannot set source item attack fade.",
+ ["元アイテムの停止フェードを設定できません。"]="Cannot set source item stop fade.",
  ["複製アイテムを作成できません。"]="Cannot create duplicate item.",
  ["アイテムを複製できません。"]="Cannot duplicate item.",
  ["複製Takeを取得できません。"]="Cannot read duplicated take.",
  ["位置または長さを設定できません。"]="Cannot set position or length.",
- ["生成アイテムの発音フェードを設定できません。"]="Cannot set generated item attack fade.",
+ ["生成アイテムの停止フェードを設定できません。"]="Cannot set generated item stop fade.",
  ["Take設定に失敗しました："]="Take setting failed: ",
+ ["MIDI音量を設定できません。"]="Cannot set MIDI velocity multiplier.",
  ["同一トラック候補の元アイテムが見つかりません。"]="Same-track candidate source item not found.",
  ["同一トラック候補の音声Takeを取得できません。"]="Cannot read same-track candidate take.",
  ["同一トラック候補の音声ソースを取得できません。"]="Cannot read same-track candidate source.",
@@ -232,7 +554,6 @@ local LanguageCatalog={en={
  ["CHAMELEON  REAPERテーマに擬態"]="CHAMELEON  REAPER theme",
  ["CHAMELEON  オリジナル配色"]="CHAMELEON  Original colors",
  ["カスタムタイトルバーには js_ReaScriptAPI が必要です。\nReaPack から js_ReaScriptAPI をインストールしてください。"]="The app bar requires js_ReaScriptAPI.\nInstall js_ReaScriptAPI via ReaPack.",
- ["カメレオンモード（配色をテーマへ擬態）"]="Chameleon: match REAPER colors",
  ["素材を解析中..."]="Analyzing sources...",
  ["全体ピッチ"]="Global pitch",
  ["ピッチ曲線"]="Pitch curve",
@@ -261,7 +582,6 @@ local LanguageCatalog={en={
  ["全アイテムの疑似発音数を相対的に1段階増やす"]="Increase all voice limits one step relatively",
  ["全アイテムの疑似発音数を相対的に1段階減らす"]="Decrease all voice limits one step relatively",
  ["使用する素材を完全再解析しています。完了後に自動で生成します。"]="Reanalyzing all sources. Generation starts automatically afterward.",
- ["処理を中止しました。コピーはまだ作成していません。"]="Stopped. No copies created yet.",
  ["%dバリエーション / %dアイテムを作成 · SEED %d%s"]="Created %d variations / %d items · SEED %d%s",
  [" · 素材 %d"]=" · Sources %d",
  ["素材バリエーションの事前解析が完了していません。"]="Source variation pre-analysis is incomplete.",
@@ -273,19 +593,11 @@ local LanguageCatalog={en={
  ["焼き込み待ちのTEXTURE FXはありません。"]="No TEXTURE FX waiting to be baked.",
  ["焼き込み対象が変更されました。"]="Bake targets changed.",
  ["FX焼込に失敗しました。Undoで焼き込み前へ戻してください。生成途中のWAVは参照が外れた後に自動回収します。"]="FX bake failed. Use Undo to restore. Incomplete WAVs are cleaned up when no longer referenced.",
- ["TEXTURE FXを%dアイテムへ焼き込みました。生成取消は引き続き使用できます。"]="Baked TEXTURE FX into %d items. Undo generation remains available.",
- ["このセッションで取り消せる生成結果がありません。"]="No generated result to undo in this session.",
- ["生成結果は削除済みです。ほかのテイクが使用中の焼き込みWAVは残しました。"]="Generated results already deleted. Retained baked WAVs used by other takes.",
- ["直前の生成結果はすでに存在しません。"]="Most recent generated result no longer exists.",
- ["一部の生成アイテムを削除できませんでした。Undoで確認してください。"]="Could not delete some generated items. Check Undo.",
- [" 生成後に編集された元アイテム%d件は、その編集を保持しました。"]=" Kept later edits to %d source items.",
- [" 使用中の焼き込みWAVは%d件残しました。"]=" Retained %d baked WAVs still in use.",
- ["直前に生成した%dアイテムを取り消しました。%s"]="Undid %d recently generated items. %s",
+ ["TEXTURE FXを%dアイテムへ焼き込みました。再生成は引き続き使用できます。"]="Baked TEXTURE FX into %d items. Regeneration remains available.",
  ["再生成できる直前の生成結果がありません。"]="No recent result to regenerate.",
  ["再生成元のアイテム情報がありません。生成し直してください。"]="Missing source item information. Generate again.",
  ["元アイテムが削除されているため再生成できません。現在の生成結果は残しました。"]="Source items deleted. Cannot regenerate; existing result retained.",
- ["再生成元の素材情報を準備できませんでした。SOURCEを確認してから再実行してください。"]="Cannot prepare regeneration sources. Check SOURCE, then retry.",
- ["素材の再解析中に選択またはプロジェクトが変わったため、実行を中止しました。"]="Selection or project changed during source reanalysis. Stopped.",
+ ["素材の再解析中に対象またはプロジェクトが変わったため、実行を中止しました。"]="Targets or project changed during source reanalysis. Stopped.",
  ["：再解析後に素材バリエーションを使用できません。"]=": source variations unavailable after reanalysis.",
  ["解析中にプロジェクトが変更"]="Project changed during analysis",
  ["解析中にプロジェクトが切り替わり"]="Project switched during analysis",
@@ -296,6 +608,7 @@ local LanguageCatalog={en={
  ["TEXTURE EQの参照素材は最大%d個です。\n現在 %d個 選択されています。"]="TEXTURE EQ supports at most %d references.\nCurrently selected: %d.",
  ["%d番目の選択アイテムを解析できません。\n%s"]="Cannot analyze selected item %d.\n%s",
  ["音声アイテムを選択してください。"]="Select audio items.",
+ ["%d番目の選択アイテムはMIDIです。\nTEXTURE EQ参照には音声アイテムを使用してください。"]="Selected item %d is MIDI.\nUse audio items for TEXTURE EQ references.",
  ["TEXTURE EQ参照には長すぎる素材があります。\n\n%s\n%.2f 秒\n\n1素材あたり最大 %d 秒です。"]="TEXTURE EQ reference is too long.\n\n%s\n%.2f s\n\nMaximum per source: %d s.",
  ["%s のスペクトルを解析できません。\n%s"]="Cannot analyze spectrum of %s.\n%s",
  ["素材 "]="Source ",
@@ -305,15 +618,11 @@ local LanguageCatalog={en={
  ["未設定 · AUTO TEXTURE"]="Not set · AUTO TEXTURE",
  ["TEXTURE素材"]="TEXTURE SOURCE",
  ["未設定時はAUTO TEXTUREを使用。参照を使う場合は1～10個の音声アイテムを選択して解析・設定します。"]="Without references, use AUTO TEXTURE. To add references, select and analyze 1 to 10 audio items.",
- ["青: 検出区間   黄: 基準点   明枠: 使用中    %.2f s"]="Blue: sections  Yellow: anchor  Bright border: active    %.2f s",
- ["区間 %d/%d"]="Section %d/%d",
- ["リストで最後にクリックしたアイテムの素材全体。青=検出区間 / 黄=基準点 / 明枠=現在の使用範囲"]="Full source of the last clicked list item. Blue: sections / Yellow: anchor / Bright border: active range",
- ["トラック / ファイル名"]="TRACK / FILENAME",
+ ["トラック / アイテム名"]="TRACK / ITEM NAME",
  ["GLOBAL APPLY   /   一括 ON / OFF"]="GLOBAL APPLY / All ON / OFF",
  ["全項目をまとめてON/OFF"]="Toggle all features",
  ["使用可能な素材バリエーションがあるアイテムだけを一括ON/OFF"]="Toggle only items with usable source variations",
- ["全選択アイテムのこの機能を一括ON/OFF"]="Toggle this feature for all selected items",
- ["ファイル名：Ctrl/Shiftで複数選択 / ホイールでスクロール"]="Filename: Ctrl/Shift for multi-select / Wheel to scroll",
+ ["この機能を使用できる選択アイテムだけを一括ON/OFF"]="Toggle this feature only for compatible selected items",
  ["クリック選択 / Ctrl(Cmd)で追加・解除 / Shiftで範囲選択"]="Click: select / Ctrl(Cmd): toggle / Shift: range",
  ["素材バリエーション"]="Source variations",
  ["解析"]="Analyze",
@@ -345,7 +654,7 @@ local LanguageCatalog={en={
  ["間隔"]="Spacing",
  ["末尾→先頭"]="End → Start",
  ["先頭→先頭"]="Start → Start",
- ["発音フェード"]="Attack fade",
+ ["停止フェード"]="Stop fade",
  ["乱数シード"]="Random seed",
  ["シード固定"]="Lock seed",
  ["下限"]="Lower",
@@ -374,10 +683,15 @@ local LanguageCatalog={en={
  ["トーン補正"]="Tone correction",
  ["強さ 下限"]="Min. strength",
  ["素材全体をラウドネス解析中… %d%%"]="Full-source loudness analysis... %d%%",
- ["生成取消"]="Undo generation",
- ["このセッションで直前に生成したアイテムを削除"]="Delete the most recently generated items in this session",
- ["再生成"]="Regenerate",
- ["直前の生成結果を削除して現在の設定で生成し直す"]="Replace the latest result using current settings",
+ ["対象をロック"]="Lock targets",
+ ["ロック解除"]="Unlock targets",
+ ["現在選択中のアイテムを対象として固定。選択が変わっても対象を維持します。"]="Lock the currently selected items as targets even if selection changes.",
+ ["対象ロックを解除して、現在の選択へ戻します。"]="Unlock targets and follow the current selection again.",
+ ["対象をロックしました。"]="Targets locked.",
+ ["対象ロックを解除しました。"]="Targets unlocked.",
+ ["ロック対象が変更または削除されたため、対象ロックを解除しました。"]="Target lock released because a locked item changed or was deleted.",
+ ["ロックするアイテムを選択してください。"]="Select items to lock.",
+ ["バリエーションを再生成"]="Regenerate variations",
  ["処理を中止"]="Stop",
  ["%d バリエーションを生成"]="Generate %d variations",
  ["Enter：生成。SOURCEの事前解析中は完了後に実行できます。"]="Enter: generate. Wait for SOURCE pre-analysis to finish.",
@@ -387,7 +701,6 @@ local LanguageCatalog={en={
  ["カスタム枠を初期化できません。"]="Cannot initialize the custom frame.",
  ["表示言語を切替（JP / EN）"]="Switch language (JP / EN)",
  ["プリセットを読み込みました: ファクトリーデフォルト"]="Loaded: Factory Default",
- ["選択中のトラック / バスを指定"]="Use selected track / bus",
 },patterns={
  {"^「(.*)」を上書きしますか？$","Overwrite \"%s\"?"},
  {"^([%+%-]?[%d%.eE]+)–([%+%-]?[%d%.eE]+) / ([%+%-]?[%d%.eE]+)   スクロールで選択$","%d–%d / %d   Scroll to browse"},
@@ -398,16 +711,12 @@ local LanguageCatalog={en={
  {"^候補 ([%+%-]?[%d%.eE]+)（同一素材 ([%+%-]?[%d%.eE]+) / 同一トラック ([%+%-]?[%d%.eE]+)） / (.-)$","Candidates %d (same source %d / same track %d) / %s",{4}},
  {"^([%+%-]?[%d%.eE]+)バリエーション / ([%+%-]?[%d%.eE]+)アイテムを作成 · SEED ([%+%-]?[%d%.eE]+)(.-)$","Created %d variations / %d items · SEED %d%s",{4}},
  {"^ · 素材 ([%+%-]?[%d%.eE]+)$"," · Sources %d"},
- {"^TEXTURE FXを([%+%-]?[%d%.eE]+)アイテムへ焼き込みました。生成取消は引き続き使用できます。$","Baked TEXTURE FX into %d items. Undo generation remains available."},
- {"^ 生成後に編集された元アイテム([%+%-]?[%d%.eE]+)件は、その編集を保持しました。$"," Kept later edits to %d source items."},
- {"^ 使用中の焼き込みWAVは([%+%-]?[%d%.eE]+)件残しました。$"," Retained %d baked WAVs still in use."},
- {"^直前に生成した([%+%-]?[%d%.eE]+)アイテムを取り消しました。(.-)$","Undid %d recently generated items. %s",{2}},
+ {"^TEXTURE FXを([%+%-]?[%d%.eE]+)アイテムへ焼き込みました。再生成は引き続き使用できます。$","Baked TEXTURE FX into %d items. Regeneration remains available."},
  {"^TEXTURE EQの参照素材は最大([%+%-]?[%d%.eE]+)個です。\n現在 ([%+%-]?[%d%.eE]+)個 選択されています。$","TEXTURE EQ supports at most %d references.\nCurrently selected: %d."},
  {"^([%+%-]?[%d%.eE]+)番目の選択アイテムを解析できません。\n(.-)$","Cannot analyze selected item %d.\n%s",{2}},
  {"^TEXTURE EQ参照には長すぎる素材があります。\n\n(.-)\n([%+%-]?[%d%.eE]+) 秒\n\n1素材あたり最大 ([%+%-]?[%d%.eE]+) 秒です。$","TEXTURE EQ reference is too long.\n\n%s\n%.2f s\n\nMaximum per source: %d s."},
  {"^(.-) のスペクトルを解析できません。\n(.-)$","Cannot analyze spectrum of %s.\n%s",{2}},
  {"^TEXTURE EQ：([%+%-]?[%d%.eE]+)素材を解析・登録しました。$","TEXTURE EQ: analyzed and registered %d sources."},
- {"^青: 検出区間   黄: 基準点   明枠: 使用中    ([%+%-]?[%d%.eE]+) s$","Blue: sections  Yellow: anchor  Bright border: active    %.2f s"},
  {"^区間 ([%+%-]?[%d%.eE]+)/([%+%-]?[%d%.eE]+)$","Section %d/%d"},
  {"^素材全体をラウドネス解析中… ([%+%-]?[%d%.eE]+)%%$","Full-source loudness analysis... %d%%"},
  {"^([%+%-]?[%d%.eE]+) バリエーションを生成$","Generate %d variations"},
@@ -706,7 +1015,6 @@ function Presets.decode(data)
  local prefix=host.section..'_PRESET_V1\n'
  if data:sub(1,#prefix)~=prefix then return nil end
  local p=B.unpack(data:sub(#prefix+1))
- if type(p)=='table' and type(p.values)=='table' and p.values.texture==nil then p.values.texture=B.copy(host.defaults.texture) end
  if type(p)~='table' or not Presets.name(p.name) or not B.shape(p.values,host.defaults) or not host.valid(p.values) then return nil end
  return p
 end
@@ -718,7 +1026,6 @@ function Presets.capture(name)
 end
 function Presets.dirty()
  if not Presets.current then return false end
- -- Whitelisted views are reused; never serialize settings in the draw path.
  return not B.same(host.capture(),Presets.current.values)
 end
 function Presets.flush()
@@ -824,25 +1131,6 @@ local function begin_window_resize(mode) host.beginResize(mode) end
 local function update_window_resize() host.resize() end
 local function clear_chrome_tooltip() B.popupUntil=nil;if R.TrackCtl_SetToolTip then R.TrackCtl_SetToolTip('',0,0,true) end end
 B.clearTooltip=clear_chrome_tooltip
--- Non-modal dependency hint. Uses the existing tick, with no extra defer loop.
-function B.inputNotice()
- local x,y=gfx.clienttoscreen(gfx.mouse_x,gfx.mouse_y+18)
- R.TrackCtl_SetToolTip(Language.message('ReaImGui 0.10以降が必要です。ReaPackで導入・更新してください。'),x,y,true)
- B.popupUntil=R.time_precise()+1;B.tip=nil;B.tipVisible=false
-end
-function B.requireInput(ime)
- if ime.api then return true end
- if type(R.ImGui_GetBuiltinPath)~='function' then B.inputNotice();return false end
- local ok,api=pcall(function() return dofile(R.ImGui_GetBuiltinPath()..'/imgui.lua')('0.10') end)
- if not ok or type(api)~='table' then B.inputNotice();return false end
- ime.api=api;return true
-end
-function B.switch(x,y,state,enabled)
- local s,bx,by=host.geometry();local cy=by+(y+12)*s;local cx=bx+(x+7+12*state)*s
- local c=C.edge2;gfx.set(c[1],c[2],c[3],enabled and .45 or .2);gfx.line(bx+(x+3)*s,cy,bx+(x+23)*s,cy,1)
- c=C.faint;gfx.set(c[1],c[2],c[3],enabled and .8 or .4);gfx.circle(cx,cy,4.2*s,1,1)
- if state>.001 and enabled then c=C.accent;gfx.set(c[1],c[2],c[3],.06*state);gfx.circle(cx,cy,7*s,1,1);c=C.accent2;gfx.set(c[1],c[2],c[3],.94*state);gfx.circle(cx,cy,4.2*s,1,1) end
-end
 function B.blend(dt)
  if B.blendDt~=dt then B.blendDt=dt;B.blendValue=1-math.exp(-12*dt) end
  return B.blendValue
@@ -1106,9 +1394,6 @@ local function custom_titlebar(blocked)
   local chx,chy=chamX+chamW*.5,Chrome.titleH*.5
   local active_a=hoverCham and 1 or (Chameleon.enabled and .96 or .85)
 
-  -- Theme / mimicry icon:
-  -- three overlapping color fields, visually reading as "take on / blend into
-  -- surrounding colors" rather than as a literal animal.
   local c1,c2,c3=Chameleon.icon_colors()
 
   gfx.set(c1[1],c1[2],c1[3],active_a)
@@ -1128,7 +1413,6 @@ local function custom_titlebar(blocked)
   local rcx,rcy=resetX+resetW*.5,Chrome.titleH*.5
   local rcol=hoverReset and Chrome.mint or C.muted
 
-  -- Reference-style outlined window; arrow explicitly points LOWER LEFT.
   gfx.set(rcol[1],rcol[2],rcol[3],hoverReset and .98 or .82)
   gfx.roundrect(rcx-6,rcy-6,12,12,1,1)
   gfx.line(rcx+3,rcy-3,rcx-3,rcy+3,1)
@@ -1258,6 +1542,7 @@ local project_undo=create_project_undo(R,{
  after=function(project) if host.undoRefresh then host.undoRefresh(project) end;wake_visuals() end,
 })
 function B.key(k)
+ if k<0 then return k end
  if Presets.open then Presets.key(k);return 0 end
  if host and not host.localUndo then
   if host.undoAction then
@@ -1271,6 +1556,7 @@ function B.key(k)
  return k
 end
 function B.tick(now)
+ Media.tick()
  if not host then return end
  if B.windowW~=gfx.w or B.windowH~=gfx.h then B.windowW,B.windowH=gfx.w,gfx.h;B.lastRect=nil;wake_visuals() end
  B.viewport(host.geometry(),gfx.ext_retina or 1)
@@ -1324,13 +1610,26 @@ function B.cleanup(fn,...)
 end
 function B.recoverInput(state,err)
  gfx.dest=-1;gfx.mode=0;gfx.a=1
- for _,key in ipairs({'drag','number_drag','pointer_capture','field_drag','fieldDrag','curve_drag','scroll_drag','seam_drag','seam_hold','pressed','popup','name_dialog','duplicate_modal'}) do state[key]=nil end
+ for _,key in ipairs({'drag','number_drag','pointer_capture','field_drag','fieldDrag','scrollDrag','source_wave_drag','curve_drag','scroll_drag','seam_drag','seam_hold','pressed','popup','name_dialog','duplicate_modal'}) do state[key]=nil end
  if host.cancelEdit then B.cleanup(host.cancelEdit) end
- Presets.open=false;Presets.swallow=false
+ Presets.open=false;Presets.swallow=false;Presets.pressed=nil;Presets.hoverSince=nil
+ Chrome.drag=nil;Chrome.resize=nil
+ if host.cursor then B.cleanup(host.cursor,nil) end
  B.recoveryMode=true
  local ok,why=pcall(B.bar)
  B.recoveryMode=nil
- if not ok then B.logError(why) end
+ if not ok then
+  B.logError(why)
+  -- A failed font, preset or theme draw must still allow closing the window.
+  local down=((gfx.mouse_cap or 0)&1)~=0
+  local hit=gfx.mouse_y>=0 and gfx.mouse_y<26 and gfx.mouse_x>=gfx.w-38 and gfx.mouse_x<gfx.w
+  if down and not B.emergencyDown then B.emergencyClose=hit end
+  if not down and B.emergencyDown then
+   if B.emergencyClose and hit then Chrome.requestClose=true end
+   B.emergencyClose=nil
+  end
+  B.emergencyDown=down
+ else B.emergencyDown=nil;B.emergencyClose=nil end
  pcall(B.footer,B.publicError(err),true,gfx.w,0,B.footerVersion or '')
  pcall(gfx.update)
  if Chrome.requestClose then state.closing=true end
@@ -1345,33 +1644,8 @@ function B.title(title,subtitle,width,divider)
  B.font(10,1,false,scale,host.faces);gfx.set(C.accent2[1],C.accent2[2],C.accent2[3],1);gfx.x=ox+26*scale;gfx.y=origin+44*scale;gfx.drawstr(UI.fit(Language.text(subtitle),(width-155)*scale))
  if divider~=false then gfx.set(C.edge2[1],C.edge2[2],C.edge2[3],.26);gfx.line(ox+24*scale,origin+62*scale,ox+(width-24)*scale,origin+62*scale,1) end
 end
-function B.chaosButton(cx,cy,cw,ch,enabled,hot,pushed,time,glow)
- local d=host.chaosPainter
- local violet=Chameleon.enabled and C.accent2 or B.chaosViolet
- local ember=Chameleon.enabled and C.accent or B.chaosEmber
- local pale=Chameleon.enabled and C.text or B.chaosPale
- local surface=Chameleon.enabled and C.field or B.chaosSurface
- local alive=enabled and 1 or .25
- local breath=(.5+.5*math.sin(time*.85))*alive
- local y=cy+(pushed and 1 or 0);local center=ch/2
- -- Keep both the outer glow and the pressed face inside the registered bounds.
- d.cut(cx,cy,cw,ch,11,violet,.025*alive,violet,.10+.07*breath)
- d.cut(cx,y+2,cw,ch-4,9,surface,1,violet,(.45+.3*glow)*alive)
- d.gradient(cx+2,y+4,cw-4,ch-8,violet,C.bg,.12+.15*glow,.015,true)
- for i=1,6 do
-  local phase=time*.3+i*1.7;local px=cx+12+(i-1)*(cw-29)/5
-  local py=y+center+math.sin(phase)*(center-6)
-  local alpha=(.18+.22*math.sin(phase*.7)^2)*alive
-  if px<cx+36 or px>cx+cw-36 or math.abs(py-y-center)>11 then
-   d.disc(px,py,3,violet,alpha*.08);d.disc(px,py,.7,i%2==0 and ember or pale,alpha)
-  end
- end
- d.line(cx+cw*.335,y+ch-5,cx+cw*.665,y+ch-5,violet,(.18+.22*breath+.2*glow)*alive)
- d.label('C H A O S',cx+24,y+center-9,17,enabled and pale or C.faint,2,cw-48,22,1,true)
-end
-B.chaosViolet={.62,.23,.94};B.chaosEmber={.92,.27,.65};B.chaosPale={.87,.69,1};B.chaosSurface={.038,.014,.068}
-
 function B.footer(message,bad,width,height,version,progress)
+ if Media.waiting then message=Media.message(host.section);bad=false;progress=nil end
  if version~='' then B.footerVersion=version end
  scale,ox,oy=host.geometry();message=Language.message(B.notice or tostring(message or ''))
  if B.notice then bad=B.noticeBad end
@@ -1401,7 +1675,7 @@ end
 return B
 end)()
 
-local Core={VERSION='0.5.10',SOURCE_SR=48000,SOURCE_HOP=48,SOURCE_BLOCK=12000,SOURCE_PREVIEW_BINS=1400,SOURCE_MAX_REGIONS=16384,
+local Core={VERSION='0.5.30',SOURCE_SR=48000,SOURCE_HOP=48,SOURCE_BLOCK=12000,SOURCE_PREVIEW_BINS=1400,SOURCE_MAX_REGIONS=16384,
  GENERATED_TAG='P_EXT:BLT_VARIANT_FORGE',TEMP_TAG='P_EXT:BLT_VARIANT_FORGE_TEMP',SECTION='BLT_VARIANT_FORGE',EQ_FIXED_CACHE={}}
 Core.STALE_TEMP_PROJECTS={};Core.RUN_ID='';Core.TEMP_HEARTBEAT_TTL=8;Core.TEMP_HEARTBEAT_KEY='temp_live_registry_v1';Core.temp_heartbeat_at=0
 local abs,min,max,floor,ceil=math.abs,math.min,math.max,math.floor,math.ceil
@@ -1411,8 +1685,11 @@ local function db(x) return x>1e-12 and 20*math.log(x,10) or -240 end
 local function copy(t) local o={};for k,v in pairs(t) do o[k]=v end;return o end
 local function tcopy(t) local o={};for k,v in pairs(t or {}) do o[k]=type(v)=='table' and tcopy(v) or v end;return o end
 Core.FEATURES={'pitch_global','pitch_curve','vibrato','tremolo','timing','volume','pan','eq_texture','eq_tone','source'}
+Core.MIDI_FEATURES={pitch_global=true,timing=true,volume=true}
+function Core.feature_supported(v,key) return not (v and v.is_midi) or Core.MIDI_FEATURES[key]==true end
+local function midi_semitone(v) return v>=0 and floor(v+.5) or ceil(v-.5) end
 Core.defaults={
- count=8,interval_mode=1,interval=0.0,voice_fade_ms=30,seed=18273,seed_lock=false,
+ count=5,interval_mode=1,interval=0.1,voice_fade_ms=30,seed=18273,seed_lock=false,
  pitch_lo=-1,pitch_hi=1,pitch_length_mode=1,
  curve_lo=-1,curve_hi=1,curve_points=5,curve_length_mode=1,curve_start_pct=0,curve_end_pct=100,
  curve_guide_enabled=false,curve_guide_start=0,curve_guide_end=0,curve_guide_data='',curve_tab=1,
@@ -1529,42 +1806,74 @@ end
 function Core.item_info(project,item)
  if not item or not R.ValidatePtr2(project,item,'MediaItem*') then return nil,'対象アイテムが無効です。' end
  local take=R.GetActiveTake(item)
- if not take or R.TakeIsMIDI(take) then return nil,'音声アイテムだけが対象です。' end
+ if not take then return nil,'音声またはMIDIアイテムを選択してください。' end
+ local is_midi=R.TakeIsMIDI(take)==true
  local source=R.GetMediaItemTake_Source(take)
  local pos,len=R.GetMediaItemInfo_Value(item,'D_POSITION'),R.GetMediaItemInfo_Value(item,'D_LENGTH')
  local rate=R.GetMediaItemTakeInfo_Value(take,'D_PLAYRATE')
- if not source or not finite(len) or len<=0 or not finite(rate) or rate<=0 then return nil,'音声ソースまたは長さを確認してください。' end
- local source_type=R.GetMediaSourceType(source);source_type=type(source_type)=='string' and source_type:upper() or ''
- local source_rate=R.GetMediaSourceSampleRate(source);local source_channels=R.GetMediaSourceNumChannels(source)
- if source_type=='EMPTY' or source_type=='MIDI' or source_type=='MIDIPOOL'
-  or not finite(source_rate) or source_rate<=0 or not finite(source_channels) or source_channels<1 then
-  return nil,'音声を持たないアイテムは対象外です。'
- end
+ if not finite(len) or len<=0 or not finite(rate) or rate<=0 then return nil,'音声ソースまたは長さを確認してください。' end
  local track=R.GetMediaItemTrack(item);if not track then return nil,'対象トラックを取得できません。' end
- local slen,isqn=R.GetMediaSourceLength(source)
- local _,guid=R.GetSetMediaItemInfo_String(item,'GUID','',false);local file=R.GetMediaSourceFileName(source,'')
+ local source_type='';local source_rate=0;local source_channels=0;local slen,isqn=0,false;local file=''
+ if source then
+  source_type=R.GetMediaSourceType(source);source_type=type(source_type)=='string' and source_type:upper() or ''
+  slen,isqn=R.GetMediaSourceLength(source)
+  source_rate=R.GetMediaSourceSampleRate(source) or 0;source_channels=R.GetMediaSourceNumChannels(source) or 0
+  file=R.GetMediaSourceFileName(source,'') or ''
+ end
+ if not is_midi then
+  if not source or source_type=='EMPTY' or source_type=='MIDI' or source_type=='MIDIPOOL'
+   or not finite(source_rate) or source_rate<=0 or not finite(source_channels) or source_channels<1 then
+   return nil,'音声を持たないアイテムは対象外です。'
+  end
+ end
+ local _,guid=R.GetSetMediaItemInfo_String(item,'GUID','',false)
  local channel_mode=R.GetMediaItemTakeInfo_Value(take,'I_CHANMODE')
- local analysis_channels=(channel_mode==2 or channel_mode==3 or channel_mode==4) and 1 or source_channels
+ local analysis_channels=not is_midi and ((channel_mode==2 or channel_mode==3 or channel_mode==4) and 1 or source_channels) or 0
  local item_gain=R.GetMediaItemInfo_Value(item,'D_VOL');local take_gain=R.GetMediaItemTakeInfo_Value(take,'D_VOL')
  local generated,temp=Core.item_tags(item)
- return {item=item,take=take,track=track,pos=pos,len=len,rate=rate,source=source,
+ return {item=item,take=take,track=track,pos=pos,len=len,rate=rate,source=source,is_midi=is_midi,
   source_len=slen,source_qn=isqn,source_type=source_type,source_rate=source_rate,channels=source_channels,analysis_channels=analysis_channels,channel_mode=channel_mode,file=file,
   offset=R.GetMediaItemTakeInfo_Value(take,'D_STARTOFFS'),pitch=R.GetMediaItemTakeInfo_Value(take,'D_PITCH'),
   ppitch=R.GetMediaItemTakeInfo_Value(take,'B_PPITCH'),pan=R.GetMediaItemTakeInfo_Value(take,'D_PAN'),
-  gain=take_gain,item_gain=item_gain,analysis_gain=abs(item_gain*take_gain),name=R.GetTakeName(take) or 'Audio',guid=guid,
+  gain=is_midi and item_gain or take_gain,item_gain=item_gain,take_gain=take_gain,analysis_gain=abs(item_gain*take_gain),name=R.GetTakeName(take) or (is_midi and 'MIDI' or 'Audio'),guid=guid,
   tracknum=R.GetMediaTrackInfo_Value(track,'IP_TRACKNUMBER'),takeindex=R.GetMediaItemTakeInfo_Value(take,'IP_TAKENUMBER'),
   generated=generated or '',temp=temp or ''}
 end
-function Core.selection(project)
+function Core.items_from_refs(project,refs)
  local list={}
- for i=0,R.CountSelectedMediaItems(project)-1 do
-  local item=R.GetSelectedMediaItem(project,i);local info,err=Core.item_info(project,item)
-  if not info then return nil,err end
+ for _,item in ipairs(refs or {}) do
+  local info,err=Core.item_info(project,item);if not info then return nil,err end
   list[#list+1]=info
  end
  table.sort(list,function(a,b) if a.tracknum~=b.tracknum then return a.tracknum<b.tracknum end;if a.pos~=b.pos then return a.pos<b.pos end;return a.guid<b.guid end)
- if #list==0 then return nil,'元になる音声アイテムを選択してください。' end
+ if #list==0 then return nil,'元になる音声またはMIDIアイテムを選択してください。' end
  return list
+end
+function Core.selection(project)
+ local refs={}
+ for i=0,R.CountSelectedMediaItems(project)-1 do refs[#refs+1]=R.GetSelectedMediaItem(project,i) end
+ return Core.items_from_refs(project,refs)
+end
+function Core.target_fingerprint(project,item)
+ if not item or not R.ValidatePtr2(project,item,'MediaItem*') then return nil end
+ local track=R.GetMediaItemTrack(item);local take=R.GetActiveTake(item)
+ if not track or not take or not R.ValidatePtr2(project,track,'MediaTrack*') or not R.ValidatePtr2(project,take,'MediaItem_Take*') then return nil end
+ local _,guid=R.GetSetMediaItemInfo_String(item,'GUID','',false)
+ local _,name=R.GetSetMediaItemTakeInfo_String(take,'P_NAME','',false)
+ local parts={tostring(guid or ''),tostring(track),tostring(take),tostring(name or '')}
+ for _,key in ipairs({'D_POSITION','D_LENGTH','D_SNAPOFFSET','D_VOL','D_FADEINLEN','D_FADEINLEN_AUTO','D_FADEOUTLEN','D_FADEOUTLEN_AUTO','F_FREEMODE_Y','F_FREEMODE_H','B_MUTE','B_LOOPSRC','C_LOCK','I_GROUPID'}) do
+  local v=R.GetMediaItemInfo_Value(item,key);parts[#parts+1]=finite(v) and string.format('%.17g',v) or '?'
+ end
+ for _,key in ipairs({'D_STARTOFFS','D_VOL','D_PAN','D_PLAYRATE','D_PITCH','B_PPITCH','I_CHANMODE'}) do
+  local v=R.GetMediaItemTakeInfo_Value(take,key);parts[#parts+1]=finite(v) and string.format('%.17g',v) or '?'
+ end
+ local source=R.GetMediaItemTake_Source(take);parts[#parts+1]=tostring(source)
+ if source then
+  local typ=R.GetMediaSourceType(source);local len,isqn=R.GetMediaSourceLength(source);local file=R.GetMediaSourceFileName(source,'')
+  parts[#parts+1]=tostring(typ or '');parts[#parts+1]=tostring(file or '')
+  parts[#parts+1]=finite(len) and string.format('%.17g',len) or '?';parts[#parts+1]=isqn and 'Q' or 'S'
+ end
+ return table.concat(parts,'\30')
 end
 function Core.collect_track_pool(project,track)
  local out={};if not track then return out end
@@ -1573,7 +1882,7 @@ function Core.collect_track_pool(project,track)
   if item then
    local generated,temp=Core.item_tags(item)
    if (generated or '')=='' and (temp or '')=='' then
-    local info=Core.item_info(project,item);if info then out[#out+1]=info end
+    local info=Core.item_info(project,item);if info and not info.is_midi then out[#out+1]=info end
    end
   end
  end
@@ -1588,17 +1897,7 @@ function Core.selection_signature(project)
  for i=0,n-1 do parts[#parts+1]=tostring(R.GetSelectedMediaItem(project,i)) end
  return table.concat(parts,'|')
 end
-function Core.track_topology_signature(list)
- local tracks={};local ordered={}
- for _,v in ipairs(list or {}) do if v.track and not tracks[v.track] then tracks[v.track]=true;ordered[#ordered+1]={track=v.track,num=v.tracknum or 0} end end
- table.sort(ordered,function(a,b)return a.num<b.num end)
- local parts={}
- for _,entry in ipairs(ordered) do
-  local track=entry.track;local n=R.CountTrackMediaItems(track);parts[#parts+1]='T'..tostring(entry.num)..':'..tostring(n)
-  for i=0,n-1 do parts[#parts+1]=tostring(R.GetTrackMediaItem(track,i)) end
- end
- return table.concat(parts,'|')
-end
+
 function Core.find_item_by_guid(project,guid)
  if not guid or guid=='' then return nil end
  for i=0,R.CountMediaItems(project)-1 do
@@ -1625,6 +1924,7 @@ function Core.clone_chunk(chunk,guidfn)
 end
 Core.SOURCE_DETECT={open=-34,close=-34,min_open=100,min_close=50,pre=1,post=15}
 function Core.refresh_source_ref(v)
+ if v and v.is_midi then return nil,'MIDIアイテムはSOURCE解析の対象外です。' end
  if not v or not v.item then return nil,'音声アイテム参照がありません' end
  if type(R.ValidatePtr)=='function' and not R.ValidatePtr(v.item,'MediaItem*') then return nil,'音声アイテム参照が無効です' end
  local take=R.GetActiveTake(v.item)
@@ -1652,6 +1952,7 @@ function Core.refresh_source_ref(v)
  return source,parent
 end
 function Core.source_eligible(v)
+ if v and v.is_midi then return false,'MIDIアイテムはSOURCE解析の対象外です。' end
  local source,parent_or_reason=Core.refresh_source_ref(v)
  if not source then return false,parent_or_reason end
  if v.source_qn or not finite(v.source_len) or v.source_len<=0 or not v.file or v.file=='' then return false,'通常の音声ファイル以外' end
@@ -1890,53 +2191,56 @@ function Core.aligned_source_variant(v,ctx,target_info,target_region,timing_mode
   id=id,sort_key=sort_key or 0,track_item=track_item and true or false,track_guid=track_item and target_info.guid or nil,
   track_ref=track_item and target_info.item or nil,source_name=track_item and target_info.name or nil,channel_mode=target_info.channel_mode or 0}
 end
-function Core.source_variants(v,analysis,timing_mode,track_candidates,track_anchor_cache)
- local ctx,why=Core.source_context(v,analysis);v.variants=nil;timing_mode=timing_mode or 2
- if not ctx then return nil,why,nil end
- local out={};local rejected_format=false;local orig_id='orig:'..tostring(v.guid)
- out[#out+1]={offset=v.offset,original=true,region=ctx.index,anchor=ctx.region.anchor,file=v.file,id=orig_id,sort_key=ctx.index}
+function Core.source_variants(v,analysis,timing_mode,track_candidates,track_anchor_cache,source_mode)
+ local ctx,why=Core.source_context(v,analysis);v.variants=nil;v.source_same_variants=nil;v.source_track_variants=nil;timing_mode=timing_mode or 2
+ if not ctx then return nil,why,nil,0,0 end
+ local orig_id='orig:'..tostring(v.guid)
+ local original={offset=v.offset,original=true,region=ctx.index,anchor=ctx.region.anchor,file=v.file,id=orig_id,sort_key=ctx.index}
+ local same={original}
  for i,r in ipairs(ctx.regions) do
   r._index=i
-  if i~=ctx.index then
-   local c=Core.aligned_source_variant(v,ctx,v,r,timing_mode,'segment:'..tostring(v.guid)..':'..i,i,false)
-   out[#out+1]=c
+  if i~=ctx.index then same[#same+1]=Core.aligned_source_variant(v,ctx,v,r,timing_mode,'segment:'..tostring(v.guid)..':'..i,i,false) end
+ end
+ local track={original};local rejected_format=false
+ for ti,cand in ipairs(track_candidates or {}) do
+  local eligible=Core.source_eligible(cand);local used_duration=(cand.len or 0)*(cand.rate or 1)
+  if eligible then
+   local anchor=Core.quick_track_anchor(cand,track_anchor_cache)
+   local region={start=cand.offset,finish=cand.offset+used_duration,raw_start=cand.offset,raw_finish=cand.offset+used_duration,
+    anchor=clamp(anchor,cand.offset,cand.offset+used_duration),_index=1}
+   track[#track+1]=Core.aligned_source_variant(v,ctx,cand,region,timing_mode,'track:'..tostring(cand.guid),100000+ti,true)
+  else rejected_format=true end
+ end
+ local function unique(list)
+  local seen,out={},{}
+  for _,c in ipairs(list) do
+   local k=c.id or ((c.file or '')..'|'..tostring(c.region or 0)..'|'..tostring(c.track_guid or ''))
+   if not seen[k] then seen[k]=true;out[#out+1]=c end
   end
+  table.sort(out,function(a,b)return (a.sort_key or 0)<(b.sort_key or 0) end)
+  return out
  end
- local track_added=0
- -- Same-track cut items are a fallback source only. If the selected source
- -- already contains multiple detected regions, those regions alone form the
- -- variation set. Track items are considered only for a single-region source.
- if #ctx.regions==1 then
-  for ti,cand in ipairs(track_candidates or {}) do
-   local eligible=Core.source_eligible(cand)
-   local used_duration=(cand.len or 0)*(cand.rate or 1)
-   -- A cut item is itself one variation. It does not need source-wide
-   -- segmentation; only its representative summit is measured.
-   if eligible then
-    local anchor=Core.quick_track_anchor(cand,track_anchor_cache)
-    local region={start=cand.offset,finish=cand.offset+used_duration,raw_start=cand.offset,raw_finish=cand.offset+used_duration,
-     anchor=clamp(anchor,cand.offset,cand.offset+used_duration),_index=1}
-    local c=Core.aligned_source_variant(v,ctx,cand,region,timing_mode,'track:'..tostring(cand.guid),100000+ti,true)
-    out[#out+1]=c;track_added=track_added+1
-   else rejected_format=true end
-  end
+ same,track=unique(same),unique(track);v.source_same_variants=same;v.source_track_variants=track
+ -- Candidate counts are always self-inclusive. Count the original exactly once,
+ -- then count only non-original alternatives so SAME WAVE and SAME TRACK use the
+ -- same rule even if a future pool contains a duplicate original entry.
+ local function inclusive_count(list)
+  local n=1
+  for _,c in ipairs(list or {}) do if not c.original then n=n+1 end end
+  return n
  end
- -- Distinct detected regions and cut items retain their own candidate identity.
- local seen,unique={},{}
- for _,c in ipairs(out) do
-  local k=c.id or ((c.file or '')..'|'..tostring(c.region or 0)..'|'..tostring(c.track_guid or ''))
-  if not seen[k] then seen[k]=true;unique[#unique+1]=c end
- end
- out=unique;table.sort(out,function(a,b) return (a.sort_key or 0)<(b.sort_key or 0) end);v.variants=out
- if #out<=1 then
-  local reason='使用可能 1（元のみ）：追加候補がありません'
-  if rejected_format then reason='使用可能 1（元のみ）：他候補は対象外の素材です' end
-  return nil,reason,ctx
- end
+ local same_count,track_count=inclusive_count(same),inclusive_count(track)
+ source_mode=source_mode==2 and 2 or 1
+ local out=source_mode==2 and track or same;local out_count=source_mode==2 and track_count or same_count;v.variants=out
  local base
  if timing_mode==2 then local side_name=ctx.side<0 and '山より前' or '山より後';base=string.format('区間相対 %s %.1f%%',side_name,ctx.ratio*100)
  else base=string.format('山オフセット %.1f ms',ctx.anchor_rel*1000) end
- return out,string.format('候補 %d（同一素材 %d / 同一トラック %d） / %s',#out,#out-track_added,track_added,base),ctx
+ if out_count<=1 then
+  local reason='使用可能 1（元のみ）：追加候補がありません'
+  if source_mode==2 and rejected_format then reason='使用可能 1（元のみ）：他候補は対象外の素材です' end
+  return nil,reason,ctx,same_count,track_count
+ end
+ return out,string.format('候補 %d（同一素材 %d / 同一トラック %d） / %s',out_count,same_count,track_count,base),ctx,same_count,track_count
 end
 function Core.build_variants(v)
  if v.variants and #v.variants>0 then return v.variants end
@@ -2173,6 +2477,7 @@ function Core.texture_frame_loudness_power(values,N,nchan)
  return energy/max(1,N)
 end
 function Core.capture_texture_spectrum(v)
+ if v and v.is_midi then return nil,'MIDIでは使用できません。' end
  if not v or not v.item or (type(R.ValidatePtr)=='function' and not R.ValidatePtr(v.item,'MediaItem*')) then return nil,'音声アイテム参照が無効です。' end
  local take=R.GetActiveTake(v.item)
  if not take or R.TakeIsMIDI(take) then return nil,'音声Takeを取得できません。' end
@@ -2501,9 +2806,10 @@ function Core.rand_tone(rng,s)
   high=clamp(high,-band_cap,band_cap),bright=bright,forward=forward}
 end
 function Core.any_item_feature(a,list,key)
- for _,v in ipairs(list) do if ((a.items or {})[v.guid] or {})[key] then return true end end
+ for _,v in ipairs(list) do if Core.feature_supported(v,key) and ((a.items or {})[v.guid] or {})[key] then return true end end
  return false
 end
+function Core.item_feature(a,v,key) return Core.feature_supported(v,key) and ((a.items or {})[v.guid] or {})[key]==true end
 function Core.avoid_blocks(anchor,low,high,blocks,gap_after)
  gap_after=gap_after or 0
  -- blocks are sorted and anchor only moves forward, so one pass is sufficient.
@@ -2517,10 +2823,14 @@ function Core.apply_voice_policy(groups,s)
  for _,g in ipairs(groups) do
   for _,row in ipairs(g.rows) do
    row.render_len=row.len;row.voice_fade=nil;row.voice_stolen=false;row.is_original=false
-   local guid=row.info and row.info.guid or ''
-   local bucket=by_source[guid];if not bucket then bucket={};by_source[guid]=bucket end;bucket[#bucket+1]=row
-   local track=row.info and row.info.track
-   if track then local tb=by_track[track];if not tb then tb={};by_track[track]=tb end;tb[#tb+1]=row end
+   -- Voice stealing / free-position lanes are audio-only. MIDI can overlap natively,
+   -- so selecting only MIDI must never switch the source track into free-item mode.
+   if not (row.info and row.info.is_midi) then
+    local guid=row.info and row.info.guid or ''
+    local bucket=by_source[guid];if not bucket then bucket={};by_source[guid]=bucket end;bucket[#bucket+1]=row
+    local track=row.info and row.info.track
+    if track then local tb=by_track[track];if not tb then tb={};by_track[track]=tb end;tb[#tb+1]=row end
+   end
   end
  end
  -- The selected source item is voice #1. This matters both for finite voice
@@ -2596,7 +2906,7 @@ function Core.plan(list,s,a,blocks)
  local feature_any={}
  for _,key in ipairs(Core.FEATURES) do feature_any[key]=Core.any_item_feature(a,list,key) end
  if feature_any.pitch_curve and s.curve_length_mode==2 then
-  for _,v in ipairs(list) do local ia=(a.items or {})[v.guid] or {};if ia.pitch_curve and R.GetTakeNumStretchMarkers(v.take)>0 then return nil,'ピッチカーブの尺連動は既存ストレッチマーカー付き素材には適用できません。' end end
+  for _,v in ipairs(list) do if Core.item_feature(a,v,'pitch_curve') and R.GetTakeNumStretchMarkers(v.take)>0 then return nil,'ピッチカーブの尺連動は既存ストレッチマーカー付き素材には適用できません。' end end
  end
  local texture_has_bank=false
  if feature_any.eq_texture then for _,v in ipairs(list) do if v.texture_bank and #v.texture_bank>0 then texture_has_bank=true;break end end end
@@ -2615,23 +2925,26 @@ function Core.plan(list,s,a,blocks)
   local g={rows={},index=n};local low,high=math.huge,-math.huge
   for _,v in ipairs(list) do
    local ia=(a.items or {})[v.guid] or {};local jitter=0
-   if ia.timing then jitter=a.lock.timing and shared.timing or rng(s.timing_lo,s.timing_hi)/1000 end
-   local row={info=v,rel=v.pos-first+jitter,offset=v.offset,pitch=v.pitch,playrate=v.rate,ppitch=v.ppitch,len=v.len,voice_limit=max(0,floor(tonumber(ia.voice_limit) or 0))}
-   if ia.pitch_global then
+   if Core.item_feature(a,v,'timing') then jitter=a.lock.timing and shared.timing or rng(s.timing_lo,s.timing_hi)/1000 end
+   local row={info=v,rel=v.pos-first+jitter,offset=v.offset,pitch=v.pitch,playrate=v.rate,ppitch=v.ppitch,len=v.len,voice_limit=v.is_midi and 0 or max(0,floor(tonumber(ia.voice_limit) or 0))}
+   if Core.item_feature(a,v,'pitch_global') then
     local pd=a.lock.pitch_global and shared.pitch or rng(s.pitch_lo,s.pitch_hi)
-    if s.pitch_length_mode==1 then row.pitch=v.pitch+pd
+    if v.is_midi then
+     pd=midi_semitone(pd);row.pitch=v.pitch+pd
+     if s.pitch_length_mode==2 then local f=2^(pd/12);row.playrate=v.rate*f;row.len=v.len/f;row.ppitch=0 end
+    elseif s.pitch_length_mode==1 then row.pitch=v.pitch+pd
     else local f=2^(pd/12);row.playrate=v.rate*f;row.len=v.len/f;row.ppitch=0;row.pitch=v.pitch end
    end
-   if ia.pitch_curve then
+   if Core.item_feature(a,v,'pitch_curve') then
     row.curve=a.lock.pitch_curve and shared.curve or Core.rand_curve(rng,s.curve_lo,s.curve_hi,s.curve_points,s.curve_guide_enabled,s.curve_guide_data,s.curve_guide_start,s.curve_guide_end,s.curve_start_pct,s.curve_end_pct)
     row.curve_start_pct=s.curve_start_pct;row.curve_end_pct=s.curve_end_pct;row.curve_length_mode=s.curve_length_mode
     if s.curve_length_mode==2 then row.curve_base_len=row.len;row.len,row.curve_link_markers=Core.curve_link_map(row.curve_base_len,row.playrate,row.curve,row.curve_start_pct,row.curve_end_pct);row.ppitch=0 end
    end
-   if ia.vibrato then row.vibrato=a.lock.vibrato and shared.vibrato or Core.rand_modulation(rng,s,'vibrato') end
-   if ia.tremolo then row.tremolo=a.lock.tremolo and shared.tremolo or Core.rand_modulation(rng,s,'tremolo') end
-   if ia.volume then local vd=a.lock.volume and shared.volume or rng(s.volume_lo,s.volume_hi);row.volume=v.gain*10^(vd/20) end
-   if ia.pan then local pv=a.lock.pan and shared.pan or rng(s.pan_lo,s.pan_hi);row.pan=pv/100 end
-   if ia.eq_texture then
+   if Core.item_feature(a,v,'vibrato') then row.vibrato=a.lock.vibrato and shared.vibrato or Core.rand_modulation(rng,s,'vibrato') end
+   if Core.item_feature(a,v,'tremolo') then row.tremolo=a.lock.tremolo and shared.tremolo or Core.rand_modulation(rng,s,'tremolo') end
+   if Core.item_feature(a,v,'volume') then local vd=a.lock.volume and shared.volume or rng(s.volume_lo,s.volume_hi);row.volume=v.gain*10^(vd/20) end
+   if Core.item_feature(a,v,'pan') then local pv=a.lock.pan and shared.pan or rng(s.pan_lo,s.pan_hi);row.pan=pv/100 end
+   if Core.item_feature(a,v,'eq_texture') then
     if v.texture_bank and #v.texture_bank>0 then
      local shape=a.lock.eq_texture and shared.texture_shape or Core.rand_texture_shape(rng)
      local track_key=v.track or v.tracknum or v.guid;local tex_i=texture_choice[track_key];local tex=nil
@@ -2643,8 +2956,8 @@ function Core.plan(list,s,a,blocks)
      row.eq=Core.scale_texture_bands(a.lock.eq_texture and shared.texture_auto or Core.auto_texture_eq(rng),s.texture_strength);row.texture_source_name='AUTO TEXTURE'
     end
    end
-   if ia.eq_tone then row.tone=a.lock.eq_tone and shared.tone or Core.rand_tone(rng,s) end
-   if ia.source then local sv=Core.pick_candidate(v,pools,rng,s.source_order);if sv then row.offset=sv.offset or v.offset;row.source_file=sv.file;row.source_name=sv.source_name;row.source_variant_id=sv.id;row.source_track_item=sv.track_item==true;row.source_track_guid=sv.track_guid;row.source_track_ref=sv.track_ref;row.source_channel_mode=sv.channel_mode;row.substituted=(not sv.original) or abs(row.offset-v.offset)>1e-9 end end
+   if Core.item_feature(a,v,'eq_tone') then row.tone=a.lock.eq_tone and shared.tone or Core.rand_tone(rng,s) end
+   if Core.item_feature(a,v,'source') then local sv=Core.pick_candidate(v,pools,rng,s.source_order);if sv then row.offset=sv.offset or v.offset;row.source_file=sv.file;row.source_name=sv.source_name;row.source_variant_id=sv.id;row.source_track_item=sv.track_item==true;row.source_track_guid=sv.track_guid;row.source_track_ref=sv.track_ref;row.source_channel_mode=sv.channel_mode;row.substituted=(not sv.original) or abs(row.offset-v.offset)>1e-9 end end
    low=min(low,row.rel);high=max(high,row.rel+row.len);g.rows[#g.rows+1]=row
   end
   local anchor
@@ -2700,9 +3013,7 @@ function Core.suppress_new_fx_windows()
 end
 function Core.restore_new_fx_windows(saved) if saved and type(R.set_config_var_string)=='function' then R.set_config_var_string('fxfloat_focus',saved,0) end end
 function Core.reaeq_gain_normalized(target)
- -- ReaEQ band gain is a linear -24..+24 dB parameter. Do not use
- -- TakeFX_FormatParamValueNormalized() here: older REAPER builds can return
- -- incorrect formatted values for ReaEQ gain and make range probing fail.
+ -- ReaEQ band gain is a linear -24..+24 dB parameter; use the direct mapping.
  target=clamp(tonumber(target) or 0,-24,24)
  return (target+24)/48
 end
@@ -3128,7 +3439,8 @@ function Core.generation_targets_valid(snapshot)
   if not R.ValidatePtr2(snapshot.project,v.item,'MediaItem*')
    or not R.ValidatePtr2(snapshot.project,v.track,'MediaTrack*')
    or R.GetMediaItemTrack(v.item)~=v.track
-   or (v.take and R.GetActiveTake(v.item)~=v.take) then return false end
+   or (v.take and R.GetActiveTake(v.item)~=v.take)
+   or abs((R.GetMediaItemInfo_Value(v.item,'D_POSITION') or 0)-(v.pos or 0))>1e-9 then return false end
  end
  return true
 end
@@ -3171,7 +3483,7 @@ function Core.apply(snapshot,groups,s,checkpoint,restore_selection)
      local lanes=max(1,row.free_lane_count or 1);local lane=clamp(row.free_lane or 1,1,lanes)
      R.SetMediaItemInfo_Value(item,'F_FREEMODE_Y',(lane-1)/lanes);R.SetMediaItemInfo_Value(item,'F_FREEMODE_H',1/lanes)
     end
-    if row.voice_stolen and not Core.apply_voice_fade(item,row) then error('元アイテムの発音フェードを設定できません。',0) end
+    if row.voice_stolen and not Core.apply_voice_fade(item,row) then error('元アイテムの停止フェードを設定できません。',0) end
     original_state.after=Core.capture_original_item(item)
    end
   end
@@ -3190,7 +3502,7 @@ function Core.apply(snapshot,groups,s,checkpoint,restore_selection)
     -- manual source fades unless this item is explicitly voice-stolen below.
     R.SetMediaItemInfo_Value(item,'D_FADEINLEN_AUTO',0);R.SetMediaItemInfo_Value(item,'D_FADEOUTLEN_AUTO',0)
    end
-   if row.voice_stolen and not Core.apply_voice_fade(item,row) then error('生成アイテムの発音フェードを設定できません。',0) end
+   if row.voice_stolen and not Core.apply_voice_fade(item,row) then error('生成アイテムの停止フェードを設定できません。',0) end
    local function set_take(key,value) if not R.SetMediaItemTakeInfo_Value(take,key,value) then error('Take設定に失敗しました：'..key,0) end end
    if row.substituted then
     R.SetMediaItemInfo_Value(item,'B_LOOPSRC',0)
@@ -3232,7 +3544,11 @@ function Core.apply(snapshot,groups,s,checkpoint,restore_selection)
     set_take('D_STARTOFFS',row.offset)
    end
    set_take('D_PLAYRATE',row.playrate);set_take('B_PPITCH',row.ppitch);set_take('D_PITCH',row.pitch)
-   if row.curve or row.vibrato then Core.pitch_curve(project,item,take,row) end;if row.volume then set_take('D_VOL',row.volume) end;if row.tremolo then Core.apply_tremolo(project,item,take,row) end
+   if row.curve or row.vibrato then Core.pitch_curve(project,item,take,row) end
+   if row.volume then
+    if v.is_midi then if not R.SetMediaItemInfo_Value(item,'D_VOL',row.volume) then error('MIDI音量を設定できません。',0) end else set_take('D_VOL',row.volume) end
+   end
+   if row.tremolo then Core.apply_tremolo(project,item,take,row) end
    if row.eq and #row.eq>0 then
     created_entry.texture_fx_count=Core.add_texture_eq(take,row.eq)
    end
@@ -3288,7 +3604,7 @@ local S,lock_apply=Core.load_settings(Core.SECTION)
 local SOURCE_CACHE_LIMIT=24
 local ITEM_STATE_LIMIT=512
 local TRACK_ANCHOR_LIMIT=512
-local A={project=R.EnumProjects(-1,''),items={},poll=0,status='',warning=false,job=nil,progress=0,closed=false,closing=false,last_created=nil,item_scroll=0,matrix_selected={},matrix_anchor=nil,wave_guid=nil,texture_bank={},texture_preview_index=1,scroll_drag=nil,field_drag=nil,source_cache={},track_anchor_cache={},source_queue={},source_queue_i=1,source_queue_done=false,source_job=nil,source_progress=0,source_execute_pending=nil,source_auto={},track_signature='',selection_signature='',track_candidate_pools={},item_by_guid={},persist_dirty=false,persist_at=0,pending_bake_delete=Core.load_pending_bake_deletes(),pending_bake_delete_at=0,pending_bake_retry_delay=2,stale_temp_projects=Core.STALE_TEMP_PROJECTS,stale_temp_retry_at=0,bake_scan_record=nil,bake_scan_revision=nil,bake_scan_count=0,apply={lock=lock_apply,items={}}}
+local A={project=R.EnumProjects(-1,''),items={},poll=0,status='',warning=false,job=nil,progress=0,closed=false,closing=false,last_created=nil,item_scroll=0,matrix_selected={},matrix_anchor=nil,wave_guid=nil,wave_region_key=nil,wave_region_index=nil,wave_region_selection={},source_wave_drag=nil,source_wave_geom=nil,source_wave_view={key=nil,zoom=1,start=0},source_wave_scroll_drag=nil,target_lock=nil,target_lock_poll=0,texture_bank={},texture_preview_index=1,scroll_drag=nil,field_drag=nil,source_cache={},track_anchor_cache={},source_queue={},source_queue_i=1,source_queue_done=false,source_job=nil,source_progress=0,source_execute_pending=nil,source_auto={},selection_signature='',track_candidate_pools={},item_by_guid={},persist_dirty=false,persist_at=0,pending_bake_delete=Core.load_pending_bake_deletes(),pending_bake_delete_at=0,pending_bake_retry_delay=2,stale_temp_projects=Core.STALE_TEMP_PROJECTS,stale_temp_retry_at=0,bake_scan_record=nil,bake_scan_revision=nil,bake_scan_count=0,apply={lock=lock_apply,items={}}}
 A.source_cache_serial=0;A.item_state_serial=0;A.item_state_used={}
 local W,H=1180,1098
 local C={
@@ -3319,7 +3635,7 @@ local widget_count=0
 local edit=nil
 local field_flash={}
 local voice_flash={}
-local down_last,pressed=false,nil
+local down_last,right_down_last,pressed=false,false,nil
 local pressed_mods=0
 local mouse_x,mouse_y=-1,-1
 local hover_hint=""
@@ -3331,9 +3647,7 @@ local redraw_dirty=true
 local last_raw_mouse_x,last_raw_mouse_y,last_raw_mouse_cap=nil,nil,nil
 local last_window_w,last_window_h=nil,nil
 local last_input_active=nil
--- Hover identity is still tracked for state transitions, but pointer movement itself
--- is again allowed to keep the visual layer alive.  Font batching now makes those
--- active frames cheap enough that we can favor the original, more fluid BLT feel.
+-- Pointer movement keeps the visual layer alive while font batching limits active-frame cost.
 local last_hover_key=nil
 local hover_anim_until=R.time_precise()+.35
 local EFFECT_IDLE_TAIL=2.5
@@ -3431,17 +3745,6 @@ local function chameleon_host_refresh()
 end
 
 -- CHAMELEON THEME ADAPTER
---
--- Porting contract for other BLT scripts:
---   Required palette tables : C, C_DEFAULT
---   Optional chrome colors   : Chrome, CHROME_DEFAULT
---   Persistence              : SECTION / ExtState key "chameleon"
---   Host hooks               : notice(), wake_visuals(), redraw_dirty
---   UI integration           : Chameleon.enabled / Chameleon.set(...)
---   Main-loop integration    : Chameleon.tick(now)
---
--- Keep this block intact when porting; normally only the title-bar button
--- placement and the host hooks need adapting in another BLT script.
 Chameleon.keys={
   -- Main/surface colors
   "col_main_bg2","col_main_bg","col_arrangebg","col_tracklistbg","col_mixerbg",
@@ -3749,6 +4052,8 @@ local function build_chameleon_palette(map)
   out.hover=cmix(accent,textcol,dark and .15 or .10)
 
   out.warn=fit_accent_to_bg(C_DEFAULT.warn,bg,text_is_light)
+  local lock=fit_accent_to_bg(C_DEFAULT.lock,bg,text_is_light)
+  out.lock=lock;out.lock2=cmix(lock,textcol,dark and .22 or .16)
   -- Some BLT hosts have a red role; Variant Forge uses correct/correct2 instead.
   if C_DEFAULT.red then out.red=fit_accent_to_bg(C_DEFAULT.red,bg,text_is_light) end
   return out
@@ -4024,21 +4329,24 @@ function UI.small_button(id,text,x,y,w,h,fn,hint,enabled,strong_edge,pulse)
     line(x-4,y-3,x+w+4,y-3,C.focus2,0.10+0.34*pa)
     line(x-4,y+h+3,x+w+4,y+h+3,C.focus,0.07+0.25*pa)
   end
-  local danger=id=='undo_gen' and enabled
+  local lock_state=id=='target_lock' and A.target_lock~=nil and enabled
   gradient(x,y,w,h,C.panel2,C.panel,0.34+0.16*a+0.055*pa,0.88)
-  if danger then gradient(x,y,w,h,C.correct,C.field,.028+.026*a,.006,true)
+  if lock_state then
+    gradient(x,y,w,h,C.lock,C.field,.16+.08*a+.035*pa,.015,true)
+    rect(x-2,y-2,w+4,h+4,C.lock,.030+.025*a)
   elseif pa>0.001 then gradient(x,y,w,h,C.accent3,C.field,0.05+0.075*pa,0.01,true) end
-  local edge_main=danger and C.correct2 or C.accent2;local edge_soft=danger and C.correct or C.edge2
-  gradient(x,y,w,1,edge_main,edge_main,0.16+0.50*a+0.25*pa,0.02)
-  line(x,y+h,x+w,y+h,danger and C.correct or C.edge,0.46+0.10*pa)
-  if a>0.01 or pa>0.01 or danger then rect(x,y,2,h,edge_main,danger and (.45+.20*a) or 0.65*max(a,.62*pa)) end
+  local edge_main=lock_state and C.lock2 or C.accent2;local edge_soft=lock_state and C.lock or C.edge2
+  gradient(x,y,w,1,edge_main,edge_main,lock_state and (.58+.24*a) or (0.16+0.50*a+0.25*pa),0.02)
+  line(x,y+h,x+w,y+h,lock_state and C.lock or C.edge,lock_state and (.58+.16*a) or (0.46+0.10*pa))
+  if a>0.01 or pa>0.01 or lock_state then rect(x,y,2,h,edge_main,lock_state and (.64+.18*a) or 0.65*max(a,.62*pa)) end
   local edge_alpha=(strong_edge and 0.58 or 0.28)+(strong_edge and 0.26 or 0.35)*a+0.28*pa
+  if lock_state then edge_alpha=max(edge_alpha,.72) end
   finish_corners(x,y,w,h,6,false,strong_edge and edge_main or edge_soft,edge_alpha)
   if strong_edge then
-    line(x+5,y,x+w-8,y,edge_main,0.34+0.26*a+0.26*pa)
-    line(x,y+4,x,y+h-6,edge_main,0.24+0.24*a+0.22*pa)
+    line(x+5,y,x+w-8,y,edge_main,lock_state and (.72+.16*a) or (0.34+0.26*a+0.26*pa))
+    line(x,y+4,x,y+h-6,edge_main,lock_state and (.58+.16*a) or (0.24+0.24*a+0.22*pa))
   end
-  local text_color=enabled and ((hovered or pulse) and C.text or C.muted) or C.faint
+  local text_color=not enabled and C.faint or (lock_state and C.lock2 or ((hovered or pulse) and C.text or C.muted))
   label(text,x,y+2,13,text_color,1,w,h-3,5,true)
   register(id,x,y,w,h,fn,hint,enabled)
 end
@@ -4091,7 +4399,7 @@ function UI.wheel_hook_poll(return_event)
  delta=tonumber(delta) or 0;if delta>32767 then delta=delta-65536 end;if delta==0 then return nil end
  local sx0,sy0=R.GetMousePosition();local okc,cx,cy=pcall(R.JS_Window_ScreenToClient,hwnd,sx0,sy0)
  if not okc or not finite(cx) or not finite(cy) then return nil end
- return {wheel=delta,x=(cx-ox)/scale,y=(cy-oy)/scale,shift=((tonumber(keys) or 0)&4)~=0}
+ local mods=tonumber(keys) or 0;return {wheel=delta,x=(cx-ox)/scale,y=(cy-oy)/scale,shift=(mods&4)~=0,ctrl=(mods&8)~=0}
 end
 
 function UI.apply_custom_window_style(target_w,target_h)
@@ -4201,7 +4509,6 @@ function UI.update_window_resize()
   BLT.position(hwnd,math.floor(l+.5),math.floor(t+.5),math.max(Chrome.min_w,math.floor(r-l+.5)),math.max(Chrome.min_h,math.floor(b-t+.5)),"","")
 end
 
-local VARIANT_TOOLTIPS={close="閉じる",reset="ウィンドウサイズ初期化",chameleon="カメレオンモード（配色をテーマへ擬態）"}
 
 function UI.clear_chrome_tooltip() BLT.clearTooltip() end
 
@@ -4228,7 +4535,7 @@ local FEATURE_COLUMNS={
  {key='source',label='SOURCE',sub='素材',lockable=false}
 }
 local VOICE_MAX=128
-local ITEM_DEFAULT={voice_limit=0,pitch_global=false,pitch_curve=false,vibrato=false,tremolo=false,timing=false,volume=false,pan=false,eq_texture=false,eq_tone=false,source=false}
+local ITEM_DEFAULT={voice_limit=0,source_mode=1,pitch_global=false,pitch_curve=false,vibrato=false,tremolo=false,timing=false,volume=false,pan=false,eq_texture=false,eq_tone=false,source=false}
 local WAVE_X,WAVE_Y,WAVE_W,WAVE_H=20,538,1140,168
 local MATRIX_X,MATRIX_Y,MATRIX_W,MATRIX_H=20,716,1140,286
 local MATRIX_NAME_W=352
@@ -4283,6 +4590,10 @@ function UI.ensure_apply_rows(list)
  for _,v in ipairs(list or {}) do
   present[v.guid]=true;A.item_by_guid[v.guid]=v;A.item_state_serial=A.item_state_serial+1;A.item_state_used[v.guid]=A.item_state_serial
   if not A.apply.items[v.guid] then A.apply.items[v.guid]=tcopy(ITEM_DEFAULT);A.source_auto[v.guid]=false elseif A.source_auto[v.guid]==nil then A.source_auto[v.guid]=false end
+  if v.is_midi then
+   local row=A.apply.items[v.guid];row.voice_limit=0;A.source_auto[v.guid]=false
+   for _,key in ipairs(Core.FEATURES) do if not Core.MIDI_FEATURES[key] then row[key]=false end end
+  end
  end
  local state_count=0;for _ in pairs(A.apply.items) do state_count=state_count+1 end
  while state_count>ITEM_STATE_LIMIT do
@@ -4323,11 +4634,15 @@ function UI.track_candidates_for(v)
  if not v or not v.track then return {} end
  local key=tostring(v.track);local pool=A.track_candidate_pools[key]
  if not pool then pool=Core.collect_track_pool(A.project,v.track);A.track_candidate_pools[key]=pool end
- local out={}
- for _,cand in ipairs(pool) do if cand.item~=v.item then out[#out+1]=cand end end
+ local out={};local boundary=(v.pos or 0)+1e-9
+ for _,cand in ipairs(pool) do
+  local finish=(cand.pos or 0)+max(0,cand.len or 0)
+  if cand.item~=v.item and finish<=boundary then out[#out+1]=cand end
+ end
  return out
 end
 function UI.source_status_from_cache(v)
+ v.source_same_count=0;v.source_track_count=0
  local eligible,reason
  if v._source_checked then eligible,reason=v._source_eligible,v._source_eligibility_reason else eligible,reason=UI.prepare_source_info(v) end
  v.source_origin=nil
@@ -4337,12 +4652,30 @@ function UI.source_status_from_cache(v)
  if cached.error then v.source_ready=true;v.source_available=false;v.source_reason=cached.error;v.source_detected=0;v.source_candidate_count=0;v.variants=nil;v.source_context=nil;v.texture_preview=nil;UI.sync_source_checkbox(v);return end
  local regions=cached.regions or {}
  v.texture_preview=cached.preview;v.texture_preview_max=cached.preview_max;v.texture_source_len=cached.source_len
- v.track_candidates=#regions==1 and UI.track_candidates_for(v) or nil
- local variants,why,ctx=Core.source_variants(v,cached,S.source_timing_mode,v.track_candidates,A.track_anchor_cache);v.source_context=ctx
- v.source_ready=true;v.source_detected=#regions;v.source_candidate_count=v.variants and #v.variants or 0
- v.source_available=variants~=nil and #variants>1;v.source_reason=why
- if #regions==1 and #(v.track_candidates or {})>0 then v.source_origin='track' else v.source_origin='source' end
+ v.track_candidates=UI.track_candidates_for(v)
+ local row=A.apply.items[v.guid] or ITEM_DEFAULT;local mode=row.source_mode==2 and 2 or 1
+ local variants,why,ctx,same_count,track_count=Core.source_variants(v,cached,S.source_timing_mode,v.track_candidates,A.track_anchor_cache,mode)
+ if mode==1 and same_count<=1 and track_count>1 then
+  mode=2;row.source_mode=2;variants,why,ctx,same_count,track_count=Core.source_variants(v,cached,S.source_timing_mode,v.track_candidates,A.track_anchor_cache,mode)
+ elseif mode==2 and track_count<=1 and same_count>1 then
+  mode=1;row.source_mode=1;variants,why,ctx,same_count,track_count=Core.source_variants(v,cached,S.source_timing_mode,v.track_candidates,A.track_anchor_cache,mode)
+ end
+ v.source_context=ctx;v.source_mode=mode;v.source_same_count=same_count or 0;v.source_track_count=track_count or 0
+ v.source_ready=true;v.source_detected=#regions
+ -- The badge uses the same self-inclusive rule regardless of source mode.
+ v.source_candidate_count=mode==2 and (v.source_track_count or 1) or (v.source_same_count or 1)
+ v.source_available=variants~=nil and v.source_candidate_count>1;v.source_reason=why;v.source_origin=mode==2 and 'track' or 'source'
  UI.sync_source_checkbox(v)
+end
+function UI.toggle_source_mode(guid)
+ local v=A.item_by_guid and A.item_by_guid[guid];local row=A.apply.items[guid]
+ if not v or not row or not v.source_ready then return end
+ local same,track=v.source_same_count or 0,v.source_track_count or 0
+ if same<=1 or track<=1 then return end
+ row.source_mode=row.source_mode==2 and 1 or 2;A.source_auto[guid]=false;UI.source_status_from_cache(v);A.status='';A.warning=false
+end
+function UI.source_mode_switchable(v)
+ return v and v.source_ready and (v.source_same_count or 0)>1 and (v.source_track_count or 0)>1
 end
 function UI.stop_source_job()
  if A.source_job then
@@ -4410,6 +4743,7 @@ function UI.rebuild_source_queue()
  for _,v in ipairs(A.items or {}) do UI.source_status_from_cache(v) end
 end
 function UI.source_queue_start_next()
+ if not Media.ready() then return end
  if A.source_job or A.job or A.source_queue_done then return end
  while A.source_queue_i<=#A.source_queue do
   local v=A.source_queue[A.source_queue_i];A.source_queue_i=A.source_queue_i+1
@@ -4419,26 +4753,127 @@ function UI.source_queue_start_next()
    else UI.source_cache_set(v.source_key,{error=tostring(j):match('^[^\\n]+') or tostring(j)}) end
   end
  end
- -- Finalize the queue exactly once. Previously this block ran on every defer
- -- while idle, repeatedly rebuilding source candidates and dominating idle load.
+ -- Finalize the queue once; repeated source-candidate rebuilds are expensive.
  A.source_queue_done=true
  for _,v in ipairs(A.items or {}) do UI.source_status_from_cache(v) end
  A.source_progress=0;A.revision=R.GetProjectStateChangeCount(A.project)
 end
+function UI.target_lock_capture(lock)
+ lock=lock or A.target_lock;if not lock or R.EnumProjects(-1,'')~=lock.project then return false end
+ local fingerprints,guids={},{}
+ for i,item in ipairs(lock.refs or {}) do
+  local fp=Core.target_fingerprint(lock.project,item);if not fp then return false end
+  local ok,guid=R.GetSetMediaItemInfo_String(item,'GUID','',false);if not ok or not guid or guid=='' then return false end
+  fingerprints[item]=fp;guids[i]=guid
+ end
+ if #lock.refs==0 then return false end
+ lock.fingerprints=fingerprints;lock.guids=guids;lock.revision=R.GetProjectStateChangeCount(lock.project);return true
+end
+function UI.target_lock_generation_was_undone(project,lock)
+ local rec=A.last_created
+ if not rec or rec.project~=project or not rec.undo_desc or type(R.Undo_CanRedo2)~='function' or R.Undo_CanRedo2(project)~=rec.undo_desc then return false end
+ local source_refs=rec.source_refs or {};local locked=lock.refs or {}
+ if #source_refs==0 or #source_refs~=#locked then return false end
+ local refs={}
+ for _,item in ipairs(source_refs) do refs[item]=(refs[item] or 0)+1 end
+ for _,item in ipairs(locked) do
+  local n=refs[item];if not n then return false end
+  if n==1 then refs[item]=nil else refs[item]=n-1 end
+ end
+ if next(refs) then return false end
+ for _,entry in ipairs(rec.items or {}) do if entry.item and R.ValidatePtr2(project,entry.item,'MediaItem*') then return false end end
+ return true
+end
+function UI.target_lock_restore_refs(project,lock)
+ local guids=lock and lock.guids or nil;if not guids or #guids==0 then return false end
+ local refs={}
+ for i,guid in ipairs(guids) do
+  local item=Core.find_item_by_guid(project,guid);if not item then return false end
+  refs[i]=item
+ end
+ lock.refs=refs
+ return UI.target_lock_capture(lock)
+end
+function UI.target_lock_valid(project)
+ local lock=A.target_lock;if not lock then return true end
+ project=project or R.EnumProjects(-1,'')
+ if project~=lock.project then return false end
+ local revision=R.GetProjectStateChangeCount(project)
+ if lock.revision==revision then return true end
+ for _,item in ipairs(lock.refs or {}) do
+  local fp=Core.target_fingerprint(project,item)
+  if not fp or fp~=(lock.fingerprints or {})[item] then
+   if UI.target_lock_generation_was_undone(project,lock) and UI.target_lock_restore_refs(project,lock) then return true end
+   return false
+  end
+ end
+ lock.revision=revision;return true
+end
+function UI.target_lock_release(message,refresh_after)
+ if not A.target_lock then return false end
+ A.target_lock=nil;A.target_lock_poll=0
+ local restore=A.source_execute_pending and A.source_execute_pending.restore_selection
+ if A.source_job then UI.stop_source_job() end
+ A.source_execute_pending=nil;A.source_queue={};A.source_queue_i=1;A.source_queue_done=true
+ if restore then UI.restore_item_selection(A.project,restore,false) end
+ if refresh_after then UI.refresh() end
+ if message then UI.notice(message,false) end
+ return true
+end
+function UI.target_lock_rebase()
+ if not A.target_lock then return true end
+ if UI.target_lock_capture(A.target_lock) or UI.target_lock_restore_refs(A.target_lock.project,A.target_lock) then return true end
+ UI.target_lock_release('ロック対象が変更または削除されたため、対象ロックを解除しました。',false);return false
+end
+function UI.toggle_target_lock()
+ if A.job or A.source_job or A.source_execute_pending or not Media.ready() then return end
+ if A.target_lock then UI.target_lock_release('対象ロックを解除しました。',true);return end
+ UI.refresh()
+ if #A.items==0 then UI.notice('ロックするアイテムを選択してください。',true);return end
+ local refs={};for _,v in ipairs(A.items) do refs[#refs+1]=v.item end
+ local lock={project=A.project,refs=refs}
+ if not UI.target_lock_capture(lock) then UI.notice('ロックするアイテムを選択してください。',true);return end
+ A.target_lock=lock;A.target_lock_poll=0;UI.refresh();UI.notice('対象をロックしました。',false)
+end
+function UI.poll_target_lock(now)
+ local lock=A.target_lock;if not lock or A.job or now<(A.target_lock_poll or 0) then return end
+ A.target_lock_poll=now+.20
+ if not UI.target_lock_valid(R.EnumProjects(-1,'')) then
+  UI.target_lock_release('ロック対象が変更または削除されたため、対象ロックを解除しました。',true)
+ end
+end
+function UI.activation_press(down)
+ if not down or type(gfx.screentoclient)~='function' or type(R.GetMousePosition)~='function' then return false end
+ local sx0,sy0=R.GetMousePosition();local px,py=gfx.screentoclient(sx0,sy0)
+ return px and py and px>=0 and px<gfx.w and py>=0 and py<gfx.h
+end
+
 function UI.refresh()
+ if not Media.ready() then return end
  local project=R.EnumProjects(-1,'')
  local project_changed=project~=A.project
+ local lock_released=false
  if project_changed then
+  if A.target_lock then A.target_lock=nil;A.target_lock_poll=0 end
   UI.stop_source_job();A.source_execute_pending=nil;Core.cleanup_stale_temp_items(project)
   A.source_cache={};A.track_anchor_cache={};A.source_cache_serial=0
   A.apply.items={};A.source_auto={};A.item_state_used={};A.item_state_serial=0
-  A.matrix_selected={};A.last_created=nil;motion={};voice_flash={};field_flash={}
+  A.matrix_selected={};A.last_created=nil;A.wave_region_key=nil;A.wave_region_index=nil;A.wave_region_selection={};A.source_wave_drag=nil;A.source_wave_scroll_drag=nil;A.source_wave_view={key=nil,zoom=1,start=0};motion={};voice_flash={};field_flash={}
   collectgarbage('collect')
  end
- A.project=project;local list,err=Core.selection(A.project);A.items=list or {};A.selection_error=err
- UI.ensure_apply_rows(A.items);A.selection_signature=Core.selection_signature(A.project);A.track_signature=Core.track_topology_signature(A.items)
+ A.project=project
+ local list,err
+ if A.target_lock then
+  if UI.target_lock_valid(project) then
+   list,err=Core.items_from_refs(project,A.target_lock.refs)
+   if not list then A.target_lock=nil;A.target_lock_poll=0;lock_released=true;list,err=Core.selection(project) end
+  else A.target_lock=nil;A.target_lock_poll=0;lock_released=true;list,err=Core.selection(project) end
+ else list,err=Core.selection(project) end
+ A.items=list or {};A.selection_error=err
+ UI.ensure_apply_rows(A.items);A.selection_signature=Core.selection_signature(A.project)
  UI.rebuild_source_queue();UI.prune_source_cache();prune_used_cache(A.track_anchor_cache,TRACK_ANCHOR_LIMIT);A.revision=R.GetProjectStateChangeCount(A.project)
  UI.source_queue_start_next()
+ if lock_released then UI.notice('ロック対象が変更または削除されたため、対象ロックを解除しました。',false) end
 end
 function UI.changed(key)
  UI.persist_later();A.status='';A.warning=false
@@ -4453,6 +4888,7 @@ function UI.assignment_changed()
  UI.rebuild_source_queue();UI.source_queue_start_next()
 end
 function UI.feature_available(v,key)
+ if v and v.is_midi then return Core.MIDI_FEATURES[key]==true end
  if key~='source' then return true end
  if not v._source_checked then UI.prepare_source_info(v) end
  return v._source_eligible==true and (not v.source_ready or v.source_available==true)
@@ -4491,17 +4927,19 @@ function UI.set_feature_all(key,value)
   if UI.feature_available(v,key) then
    A.apply.items[v.guid][key]=value
    if key=='source' then A.source_auto[v.guid]=false end
-  elseif key=='source' then A.apply.items[v.guid][key]=false end
+  else A.apply.items[v.guid][key]=false end
  end
  UI.assignment_changed()
 end
 function UI.set_all_features(value)
- if value then for _,c in ipairs(FEATURE_COLUMNS) do UI.flash_feature(c.key) end end
+ if value then
+  for _,c in ipairs(FEATURE_COLUMNS) do local _,_,available=UI.all_feature_state(c.key);if available>0 then UI.flash_feature(c.key) end end
+ end
  for _,v in ipairs(A.items) do
   local row=A.apply.items[v.guid]
   for _,c in ipairs(FEATURE_COLUMNS) do
    if UI.feature_available(v,c.key) then row[c.key]=value;if c.key=='source' then A.source_auto[v.guid]=false end
-   elseif c.key=='source' then row[c.key]=false end
+   else row[c.key]=false end
   end
  end
  UI.assignment_changed()
@@ -4519,6 +4957,7 @@ function UI.toggle_item_feature(guid,key)
 end
 function UI.select_matrix_item(idx,guid)
  if not idx or not guid then return end
+ if A.wave_guid~=guid then A.wave_region_key=nil;A.wave_region_index=nil;A.wave_region_selection={};A.source_wave_drag=nil;A.source_wave_scroll_drag=nil;A.source_wave_view={key=nil,zoom=1,start=0} end
  A.wave_guid=guid
  local shift=(click_mods&8)~=0;local ctrl=(click_mods&4)~=0 or (click_mods&32)~=0
  if shift and A.matrix_anchor and A.items[A.matrix_anchor] then
@@ -4537,10 +4976,10 @@ function UI.set_voice_limit(guid,value)
  local selected=A.matrix_selected and A.matrix_selected[guid]
  if selected then
   for _,v in ipairs(A.items) do
-   if A.matrix_selected[v.guid] and A.apply.items[v.guid] then A.apply.items[v.guid].voice_limit=value end
+   if not v.is_midi and A.matrix_selected[v.guid] and A.apply.items[v.guid] then A.apply.items[v.guid].voice_limit=value end
   end
  elseif A.apply.items[guid] then
-  A.apply.items[guid].voice_limit=value
+  local v=A.item_by_guid and A.item_by_guid[guid];if not (v and v.is_midi) then A.apply.items[guid].voice_limit=value end
  end
  UI.assignment_changed()
 end
@@ -4551,9 +4990,10 @@ function UI.voice_step_value(value,dir)
  return value-1
 end
 function UI.adjust_all_voice_limits(dir)
- for _,v in ipairs(A.items or {}) do local row=A.apply.items[v.guid];if row then row.voice_limit=UI.voice_step_value(row.voice_limit,dir) end end
+ for _,v in ipairs(A.items or {}) do local row=A.apply.items[v.guid];if row and not v.is_midi then row.voice_limit=UI.voice_step_value(row.voice_limit,dir) end end
  UI.assignment_changed()
 end
+function UI.audio_item_count() local n=0;for _,v in ipairs(A.items or {}) do if not v.is_midi then n=n+1 end end;return n end
 
 function UI.nearest_setting_value(key,n)
  local range=Core.ranges[key]
@@ -4928,26 +5368,38 @@ function UI.panel(title,caption,x,y,w,h)
 end
 function UI.checkbox(id,state,x,y,fn,hint,enabled,theme,mixed)
  enabled=enabled~=false and not A.job;local sz=16;local hovered=inside(x,y,sz,sz) and enabled
- local sync=theme=='sync';local base=sync and C.lock or C.accent2;local fill=sync and C.lock or C.accent
+ local sync=theme=='sync';local disabled=not enabled
+ local base=disabled and C.faint or (sync and C.lock or C.accent2)
+ local fill=disabled and C.faint or (sync and C.lock or C.accent)
  local a=animate('check_'..id,state and 1 or (hovered and .22 or 0))
- gradient(x,y,sz,sz,C.field,C.panel2,.94,.72);line(x,y+sz,x+sz,y+sz,base,.28+.35*a);finish_corners(x,y,sz,sz,4,false,state and base or C.edge2,.30+.42*a)
+ if disabled then
+  gradient(x,y,sz,sz,C.panel,C.field,.72,.58)
+  line(x,y+sz,x+sz,y+sz,C.faint,.18);finish_corners(x,y,sz,sz,4,false,C.faint,.22)
+ else
+  gradient(x,y,sz,sz,C.field,C.panel2,.94,.72);line(x,y+sz,x+sz,y+sz,base,.28+.35*a);finish_corners(x,y,sz,sz,4,false,state and base or C.edge2,.30+.42*a)
+ end
  if sync then
-  local c=state and C.lock2 or C.muted;local aa=state and .96 or .48
+  local c=disabled and C.faint or (state and C.lock2 or C.muted);local aa=disabled and .30 or (state and .96 or .48)
   line(x+3.4,y+5.0,x+6.8,y+5.0,c,aa);line(x+3.4,y+5.0,x+3.4,y+11.0,c,aa);line(x+3.4,y+11.0,x+6.8,y+11.0,c,aa)
   line(x+9.2,y+5.0,x+12.6,y+5.0,c,aa);line(x+12.6,y+5.0,x+12.6,y+11.0,c,aa);line(x+9.2,y+11.0,x+12.6,y+11.0,c,aa)
   if state then
-   line(x+6.2,y+8.0,x+9.8,y+8.0,C.lock2,.98)
-   line(x+7.1,y+6.6,x+8.9,y+9.4,C.lock,.72);line(x+7.1,y+9.4,x+8.9,y+6.6,C.lock,.72)
-  elseif mixed then line(x+6.2,y+8.0,x+9.8,y+8.0,C.lock,.58) end
+   line(x+6.2,y+8.0,x+9.8,y+8.0,disabled and C.faint or C.lock2,disabled and .34 or .98)
+   line(x+7.1,y+6.6,x+8.9,y+9.4,disabled and C.faint or C.lock,disabled and .26 or .72);line(x+7.1,y+9.4,x+8.9,y+6.6,disabled and C.faint or C.lock,disabled and .26 or .72)
+  elseif mixed then line(x+6.2,y+8.0,x+9.8,y+8.0,disabled and C.faint or C.lock,disabled and .28 or .58) end
  else
   if state then
-   rect(x+3,y+3,sz-6,sz-6,fill,.32);local cy=y+sz*.54
-   line(x+sz*.25,cy,x+sz*.43,y+sz*.72,C.focus2,.98);line(x+sz*.43,y+sz*.72,x+sz*.76,y+sz*.28,C.focus2,.98)
-  elseif mixed then line(x+4,y+sz*.5,x+sz-4,y+sz*.5,base,.90) end
+   rect(x+3,y+3,sz-6,sz-6,fill,disabled and .18 or .32);local cy=y+sz*.54
+   local check=disabled and C.faint or C.focus2;local ca=disabled and .42 or .98
+   line(x+sz*.25,cy,x+sz*.43,y+sz*.72,check,ca);line(x+sz*.43,y+sz*.72,x+sz*.76,y+sz*.28,check,ca)
+  elseif mixed then line(x+4,y+sz*.5,x+sz-4,y+sz*.5,base,disabled and .28 or .90) end
  end
  register(id,x,y,sz,sz,fn,hint,enabled)
 end
 function UI.voice_control(v,x,y,w)
+ if v.is_midi then
+  local h=22;gradient(x,y,w,h,C.field,C.panel,.72,.72);finish_corners(x,y,w,h,5,false,C.edge,.20);label('—',x,y,13,C.faint,3,w,h,5,true)
+  register('voice_'..v.guid,x,y,w,h,function()end,'MIDIでは疑似発音数を使用できません。',false);return
+ end
  local row=A.apply.items[v.guid] or {};local value=max(0,floor(tonumber(row.voice_limit) or 0))
  local h=22;local arrowW=18;local valueW=w-arrowW
  local active=edit and edit.kind=='voice' and edit.guid==v.guid
@@ -4987,8 +5439,9 @@ function UI.voice_global_control(x,y,w)
  if up_hover then rect(ax,y,arrowW,half,C.accent,.16) end;if dn_hover then rect(ax,y+half,arrowW,half,C.accent,.16) end
  color(up_hover and C.focus2 or C.muted,up_hover and .98 or .80);gfx.triangle(sx(ax+5),sy(y+7),sx(ax+arrowW-5),sy(y+7),sx(ax+arrowW/2),sy(y+3))
  color(dn_hover and C.focus2 or C.muted,dn_hover and .98 or .80);gfx.triangle(sx(ax+5),sy(y+half+4),sx(ax+arrowW-5),sy(y+half+4),sx(ax+arrowW/2),sy(y+h-3))
- register('vglobal_up',ax,y,arrowW,half,function() UI.adjust_all_voice_limits(1) end,'全アイテムの疑似発音数を相対的に1段階増やす',not A.job and #A.items>0)
- register('vglobal_down',ax,y+half,arrowW,half,function() UI.adjust_all_voice_limits(-1) end,'全アイテムの疑似発音数を相対的に1段階減らす',not A.job and #A.items>0)
+ local voice_enabled=not A.job and UI.audio_item_count()>0
+ register('vglobal_up',ax,y,arrowW,half,function() UI.adjust_all_voice_limits(1) end,'全アイテムの疑似発音数を相対的に1段階増やす',voice_enabled)
+ register('vglobal_down',ax,y+half,arrowW,half,function() UI.adjust_all_voice_limits(-1) end,'全アイテムの疑似発音数を相対的に1段階減らす',voice_enabled)
 end
 function UI.source_requested(apply,v)
  return ((apply.items[v.guid] or {}).source==true)
@@ -5004,18 +5457,19 @@ function UI.restore_item_selection(project,items,do_refresh)
  for _,item in ipairs(items or {}) do if R.ValidatePtr2(project,item,'MediaItem*') then R.SetMediaItemSelected(item,true) end end
  R.UpdateArrange();if do_refresh then UI.refresh() end
 end
-function UI.begin_fresh_source_execute()
- local requested={};local count=0
+function UI.begin_fresh_source_execute(restore_selection)
+ local requested={};local count,scan_count=0,0
  UI.stop_source_job()
  for _,v in ipairs(A.items or {}) do
   if UI.source_requested(A.apply,v) then
    UI.prepare_source_info(v)
-   if v.source_key then A.source_cache[v.source_key]=nil end
+   local cached=v.source_key and A.source_cache[v.source_key] or nil
+   if v.source_key and not (cached and cached.manual_regions) then A.source_cache[v.source_key]=nil;scan_count=scan_count+1 end
    requested[v.guid]=true;count=count+1
   end
  end
- if count==0 then return false end
- A.source_execute_pending={project=A.project,selection_signature=A.selection_signature,requested=requested}
+ if count==0 or scan_count==0 then return false end
+ A.source_execute_pending={project=A.project,selection_signature=A.selection_signature,target_locked=A.target_lock~=nil,requested=requested,restore_selection=restore_selection}
  UI.rebuild_source_queue();UI.source_queue_start_next()
  UI.notice('使用する素材を完全再解析しています。完了後に自動で生成します。')
  return true
@@ -5030,6 +5484,7 @@ function UI.cancel_job()
  UI.notice('生成を中止しました。');UI.refresh()
 end
 function UI.step_generation()
+ if not Media.ready() then return end
  local j=A.job;if not j or j.running then return end
  j.running=true
  local ok,err=xpcall(function()
@@ -5075,8 +5530,9 @@ function UI.finish_generation(j)
   return true
  end,j.restore_selection)
  if not count then UI.queue_bake_deletes(cleanup_failed,j.snapshot.project);A.job=nil;A.progress=0;UI.refresh();UI.notice(j.cancelled and rollback_ok and '生成を中止し、今回のコピーを削除しました。' or created_or_err,not (j.cancelled and rollback_ok));return nil end
- A.job=nil;A.progress=0;local refs={};for _,v in ipairs(j.snapshot.items) do refs[#refs+1]=v.item end;A.last_created={project=j.snapshot.project,items=created_or_err or {},count=count,seed=j.settings.seed,source_refs=refs,free_before=free_before or {},original_before=original_before or {}}
- UI.refresh()
+ A.job=nil;A.progress=0;local refs={};for _,v in ipairs(j.snapshot.items) do refs[#refs+1]=v.item end;A.last_created={project=j.snapshot.project,items=created_or_err or {},count=count,seed=j.settings.seed,source_refs=refs,free_before=free_before or {},original_before=original_before or {},undo_desc='BLT Variant Forge: '..#groups..' variations'}
+ UI.target_lock_rebase()
+ UI.restore_item_selection(j.snapshot.project,A.target_lock and (j.restore_selection or {}) or refs,false);UI.refresh()
  local src_on=0;for _,v in ipairs(j.snapshot.items) do if UI.source_requested(j.apply,v) then src_on=src_on+1 end end
  UI.notice(string.format('%dバリエーション / %dアイテムを作成 · SEED %d%s',#groups,count,j.settings.seed,src_on>0 and string.format(' · 素材 %d',src_on) or ''),false)
  return true
@@ -5106,6 +5562,7 @@ function UI.prepare_texture_waves(list,app)
  return true
 end
 function UI.execute(source_refresh_done)
+ if not A.job and not A.busy and not A.batch and not Media.ready() then return end
  if A.job then UI.cancel_job();return end;if not UI.commit_edit() then return end
  if A.source_execute_pending and not source_refresh_done then
   local restore=A.source_execute_pending.restore_selection
@@ -5115,13 +5572,16 @@ function UI.execute(source_refresh_done)
  end
  local ok,err=Core.validate(S);if not ok then UI.notice(err,true);return end
  UI.refresh();if #A.items==0 then UI.notice(A.selection_error,true);return end;if #A.items*S.count>2000 then UI.notice('合計2000アイテム以下にしてください。',true);return end
- if not source_refresh_done and UI.begin_fresh_source_execute() then return end
+ local source_selection={};for _,v in ipairs(A.items) do source_selection[#source_selection+1]=v.item end
+ local visible_selection=source_selection
+ if A.target_lock then visible_selection={};for i=0,R.CountSelectedMediaItems(A.project)-1 do visible_selection[#visible_selection+1]=R.GetSelectedMediaItem(A.project,i) end end
+ if not source_refresh_done and UI.begin_fresh_source_execute(A.target_lock and nil or source_selection) then return end
  local pending=UI.source_preflight_message();if pending then UI.notice(pending,true);return end
  if A.source_job then UI.notice('素材バリエーションの事前解析中です。',true);return end
  if not S.seed_lock then S.seed=Core.random_seed();UI.persist_later() end
  local worked,why=xpcall(function()
   local app=UI.frozen_apply();local tex_ok,tex_err=UI.prepare_texture_waves(A.items,app);if not tex_ok then error(tex_err,0) end
-  local j={snapshot=Core.snapshot(A.project,A.items),settings=copy(S),apply=app}
+  local j={snapshot=Core.snapshot(A.project,A.items),settings=copy(S),apply=app,restore_selection=visible_selection}
   A.job=j;A.progress=0
  end,debug.traceback)
  if not worked then A.job=nil;UI.notice(why,true);R.ShowConsoleMsg(BLT.publicError(why)..'\n') end
@@ -5198,45 +5658,22 @@ function A.bake_last_texture_fx()
   UI.queue_bake_deletes(additions,project,true)
   R.ShowConsoleMsg('BLT Variant Forge:\n'..BLT.publicError(err)..'\n');UI.notice('FX焼込に失敗しました。Undoで焼き込み前へ戻してください。生成途中のWAVは参照が外れた後に自動回収します。',true);return
  end
- UI.notice(string.format('TEXTURE FXを%dアイテムへ焼き込みました。生成取消は引き続き使用できます。',#targets))
+ UI.notice(string.format('TEXTURE FXを%dアイテムへ焼き込みました。再生成は引き続き使用できます。',#targets))
 end
-function UI.remove_last_generation(silent)
- if A.job then return false end
- local rec=A.last_created;if not rec or rec.project~=R.EnumProjects(-1,'') then if not silent then UI.notice('このセッションで取り消せる生成結果がありません。',true) end;return false end
- local valid={};for _,v in ipairs(rec.items or {}) do if v.item and R.ValidatePtr2(rec.project,v.item,'MediaItem*') then valid[#valid+1]=v end end
- local project=rec.project;local cleanup_files={}
- for _,v in ipairs(rec.items or {}) do for _,fn in ipairs(v.bake_files or {}) do cleanup_files[#cleanup_files+1]=fn end end
- if #valid==0 then
-  local failed_files,retained_files=Core.cleanup_bake_files(cleanup_files,project)
-  UI.queue_bake_deletes(failed_files,project)
-  A.last_created=nil
-  if not silent then UI.notice(#retained_files>0 and '生成結果は削除済みです。ほかのテイクが使用中の焼き込みWAVは残しました。' or '直前の生成結果はすでに存在しません。',false) end
-  return false
- end
- R.Undo_BeginBlock2(project);R.PreventUIRefresh(1);local ok=true
- for i=#valid,1,-1 do local v=valid[i];local track=R.GetMediaItemTrack(v.item) or v.track;local called,result=pcall(R.DeleteTrackMediaItem,track,v.item)
-  if not called or not result then ok=false end
- end
- local original_conflicts=0;local conflict_tracks={}
- for i=#(rec.original_before or {}),1,-1 do
-  local b=rec.original_before[i];local restored_item,conflict=Core.restore_original_item(project,b,true)
-  if not restored_item then ok=false end;if conflict then original_conflicts=original_conflicts+1;local track=b.item and R.GetMediaItemTrack(b.item);if track then conflict_tracks[track]=true end end
- end
- for track,mode in pairs(rec.free_before or {}) do
-  if not conflict_tracks[track] and R.ValidatePtr2(project,track,'MediaTrack*') and R.GetMediaTrackInfo_Value(track,'I_FREEMODE')==1 then
-   local called,result=pcall(R.SetMediaTrackInfo_Value,track,'I_FREEMODE',mode);if not called or not result then ok=false end
-  end
- end
- R.PreventUIRefresh(-1);if next(rec.free_before or {}) then R.UpdateTimeline() end;R.UpdateArrange();R.Undo_EndBlock2(project,'BLT Variant Forge: remove last generation',4)
- local failed_files,retained_files=Core.cleanup_bake_files(cleanup_files,project)
- UI.queue_bake_deletes(failed_files,project)
- if not ok then if not silent then UI.notice('一部の生成アイテムを削除できませんでした。Undoで確認してください。',true) end;return false end
- local removed=#valid;A.last_created=nil;UI.refresh();if not silent then
-  local extra=''
-  if original_conflicts>0 then extra=extra..string.format(' 生成後に編集された元アイテム%d件は、その編集を保持しました。',original_conflicts) end
-  if #retained_files>0 then extra=extra..string.format(' 使用中の焼き込みWAVは%d件残しました。',#retained_files) end
-  UI.notice(string.format('直前に生成した%dアイテムを取り消しました。%s',removed,extra))
- end;return true
+function UI.regeneration_ready()
+ if A.job or A.source_job or UI.last_created_count()<=0 then return false end
+ if A.target_lock and not UI.target_lock_valid(A.project) then return false end
+ local rec=A.last_created;if not rec or rec.project~=A.project then return false end
+ if type(R.Undo_CanUndo2)~='function' or type(R.Undo_DoUndo2)~='function' or not rec.undo_desc or R.Undo_CanUndo2(rec.project)~=rec.undo_desc then return false end
+ local refs=rec.source_refs or {};if #refs~=#A.items or #refs==0 then return false end
+ local current={};for _,v in ipairs(A.items or {}) do current[v.item]=true end
+ for _,item in ipairs(refs) do if not current[item] or not R.ValidatePtr2(rec.project,item,'MediaItem*') then return false end end
+ return true
+end
+function UI.primary_action()
+ if A.job then UI.cancel_job();return end
+ if A.target_lock and not UI.target_lock_valid(A.project) then UI.target_lock_release('ロック対象が変更または削除されたため、対象ロックを解除しました。',true);return end
+ if UI.regeneration_ready() then UI.regenerate() else UI.execute() end
 end
 function UI.regenerate()
  if A.job or A.source_job then return end
@@ -5244,22 +5681,38 @@ function UI.regenerate()
  local rec=A.last_created;local refs=rec and rec.source_refs or nil
  if not refs or #refs==0 then UI.notice('再生成元のアイテム情報がありません。生成し直してください。',true);return end
  for _,it in ipairs(refs) do if not R.ValidatePtr2(rec.project,it,'MediaItem*') then UI.notice('元アイテムが削除されているため再生成できません。現在の生成結果は残しました。',true);return end end
+ -- Undo-neutral regeneration is only safe when our own previous generation is
+ -- still the top undo entry.  Never consume somebody else's later project edit.
+ if type(R.Undo_CanUndo2)~='function' or type(R.Undo_DoUndo2)~='function' or not rec.undo_desc or R.Undo_CanUndo2(rec.project)~=rec.undo_desc then
+  UI.notice('再生成のUndoを統合できません。生成後に別のUndo操作があります。',true);return
+ end
  local user_selection={};for i=0,R.CountSelectedMediaItems(rec.project)-1 do user_selection[#user_selection+1]=R.GetSelectedMediaItem(rec.project,i) end
  local function restore_user_selection(do_refresh)
   R.SelectAllMediaItems(rec.project,false)
   for _,it in ipairs(user_selection) do if R.ValidatePtr2(rec.project,it,'MediaItem*') then R.SetMediaItemSelected(it,true) end end
   R.UpdateArrange();if do_refresh then UI.refresh() end
  end
- -- Re-select the original source items internally before deleting the generated
- -- batch. The user's visible selection is restored afterwards, so Regenerate is
- -- independent of selection without unexpectedly changing the edit context.
- R.SelectAllMediaItems(rec.project,false);for _,it in ipairs(refs) do R.SetMediaItemSelected(it,true) end;R.UpdateArrange();UI.refresh()
- if A.source_job then UI.stop_source_job();restore_user_selection(true);UI.notice('再生成元の素材情報を準備できませんでした。SOURCEを確認してから再実行してください。',true);return end
- local pending=UI.source_preflight_message();if pending then restore_user_selection(true);UI.notice(pending,true);return end
- if UI.remove_last_generation(true) then UI.execute() end
- if A.job then A.job.restore_selection=user_selection elseif A.source_execute_pending then A.source_execute_pending.restore_selection=user_selection else restore_user_selection(true) end
+ -- Remove the previous generation by executing its own undo.  The following new
+ -- generation clears the redo branch and creates one replacement undo entry, so
+ -- repeated regeneration does not grow the undo history.
+ A.last_created=nil
+ local undone=R.Undo_DoUndo2(rec.project)
+ if not undone or undone==0 then A.last_created=rec;UI.notice('再生成のUndoを統合できません。生成後に別のUndo操作があります。',true);return end
+ UI.target_lock_rebase()
+ if not A.target_lock then R.SelectAllMediaItems(rec.project,false);for _,it in ipairs(refs) do if R.ValidatePtr2(rec.project,it,'MediaItem*') then R.SetMediaItemSelected(it,true) end end;R.UpdateArrange() end
+ UI.refresh()
+ -- refresh() may legitimately start SOURCE analysis after undo.  Do not treat
+ -- that as a regeneration failure: execute() owns the SOURCE preflight, stops
+ -- any redundant scan, performs the required fresh scan, and resumes generation.
+ UI.execute()
+ if A.target_lock then
+  if not A.job and not A.source_execute_pending then restore_user_selection(true) end
+ else
+  if A.job then A.job.restore_selection=user_selection elseif A.source_execute_pending then A.source_execute_pending.restore_selection=user_selection else restore_user_selection(true) end
+ end
 end
 function UI.work_step()
+ if not Media.ready() then return end
  if A.job then UI.step_generation();return end
  Core.touch_temp_heartbeat(false)
  UI.retry_stale_temp_items(false)
@@ -5268,8 +5721,10 @@ function UI.work_step()
   if not A.source_queue_done then UI.source_queue_start_next() end
   if A.source_queue_done and A.source_execute_pending then
    local pending=A.source_execute_pending;A.source_execute_pending=nil
-   if R.EnumProjects(-1,'')~=pending.project or Core.selection_signature(pending.project)~=pending.selection_signature then
-    UI.restore_item_selection(pending.project,pending.restore_selection,true);UI.refresh();UI.notice('素材の再解析中に選択またはプロジェクトが変わったため、実行を中止しました。',true);return
+   local target_changed=pending.target_locked and (not A.target_lock or not UI.target_lock_valid(pending.project))
+    or (not pending.target_locked and Core.selection_signature(pending.project)~=pending.selection_signature)
+   if R.EnumProjects(-1,'')~=pending.project or target_changed then
+    UI.restore_item_selection(pending.project,pending.restore_selection,true);UI.refresh();UI.notice('素材の再解析中に対象またはプロジェクトが変わったため、実行を中止しました。',true);return
    end
    for guid in pairs(pending.requested or {}) do
     local v=A.item_by_guid[guid]
@@ -5390,6 +5845,7 @@ function A.texture_popup(message)
  if type(R.ShowMessageBox)=='function' then R.ShowMessageBox(message,'BLT Variant Forge · TEXTURE EQ',0) end
 end
 function A.capture_texture_bank_from_selection()
+ if not Media.ready() then return end
  if A.job then return end
  local project=R.EnumProjects(-1,'');local count=R.CountSelectedMediaItems(project)
  if count<1 then A.texture_popup('TEXTURE EQの参照にする音声アイテムを1～10個選択してください。');return end
@@ -5398,6 +5854,7 @@ function A.capture_texture_bank_from_selection()
  for i=0,count-1 do
   local item=R.GetSelectedMediaItem(project,i);local info,why=Core.item_info(project,item)
   if not info then A.texture_popup(string.format('%d番目の選択アイテムを解析できません。\n%s',i+1,tostring(why or '音声アイテムを選択してください。')));return end
+  if info.is_midi then A.texture_popup(string.format('%d番目の選択アイテムはMIDIです。\nTEXTURE EQ参照には音声アイテムを使用してください。',i+1));return end
   if (info.len or 0)>Core.TEXTURE_MAX_SECONDS+1e-9 then
    A.texture_popup(string.format('TEXTURE EQ参照には長すぎる素材があります。\n\n%s\n%.2f 秒\n\n1素材あたり最大 %d 秒です。',info.name or '素材',info.len or 0,Core.TEXTURE_MAX_SECONDS));return
   end
@@ -5509,6 +5966,7 @@ function UI.waveform_item()
  return (A.wave_guid and A.item_by_guid[A.wave_guid]) or (A.items and A.items[1]) or nil
 end
 function UI.source_wave_data(v)
+ if not Media.ready() then return end
  if not v then return nil,false end
  local key=v.source_key
  if key then
@@ -5532,85 +5990,330 @@ function UI.start_source_analysis(v)
  local row=A.apply.items[v.guid];if not row then return end
  A.wave_guid=v.guid;row.source=false;UI.toggle_item_feature(v.guid,'source')
 end
+function UI.source_regions_changed(key,message)
+ local data=key and A.source_cache[key] or nil;if not data or data.error then return end
+ data.detected=#(data.regions or {});data.manual_regions=true
+ for _,v in ipairs(A.items or {}) do if v.source_key==key then UI.source_status_from_cache(v) end end
+ if message then UI.notice(message,false) end
+end
+function UI.clear_source_region_selection()
+ A.wave_region_key=nil;A.wave_region_index=nil;A.wave_region_selection={}
+end
+function UI.source_region_selected(key,index)
+ return A.wave_region_key==key and A.wave_region_selection and A.wave_region_selection[index]==true
+end
+function UI.source_selected_indices(data,key,fallback)
+ local out={};local seen={}
+ if data and A.wave_region_key==key then
+  for i,on in pairs(A.wave_region_selection or {}) do
+   if on and type(i)=='number' and data.regions and data.regions[i] and not seen[i] then seen[i]=true;out[#out+1]=i end
+  end
+ end
+ if #out==0 and fallback and data and data.regions and data.regions[fallback] then out[1]=fallback end
+ table.sort(out);return out
+end
+function UI.select_source_region(v,index)
+ if not v or not v.source_key then return end
+ local data=A.source_cache[v.source_key];if not data or data.error or not data.regions[index] then return end
+ A.wave_region_key=v.source_key;A.wave_region_index=index;A.wave_region_selection={[index]=true}
+end
+function UI.select_source_range(key,a,b)
+ local data=key and A.source_cache[key] or nil;if not data or data.error then return end
+ if b<a then a,b=b,a end
+ local selected={};local first
+ for i,r in ipairs(data.regions or {}) do
+  if (r.finish or 0)>=a-1e-10 and (r.start or 0)<=b+1e-10 then selected[i]=true;first=first or i end
+ end
+ if first then A.wave_region_key=key;A.wave_region_index=first;A.wave_region_selection=selected else UI.clear_source_region_selection() end
+end
+function UI.delete_selected_source_region()
+ if A.job or A.source_job then return false end
+ local v=UI.waveform_item();if not v or not v.source_key or A.wave_region_key~=v.source_key then return false end
+ local data=A.source_cache[v.source_key];if not data or data.error then return false end
+ local indices=UI.source_selected_indices(data,v.source_key,A.wave_region_index);if #indices==0 then return false end
+ local first=indices[1]
+ for i=#indices,1,-1 do table.remove(data.regions,indices[i]) end
+ A.wave_region_selection={}
+ if #data.regions>0 then local nexti=min(first,#data.regions);A.wave_region_key=v.source_key;A.wave_region_index=nexti;A.wave_region_selection[nexti]=true
+ else A.wave_region_key=nil;A.wave_region_index=nil end
+ UI.source_regions_changed(v.source_key,'SOURCE検出区間を削除しました。');return true
+end
+function UI.source_wave_view_state(key,source_len)
+ local view=A.source_wave_view
+ if not view or view.key~=key then view={key=key,zoom=1,start=0};A.source_wave_view=view end
+ view.zoom=clamp(finite(view.zoom) and view.zoom or 1,1,64)
+ local span=source_len/view.zoom
+ view.start=clamp(finite(view.start) and view.start or 0,0,max(0,source_len-span))
+ return view,span
+end
+function UI.source_wave_reset_zoom(key)
+ local g=A.source_wave_geom;if not g or (key and g.key~=key) then return end
+ local view=A.source_wave_view;if not view or view.key~=g.key then return end
+ view.zoom=1;view.start=0;A.source_wave_scroll_drag=nil
+end
+function UI.source_wave_zoom(wheel,px)
+ local g=A.source_wave_geom;if not g or g.partial or g.source_len<=0 then return false end
+ local view=A.source_wave_view;if not view or view.key~=g.key then return false end
+ local old_zoom=view.zoom or 1;local factor=wheel>0 and 1.25 or .8;local new_zoom=clamp(old_zoom*factor,1,64)
+ if abs(new_zoom-old_zoom)<1e-9 then return true end
+ if new_zoom<1.000001 then new_zoom=1 end
+ local frac=clamp((px-g.px)/max(1,g.pw),0,1);local old_span=g.view_span or g.source_len/old_zoom
+ local anchor=(view.start or 0)+frac*old_span;local new_span=g.source_len/new_zoom
+ view.zoom=new_zoom;view.start=clamp(anchor-frac*new_span,0,max(0,g.source_len-new_span))
+ return true
+end
+function UI.source_wave_scroll(wheel)
+ local g=A.source_wave_geom;if not g or g.partial or (g.zoom or 1)<=1.000001 then return false end
+ local view=A.source_wave_view;if not view or view.key~=g.key then return false end
+ local span=g.view_span or g.source_len/(view.zoom or 1);local max_start=max(0,g.source_len-span)
+ view.start=clamp((view.start or 0)+(wheel>0 and 1 or -1)*span*.12,0,max_start)
+ return true
+end
+function UI.begin_source_wave_scroll_drag(px)
+ local g=A.source_wave_geom;local bar=g and g.scroll
+ if not g or not bar or (g.zoom or 1)<=1.000001 then return end
+ A.source_wave_scroll_drag={key=g.key,start_px=px,start=bar.view_start or 0}
+end
+function UI.update_source_wave_scroll_drag(px)
+ local d=A.source_wave_scroll_drag;local g=A.source_wave_geom;local bar=g and g.scroll
+ if not d or not g or d.key~=g.key or not bar then return end
+ local travel=max(1e-9,bar.w-bar.thumb_w);local max_start=max(0,g.source_len-g.view_span)
+ A.source_wave_view.start=clamp(d.start+(px-d.start_px)/travel*max_start,0,max_start)
+end
+function UI.source_wave_time(g,px)
+ local span=g.view_span or g.source_len;local first=g.view_start or 0
+ return clamp(first+(px-g.px)/max(1,g.pw)*span,first,min(g.source_len,first+span))
+end
+function UI.source_region_at(px,py)
+ local g=A.source_wave_geom;if not g or not g.editable or not g.data or not UI.point_inside(px,py,g.px,g.py,g.pw,g.ph) then return nil end
+ local t=UI.source_wave_time(g,px)
+ for i,r in ipairs(g.data.regions or {}) do if t>=(r.start or 0)-1e-10 and t<=(r.finish or 0)+1e-10 then return i end end
+ return nil
+end
+function UI.source_add_overlaps(data,a,b)
+ if not data then return true end
+ if b<a then a,b=b,a end
+ for _,r in ipairs(data.regions or {}) do
+  if b>(r.start or 0)+1e-10 and a<(r.finish or 0)-1e-10 then return true end
+ end
+ return false
+end
+function UI.begin_source_wave_drag(kind,index,px)
+ if A.job or A.source_job then return end
+ local g=A.source_wave_geom;if not g or g.partial or not g.editable or not g.key or not g.data then return end
+ local data=g.data;local regions=data.regions or {}
+ local t=UI.source_wave_time(g,px)
+ if kind=='select' or kind=='add' then
+  A.source_wave_drag={kind=kind,key=g.key,start_px=px,start_t=t,current_t=t,moved=false,invalid=false}
+  return
+ end
+ if not index or not regions[index] then return end
+ if not UI.source_region_selected(g.key,index) then
+  A.wave_region_key=g.key;A.wave_region_index=index;A.wave_region_selection={[index]=true}
+ else A.wave_region_index=index end
+ local indices=UI.source_selected_indices(data,g.key,index);local selected={};for _,i in ipairs(indices) do selected[i]=true end
+ local snap,all={},{ }
+ for i,r in ipairs(regions) do
+  local a={start=r.start or 0,finish=r.finish or 0,anchor=finite(r.anchor) and r.anchor or ((r.start or 0)+(r.finish or 0))*.5,
+   raw_start=r.raw_start,raw_finish=r.raw_finish}
+  all[i]=a;if selected[i] then snap[i]=a end
+ end
+ A.source_wave_drag={kind=kind,index=index,key=g.key,start_px=px,start_t=t,current_t=t,moved=false,indices=indices,selected=selected,snap=snap,all=all}
+end
+function UI.update_source_wave_drag(px)
+ local d,g=A.source_wave_drag,A.source_wave_geom;if not d or not g or d.key~=g.key or g.partial or not g.data then return end
+ local data=g.data;local t=UI.source_wave_time(g,px);d.current_t=t
+ local threshold=max(1/Core.SOURCE_SR,(g.view_span or g.source_len)/max(1,g.pw)*1.25)
+ if not d.moved and abs(t-d.start_t)<threshold then return end
+ d.moved=true
+ if d.kind=='select' then return end
+ if d.kind=='add' then
+  local a,b=min(d.start_t,t),max(d.start_t,t);d.invalid=(b-a<1/Core.SOURCE_SR) or UI.source_add_overlaps(data,a,b);return
+ end
+ local primary=d.snap and d.snap[d.index];if not primary then return end
+ local desired=t-d.start_t;local eps=1/Core.SOURCE_SR;local lo,hi=-math.huge,math.huge
+ if d.kind=='move' then
+  for _,i in ipairs(d.indices) do
+   local q=d.snap[i];local prev=d.all[i-1];local nxt=d.all[i+1]
+   if not d.selected[i-1] then lo=max(lo,(prev and prev.finish+eps or 0)-q.start) end
+   if not d.selected[i+1] then hi=min(hi,(nxt and nxt.start-eps or g.source_len)-q.finish) end
+  end
+ elseif d.kind=='left' then
+  for _,i in ipairs(d.indices) do
+   local q=d.snap[i];local prev=d.all[i-1]
+   lo=max(lo,(prev and prev.finish+eps or 0)-q.start)
+   hi=min(hi,min(q.finish-eps,q.anchor)-q.start)
+  end
+ elseif d.kind=='right' then
+  for _,i in ipairs(d.indices) do
+   local q=d.snap[i];local nxt=d.all[i+1]
+   lo=max(lo,max(q.start+eps,q.anchor)-q.finish)
+   hi=min(hi,(nxt and nxt.start-eps or g.source_len)-q.finish)
+  end
+ elseif d.kind=='anchor' then
+  for _,i in ipairs(d.indices) do local q=d.snap[i];lo=max(lo,q.start-q.anchor);hi=min(hi,q.finish-q.anchor) end
+ end
+ local delta=clamp(desired,lo,hi)
+ for _,i in ipairs(d.indices) do
+  local q=d.snap[i];local r=data.regions[i]
+  if r then
+   if d.kind=='move' then
+    r.start=q.start+delta;r.finish=q.finish+delta;r.anchor=q.anchor+delta
+    r.raw_start=finite(q.raw_start) and q.raw_start+delta or r.start;r.raw_finish=finite(q.raw_finish) and q.raw_finish+delta or r.finish
+   elseif d.kind=='left' then r.start=q.start+delta;r.raw_start=r.start;r.anchor=q.anchor
+   elseif d.kind=='right' then r.finish=q.finish+delta;r.raw_finish=r.finish;r.anchor=q.anchor
+   elseif d.kind=='anchor' then r.anchor=q.anchor+delta end
+  end
+ end
+ data.manual_regions=true
+end
+function UI.finish_source_wave_drag()
+ local d=A.source_wave_drag;A.source_wave_drag=nil;if not d then return end
+ local data=d.key and A.source_cache[d.key] or nil;if not data or data.error then return end
+ if d.kind=='select' then
+  if d.moved then UI.select_source_range(d.key,d.start_t,d.current_t) else UI.clear_source_region_selection() end
+  return
+ end
+ if d.kind=='add' then
+  if not d.moved then return end
+  local a,b=min(d.start_t,d.current_t),max(d.start_t,d.current_t);local eps=1/Core.SOURCE_SR
+  if d.invalid or b-a<eps or UI.source_add_overlaps(data,a,b) then UI.notice('既存区間と重なるため追加しませんでした。',true);return end
+  local region={start=a,finish=b,raw_start=a,raw_finish=b,anchor=(a+b)*.5,anchor_score=-math.huge,peak_db=-240,loud=-240}
+  local at=#data.regions+1;for i,r in ipairs(data.regions) do if a<(r.start or 0) then at=i;break end end
+  table.insert(data.regions,at,region);A.wave_region_key=d.key;A.wave_region_index=at;A.wave_region_selection={[at]=true}
+  UI.source_regions_changed(d.key,'SOURCE検出区間を追加しました。');return
+ end
+ if d.moved then UI.source_regions_changed(d.key,'SOURCE検出区間を調整しました。') end
+end
+function UI.reanalyze_source_wave(v)
+ if A.job or A.source_job or not v or v.is_midi or not v.source_key then return end
+ A.source_cache[v.source_key]=nil;UI.clear_source_region_selection();UI.source_wave_reset_zoom(v.source_key)
+ for _,item in ipairs(A.items or {}) do if item.source_key==v.source_key then UI.source_status_from_cache(item) end end
+ UI.rebuild_source_queue()
+ local forced={v};for _,item in ipairs(A.source_queue or {}) do if item~=v and item.source_key~=v.source_key then forced[#forced+1]=item end end
+ A.source_queue=forced;A.source_queue_i=1;A.source_queue_done=false;UI.source_queue_start_next();UI.notice('SOURCEを再解析しています。',false)
+end
 function UI.draw_source_waveform()
  local x,y,w,h=WAVE_X,WAVE_Y,WAVE_W,WAVE_H
  gradient(x,y,w,h,C.panel2,C.panel,.22,.60);line(x,y,x+w,y,C.edge2,.25);finish_corners(x,y,w,h,8,false,C.edge2,.32)
  label('SOURCE ANALYSIS',x+13,y+7,9,C.muted,3,150,13,0,true)
  local v=UI.waveform_item()
- if not v then return end
+ if not v then A.source_wave_geom=nil;return end
  label(v.name,x+145,y+4,12,C.text,1,w-470,20,0,true,true)
+ if v.is_midi then
+  right_label('MIDI',x+w-14,y+7,8,C.accent2,3,true)
+  local px,py,pw,ph=x+15,y+31,w-30,104;gradient(px,py,pw,ph,C.field,C.panel,.96,.72);finish_corners(px,py,pw,ph,5,false,C.edge,.34)
+  label('MIDIでは全体ピッチ・タイミング・音量のみ使用できます。',px+12,py+31,12,C.muted,1,pw-24,24,5,false)
+  label('G.PITCH  /  TIME  /  VOL',px+12,py+59,10,C.accent2,3,pw-24,18,5,true)
+  A.source_wave_geom=nil;register('source_wave',px,py,pw,ph,function()end,'MIDIアイテムはSOURCE解析の対象外です。',false);return
+ end
  local data,partial=UI.source_wave_data(v)
  local count=v.source_candidate_count or 0
- right_label(partial and string.format('ANALYZING %d%%',floor((A.source_progress or 0)*100+.5)) or string.format('VARIANTS %d',count),x+w-14,y+7,8,partial and C.accent2 or C.muted,3,true)
+ local mode_name=v.source_origin=='track' and 'TRACK' or 'WAVE'
+ right_label(partial and string.format('ANALYZING %d%%',floor((A.source_progress or 0)*100+.5)) or string.format('%s · VARIANTS %d',mode_name,count),x+w-14,y+7,8,partial and C.accent2 or C.muted,3,true)
  local px,py,pw,ph=x+15,y+31,w-30,104;local cy=py+ph*.52
  gradient(px,py,pw,ph,C.field,C.panel,.96,.72);finish_corners(px,py,pw,ph,5,false,C.edge,.34)
  line(px,cy,px+pw,cy,C.edge,.34)
  local source_len=max(1e-9,v.source_len or (data and data.source_len) or 0)
- local function tx(t) return px+clamp(t/source_len,0,1)*pw end
+ local view,view_span=UI.source_wave_view_state(v.source_key,source_len);local view_start=view.start;local view_end=min(source_len,view_start+view_span)
+ local function tx(t) return px+(t-view_start)/max(1e-12,view_span)*pw end
  local regions=data and data.regions or {}
  local ctx=not partial and v.source_context or nil
+ local editable=not partial and data and not data.error and not A.job and not A.source_job
+ A.source_wave_geom={key=v.source_key,data=data,partial=partial,editable=editable,px=px,py=py,pw=pw,ph=ph,source_len=source_len,view_start=view_start,view_span=view_span,view_end=view_end,zoom=view.zoom}
+ register('source_wave',px,py,pw,ph,function()end,'Ctrl＋ホイール：時間軸ズーム / Shift＋ホイール：左右スクロール',false)
+ if A.wave_region_key~=v.source_key then UI.clear_source_region_selection()
+ elseif A.wave_region_key then
+  local cleaned={};for i,on in pairs(A.wave_region_selection or {}) do if on and regions[i] then cleaned[i]=true end end
+  if next(cleaned)==nil and regions[A.wave_region_index or 0] then cleaned[A.wave_region_index]=true end
+  A.wave_region_selection=cleaned
+  if next(cleaned)==nil then UI.clear_source_region_selection()
+  elseif not cleaned[A.wave_region_index or 0] then for i in pairs(cleaned) do A.wave_region_index=i;break end end
+ end
  if partial and data and #regions>0 then local ok,res=pcall(Core.source_context,v,data);if ok and type(res)=='table' then ctx=res end end
  for i,r in ipairs(regions) do
-  local a,b=tx(r.start or 0),tx(r.finish or 0)
+  local ra,rb=tx(r.start or 0),tx(r.finish or 0);local a,b=max(px,ra),min(px+pw,rb);local selected=UI.source_region_selected(v.source_key,i)
   if b>a then
-   rect(a,py,b-a,ph,C.accent,(ctx and i==ctx.index) and .17 or .085)
-   line(a,py,a,py+ph,C.edge2,(ctx and i==ctx.index) and .70 or .30)
-   line(b,py,b,py+ph,C.edge2,(ctx and i==ctx.index) and .70 or .30)
+   rect(a,py,b-a,ph,selected and C.focus2 or C.accent,selected and .14 or ((ctx and i==ctx.index) and .17 or .085))
+   local edge_col=selected and C.focus2 or C.edge2;local edge_alpha=selected and .92 or ((ctx and i==ctx.index) and .70 or .30)
+   local function edge_handle(side,xx)
+    if xx<px or xx>px+pw then return end
+    local hot=editable and inside(xx-6,py,12,ph);local hover=animate('source_'..side..'_hover_'..tostring(v.source_key)..'_'..i,hot and 1 or 0)
+    if hover>.01 then rect(xx-2-hover,py+1,4+hover*2,ph-2,C.focus2,.055+.085*hover) end
+    line(xx,py,xx,py+ph,hover>.04 and C.focus2 or edge_col,max(edge_alpha,.30+.62*hover))
+    if hover>.04 then line(xx-1-hover*.55,py+3,xx-1-hover*.55,py+ph-3,C.focus2,.22+.38*hover);line(xx+1+hover*.55,py+3,xx+1+hover*.55,py+ph-3,C.focus2,.22+.38*hover) end
+    if editable then register('source_'..side..'_'..i,xx-6,py,12,ph,function()end,side=='left' and '区間開始をドラッグ。複数選択時は全開始点を相対移動' or '区間終了をドラッグ。複数選択時は全終了点を相対移動',true) end
+   end
+   edge_handle('left',ra);edge_handle('right',rb)
+   register('source_region_'..i,a,py,max(1,b-a),ph,function() UI.select_source_region(v,i) end,'クリック：区間選択 / 内側ドラッグ：区間移動 / 右クリック：削除',editable)
   end
  end
  local preview=data and data.preview or nil;local norm=max((data and data.preview_max) or 0,1e-12)
  if preview then
-  local n=Core.SOURCE_PREVIEW_BINS;local columns=min(420,max(1,floor(pw/2.5)));local step=max(1,ceil(n/columns))
-  local peaks=nil
+  local n=Core.SOURCE_PREVIEW_BINS;local i0=max(1,floor(view_start/source_len*n)+1);local i1=min(n,ceil(view_end/source_len*n));local visible=max(1,i1-i0+1)
+  local columns=min(420,max(1,floor(pw/2.5)));local step=max(1,ceil(visible/columns));local peaks=nil
   if not partial and data then
-   local cache=data._blt_wave_draw_cache
-   local key=tostring(preview)..'|'..tostring(step)..'|'..tostring(norm)
-   if cache and cache.key==key then
-    peaks=cache.peaks
-   else
+   local cache=data._blt_wave_draw_cache;local cache_key=tostring(preview)..'|'..i0..'|'..i1..'|'..step..'|'..tostring(norm)
+   if cache and cache.key==cache_key then peaks=cache.peaks else
     peaks={}
-    for i=1,n,step do
-     local pk=0
-     for k=i,min(n,i+step-1) do pk=max(pk,preview[k] or 0) end
-     peaks[#peaks+1]={i=i,pk=pk}
-    end
-    data._blt_wave_draw_cache={key=key,peaks=peaks}
+    for i=i0,i1,step do local pk=0;for k=i,min(i1,i+step-1) do pk=max(pk,preview[k] or 0) end;peaks[#peaks+1]={i=i,pk=pk} end
+    data._blt_wave_draw_cache={key=cache_key,peaks=peaks}
    end
   end
-  if peaks then
-   for _,p in ipairs(peaks) do
-    if p.pk>0 then local amp=clamp(math.sqrt(p.pk/norm),0,1)*ph*.44;local xx=px+(p.i-.5)/n*pw;line(xx,cy-amp,xx,cy+amp,C.accent2,.64) end
-   end
-  else
-   for i=1,n,step do
-    local pk=0
-    for k=i,min(n,i+step-1) do pk=max(pk,preview[k] or 0) end
-    if pk>0 then local amp=clamp(math.sqrt(pk/norm),0,1)*ph*.44;local xx=px+(i-.5)/n*pw;line(xx,cy-amp,xx,cy+amp,C.accent2,.64) end
-   end
+  local function draw_peak(i,pk)
+   if pk>0 then local amp=clamp(math.sqrt(pk/norm),0,1)*ph*.44;local tt=(i-.5)/n*source_len;local xx=tx(tt);if xx>=px and xx<=px+pw then line(xx,cy-amp,xx,cy+amp,C.accent2,.64) end end
   end
+  if peaks then for _,q in ipairs(peaks) do draw_peak(q.i,q.pk) end else
+   for i=i0,i1,step do local pk=0;for k=i,min(i1,i+step-1) do pk=max(pk,preview[k] or 0) end;draw_peak(i,pk) end
+  end
+ end
+ local drag=A.source_wave_drag
+ if drag and drag.key==v.source_key and (drag.kind=='select' or drag.kind=='add') then
+  local da,db=max(px,tx(min(drag.start_t,drag.current_t))),min(px+pw,tx(max(drag.start_t,drag.current_t)));local add=drag.kind=='add'
+  local dc=add and (drag.invalid and C.warn or C.accent2) or C.focus2
+  if db>da then rect(da,py,db-da,ph,dc,add and .10 or .075);line(da,py,da,py+ph,dc,.86);line(db,py,db,py+ph,dc,.86) end
+  if add and db>da then local ax=(da+db)*.5;disc(ax,cy,2.5,dc,.95) end
  end
  for i,r in ipairs(regions) do
   if finite(r.anchor) then
-   local ax=tx(r.anchor);line(ax,py+2,ax,py+ph-2,C.lock,(ctx and i==ctx.index) and .92 or .67)
-   disc(ax,cy,2.1,(ctx and i==ctx.index) and C.lock2 or C.lock,.92)
+   local selected=UI.source_region_selected(v.source_key,i);local ax=tx(r.anchor)
+   if ax>=px and ax<=px+pw then
+    local anchor_hot=editable and inside(ax-7,py,14,ph)
+    local anchor_hover=animate('source_anchor_hover_'..tostring(v.source_key)..'_'..i,anchor_hot and 1 or 0)
+    local anchor_col=selected and C.lock2 or ((ctx and i==ctx.index) and C.lock2 or C.lock)
+    if anchor_hover>.01 then disc(ax,cy,(selected and 4.7 or 4.1)+anchor_hover*1.7,C.lock2,.035+.075*anchor_hover) end
+    line(ax,py+2-anchor_hover,ax,py+ph-2+anchor_hover,anchor_hover>.04 and C.lock2 or (selected and C.lock2 or C.lock),max((selected or (ctx and i==ctx.index)) and .92 or .67,.68+.30*anchor_hover))
+    disc(ax,cy,(selected and 2.8 or 2.1)+anchor_hover*1.45,anchor_hover>.04 and C.lock2 or anchor_col,.92)
+    if editable then register('source_anchor_'..i,ax-7,py,14,ph,function()end,'基準点をドラッグ。複数選択時は全基準点を相対移動',true) end
+   end
   end
  end
- local ua,ub=tx(v.offset or 0),tx((v.offset or 0)+(v.len or 0)*(v.rate or 1))
+ local rua,rub=tx(v.offset or 0),tx((v.offset or 0)+(v.len or 0)*(v.rate or 1));local ua,ub=max(px,rua),min(px+pw,rub)
  if ub>ua then
-  rect(ua,py,ub-ua,ph,C.focus2,.035);line(ua,py,ub,py,C.focus2,.92);line(ua,py+ph,ub,py+ph,C.focus2,.92)
-  line(ua,py,ua,py+ph,C.focus2,.82);line(ub,py,ub,py+ph,C.focus2,.82)
+  rect(ua,py,ub-ua,ph,C.source_alt,.050);line(ua,py,ub,py,C.source_alt2,.94);line(ua,py+ph,ub,py+ph,C.source_alt2,.94)
+  if rua>=px and rua<=px+pw then line(rua,py,rua,py+ph,C.source_alt,.88) end;if rub>=px and rub<=px+pw then line(rub,py,rub,py+ph,C.source_alt,.88) end
  end
  if partial then
   local pr=clamp(A.source_progress or 0,0,1);rect(px,py+ph-3,pw,3,C.ink,.75);if pr>0 then gradient(px,py+ph-3,pw*pr,3,C.accent,C.accent2,.80,.98) end
  elseif not data then
   label(not v.source_ready and 'SOURCE欄の「解析」を押すと素材解析を開始します。' or v.source_reason or '解析待ち',px,py+37,12,C.muted,1,pw,28,5,false)
  end
- local caption=v.source_ready and not v.source_available and v.source_reason or string.format('青: 検出区間   黄: 基準点   明枠: 使用中    %.2f s',v.source_len or 0)
- label(caption,x+15,y+142,9,C.muted,1,510,15)
- if ctx and ctx.region then label(string.format('区間 %d/%d',ctx.index,#regions),x+535,y+142,8.5,C.muted,3,86,15,5,true) end
- register('source_wave',px,py,pw,ph,function()end,'リストで最後にクリックしたアイテムの素材全体。青=検出区間 / 黄=基準点 / 明枠=現在の使用範囲',false)
+ local by,bh=y+141,22;local reset_x,reset_w=x+15,124;local re_w=88;local re_x=x+w-15-re_w
+ local can_reset=(view.zoom or 1)>1.000001
+ UI.small_button('source_zoom_reset','ズーム率リセット',reset_x,by,reset_w,bh,function() UI.source_wave_reset_zoom(v.source_key) end,'波形の時間軸ズームを全体表示へ戻します。',can_reset,true,false)
+ local can_reanalyze=not partial and data and not data.error and not A.job and not A.source_job
+ UI.small_button('source_reanalyze','再解析',re_x,by,re_w,bh,function() UI.reanalyze_source_wave(v) end,'手動編集したSOURCE区間を破棄し、素材全体を再解析します。',can_reanalyze,true,false)
+ if can_reset then
+  local sx,sw=reset_x+reset_w+18,re_x-(reset_x+reset_w+18)-18;local sy=by+8
+  if sw>24 then
+   rect(sx,sy,sw,6,C.field,.95);line(sx,sy+3,sx+sw,sy+3,C.edge2,.32)
+   local thumb_w=max(20,sw/(view.zoom or 1));local max_start=max(1e-12,source_len-view_span);local thumb_x=sx+(sw-thumb_w)*clamp(view_start/max_start,0,1)
+   rect(thumb_x,sy-2,thumb_w,10,C.accent,.16);finish_corners(thumb_x,sy-2,thumb_w,10,4,false,C.accent2,.72)
+   A.source_wave_geom.scroll={x=sx,w=sw,thumb_x=thumb_x,thumb_w=thumb_w,view_start=view_start}
+   register('source_scroll_thumb',thumb_x,sy-5,thumb_w,16,function()end,'ドラッグして時間を左右にスクロール',true)
+  end
+ end
 end
-
 function UI.draw_assignment_matrix()
  local x,y,w,h=MATRIX_X,MATRIX_Y,MATRIX_W,MATRIX_H;gradient(x,y,w,h,C.panel2,C.panel,.24,.62);finish_corners(x,y,w,h,8,false,C.edge2,.32)
  local contentRight=x+w-MATRIX_SCROLL_W-8;local colsX=x+MATRIX_NAME_W
@@ -5618,7 +6321,7 @@ function UI.draw_assignment_matrix()
  for ci,c in ipairs(FEATURE_COLUMNS) do
   if c.lockable and A.apply.lock[c.key] then local cx=featureX+(ci-1)*cw;rect(cx,y+1,cw,h-2,C.lock,.045);line(cx,y+1,cx+cw,y+1,C.lock,.42) end
  end
- label('TRACK / FILE',x+13,y+4,9,C.accent2,3,MATRIX_NAME_W-24,13,0,true);label('トラック / ファイル名',x+13,y+16,9,C.muted,1,MATRIX_NAME_W-24,13,0,true)
+ label('TRACK / ITEM',x+13,y+4,9,C.accent2,3,MATRIX_NAME_W-24,13,0,true);label('トラック / アイテム名',x+13,y+16,9,C.muted,1,MATRIX_NAME_W-24,13,0,true)
  label('VOICE',colsX,y+4,9,C.accent2,3,voiceW,13,5,true);label('疑似発音数',colsX,y+16,9,C.muted,1,voiceW,13,5,true)
  for ci,c in ipairs(FEATURE_COLUMNS) do
   local cx=featureX+(ci-1)*cw;local locked=c.lockable and A.apply.lock[c.key]
@@ -5635,11 +6338,11 @@ function UI.draw_assignment_matrix()
  UI.voice_global_control(colsX+2,ay+6,voiceW-4)
  for ci,c in ipairs(FEATURE_COLUMNS) do
   local cx=featureX+(ci-1)*cw+(cw-16)/2;local st=column_state[c.key];local all,any,available=st[1],st[2],st[3]
-  local hint=c.key=='source' and '使用可能な素材バリエーションがあるアイテムだけを一括ON/OFF' or '全選択アイテムのこの機能を一括ON/OFF'
+  local hint=c.key=='source' and '使用可能な素材バリエーションがあるアイテムだけを一括ON/OFF' or 'この機能を使用できる選択アイテムだけを一括ON/OFF'
   UI.checkbox('all_'..c.key,all,cx,ay+8,function() UI.set_feature_all(c.key,not all) end,hint,available>0,nil,any and not all)
  end
  local listY=ay+MATRIX_ALL_H;local listH=MATRIX_VISIBLE*MATRIX_ROW_H;local maxscroll=max(0,#A.items-MATRIX_VISIBLE);A.item_scroll=clamp(A.item_scroll or 0,0,maxscroll)
- register('matrix_list',x,listY,contentRight-x,listH,function()end,'ファイル名：Ctrl/Shiftで複数選択 / ホイールでスクロール',true)
+ register('matrix_list',x,listY,contentRight-x,listH,function()end,'アイテム名：Ctrl/Shiftで複数選択 / ホイールでスクロール',true)
  for r=1,MATRIX_VISIBLE do
   local idx=A.item_scroll+r;local v=A.items[idx];local ry=listY+(r-1)*MATRIX_ROW_H
   if r%2==0 then rect(x+8,ry,contentRight-x-8,MATRIX_ROW_H,C.field,.20) end
@@ -5657,7 +6360,10 @@ function UI.draw_assignment_matrix()
    for ci,c in ipairs(FEATURE_COLUMNS) do
     local cx=featureX+(ci-1)*cw+(cw-16)/2;local available=UI.feature_available(v,c.key)
     local hint
-    if c.key=='source' then hint=v.source_ready and tostring(v.source_reason or '素材バリエーション') or '素材全体をラウドネス解析中…'
+    if v.is_midi and not available then hint='MIDIでは使用できません。'
+    elseif v.is_midi and c.key=='volume' then hint='MIDIの音量はベロシティ倍率として適用します。'
+    elseif v.is_midi and c.key=='pitch_global' then hint='MIDIの全体ピッチは半音単位へ丸めます。'
+    elseif c.key=='source' then hint=v.source_ready and tostring(v.source_reason or '素材バリエーション') or '素材全体をラウドネス解析中…'
     else hint=selected and '選択中の全アイテムへ同じON/OFFを適用' or 'このアイテムへ適用' end
     local unscanned=c.key=='source' and not v.source_ready and available
     if unscanned then
@@ -5668,8 +6374,10 @@ function UI.draw_assignment_matrix()
     end
     if c.key=='source' and not unscanned then
      local tag=not v.source_ready and '…' or tostring(v.source_candidate_count or 0)
-     local bx,by,bw,bh=cx+19,ry+7,32,20
-     register('source_count_'..v.guid,bx,by,bw,bh,function()end,hint,true)
+     local bx,by,bw,bh=cx+19,ry+7,32,20;local switchable=UI.source_mode_switchable(v)
+     local mode_hint=switchable and '候補数をクリック：同一波形 / 同一トラックを切替' or (v.source_origin=='track' and '同一トラック' or '同一波形')
+     if v.source_origin=='track' then mode_hint=mode_hint..'\n同一トラック候補は選択アイテムより前に終了する音声アイテムだけです。' end
+     register('source_count_'..v.guid,bx,by,bw,bh,function() UI.toggle_source_mode(v.guid) end,mode_hint,switchable)
      local from_track=v.source_origin=='track';local badge_on=available and row.source==true
      if from_track then
       gradient(bx,by,bw,bh,C.field,C.panel,.82,.94)
@@ -5739,7 +6447,7 @@ function UI.draw()
  gradient(20,86,1140,68,C.panel2,C.panel,.3,.60);finish_corners(20,86,1140,68,8,false,C.edge2,.3)
  label('選択',32,92,11,C.muted,1,60,15);label(tostring(#A.items),32,111,24,#A.items>0 and C.text or C.warn,3,62,30,0,true)
  UI.field('count','生成数',110,111,88,'組');UI.field('interval','間隔',216,111,95,'sec');UI.segment('interval_mode',1,'末尾→先頭',323,114,104);UI.segment('interval_mode',2,'先頭→先頭',436,114,104)
- UI.field('voice_fade_ms','発音フェード',560,111,105,'ms');UI.field('seed','乱数シード',680,111,130,'');UI.toggle('seed_lock','シード固定',825,114,150,true,12)
+ UI.field('voice_fade_ms','停止フェード',560,111,105,'ms');UI.field('seed','乱数シード',680,111,130,'');UI.toggle('seed_lock','シード固定',825,114,150,true,12)
  UI.panel('全体ピッチ','01 / GLOBAL PITCH',20,166,220,150);UI.field('pitch_lo','下限',34,239,91,'st');UI.field('pitch_hi','上限',135,239,91,'st');UI.segment('pitch_length_mode',1,'尺固定',34,283,88);UI.segment('pitch_length_mode',2,'尺連動',132,283,94)
  UI.panel('音量','02 / VOLUME',250,166,220,150);UI.field('volume_lo','下限',264,239,91,'dB');UI.field('volume_hi','上限',365,239,91,'dB')
  UI.panel('タイミング','03 / TIMING',480,166,220,150);UI.field('timing_lo','下限',494,239,91,'ms');UI.field('timing_hi','上限',595,239,91,'ms')
@@ -5783,12 +6491,13 @@ function UI.draw()
  A.scroll_hint_top=nil;A.scroll_hint_bottom=nil
  UI.draw_assignment_matrix()
  local valid,err=Core.validate(S);local auto_status=A.source_job and string.format('素材全体をラウドネス解析中… %d%%',floor((A.source_progress or 0)*100+.5)) or nil
- local status=A.status~='' and A.status or (not valid and err or A.selection_error or auto_status or (#A.items==0 and '音声アイテムを選択してください。' or ''))
- local enabled=A.job~=nil or A.source_execute_pending~=nil or (not A.source_job and #A.items>0 and valid~=nil and #A.items*S.count<=2000);local can_last=UI.last_created_count()>0 and not A.job and not A.source_job
- local pending_texture=A.pending_texture_count();local can_bake=pending_texture>0 and not A.job and not A.source_job
- UI.small_button('undo_gen','生成取消',100,1050,132,31,function() UI.remove_last_generation(false) end,'このセッションで直前に生成したアイテムを削除',can_last,true)
- UI.small_button('regen','再生成',250,1050,132,31,UI.regenerate,'直前の生成結果を削除して現在の設定で生成し直す',can_last,true)
- UI.draw_primary_button('execute',A.job and '処理を中止' or string.format('%d バリエーションを生成',S.count),400,1042,380,46,UI.execute,'Enter：生成。SOURCEの事前解析中は完了後に実行できます。',enabled)
+ local status=A.status~='' and A.status or (not valid and err or A.selection_error or auto_status or (#A.items==0 and '音声またはMIDIアイテムを選択してください。' or ''))
+ local enabled=A.job~=nil or A.source_execute_pending~=nil or (not A.source_job and #A.items>0 and valid~=nil and #A.items*S.count<=2000)
+ local can_regen=UI.regeneration_ready();local pending_texture=A.pending_texture_count();local can_bake=pending_texture>0 and not A.job and not A.source_job
+ local lock_on=A.target_lock~=nil;local lock_enabled=not A.job and not A.source_job and not A.source_execute_pending and (lock_on or #A.items>0)
+ UI.small_button('target_lock',lock_on and 'ロック解除' or '対象をロック',250,1050,132,31,UI.toggle_target_lock,lock_on and '対象ロックを解除して、現在の選択へ戻します。' or '現在選択中のアイテムを対象として固定。選択が変わっても対象を維持します。',lock_enabled,true,false)
+ local primary_text=A.job and '処理を中止' or (can_regen and 'バリエーションを再生成' or string.format('%d バリエーションを生成',S.count))
+ UI.draw_primary_button('execute',primary_text,400,1042,380,46,UI.primary_action,'Enter：生成。SOURCEの事前解析中は完了後に実行できます。',enabled)
  UI.small_button('bake_fx','FX FIX',798,1050,92,31,A.bake_last_texture_fx,'直前生成のTEXTURE EQだけを音声へ焼き込み、FX負荷を軽減',can_bake,false,can_bake)
  BLT.footer(status,A.warning or not valid,W,H+22,Core.VERSION);flush_text_queue();UI.custom_titlebar()
 end
@@ -5859,19 +6568,28 @@ function UI.hover_key_at(raw_x,raw_y)
  local hit=UI.widget_at(mouse_x,mouse_y)
  return hit and ('widget:'..tostring(hit.id)) or 'canvas'
 end
-function UI.apply_wheel(wheel,px,py,shift,hit)
+function UI.apply_wheel(wheel,px,py,shift,ctrl,hit)
  if wheel==0 then return end
+ local g=A.source_wave_geom
+ if g and UI.point_inside(px,py,g.px,g.py,g.pw,g.ph) and not A.job then
+  if ctrl and UI.source_wave_zoom(wheel,px) then return end
+  if shift and UI.source_wave_scroll(wheel) then return end
+ end
+ local voice_guid=nil
+ if hit and hit.enabled then
+  voice_guid=hit.id:match('^voice_(.+)$') or hit.id:match('^voiceup_(.+)$') or hit.id:match('^voicedown_(.+)$')
+ end
+ if voice_guid and UI.commit_edit() then
+  local row=A.apply.items[voice_guid]
+  if row then
+   local cur=max(0,floor(tonumber(row.voice_limit) or 0))
+   UI.set_voice_limit(voice_guid,UI.voice_step_value(cur,wheel>0 and 1 or -1))
+  end
+  return
+ end
  local listY=MATRIX_Y+MATRIX_HEADER_H+MATRIX_ALL_H;local listH=MATRIX_VISIBLE*MATRIX_ROW_H
  if not A.job and UI.point_inside(px,py,MATRIX_X,listY,MATRIX_W,listH) then
   A.item_scroll=clamp((A.item_scroll or 0)+(wheel>0 and -1 or 1),0,max(0,#A.items-MATRIX_VISIBLE));return
- end
- if hit and hit.enabled and hit.id:match('^voice_') and UI.commit_edit() then
-  local guid=hit.id:sub(7);local row=A.apply.items[guid]
-  if row then
-   local cur=max(0,floor(tonumber(row.voice_limit) or 0))
-   UI.set_voice_limit(guid,UI.voice_step_value(cur,wheel>0 and 1 or -1))
-  end
-  return
  end
  if hit and hit.enabled and hit.id:match('^field_') and UI.commit_edit() then
   local key=hit.id:sub(7);local r=Core.ranges[key]
@@ -5882,25 +6600,39 @@ function UI.apply_wheel(wheel,px,py,shift,hit)
  end
 end
 function UI.interact(external_wheel)
- if BLT.blocked() then down_last=(gfx.mouse_cap&1)~=0;pressed=nil;gfx.mouse_wheel=0;return end
+ if BLT.blocked() then down_last=(gfx.mouse_cap&1)~=0;right_down_last=(gfx.mouse_cap&2)~=0;pressed=nil;gfx.mouse_wheel=0;return end
 
- if Chrome.mouseActive then down_last=(gfx.mouse_cap&1)~=0;pressed=nil;A.scroll_drag=nil;A.field_drag=nil;return end
+ if Chrome.mouseActive then down_last=(gfx.mouse_cap&1)~=0;right_down_last=(gfx.mouse_cap&2)~=0;pressed=nil;A.scroll_drag=nil;A.source_wave_scroll_drag=nil;A.field_drag=nil;return end
  if not animations_active then
-  if external_wheel then local hit=UI.widget_at(external_wheel.x,external_wheel.y);UI.apply_wheel(external_wheel.wheel,external_wheel.x,external_wheel.y,external_wheel.shift,hit) end
-  down_last=false;pressed=nil;A.scroll_drag=nil;A.curve_drag=nil;A.field_drag=nil;return
+  if external_wheel then local hit=UI.widget_at(external_wheel.x,external_wheel.y);UI.apply_wheel(external_wheel.wheel,external_wheel.x,external_wheel.y,external_wheel.shift,external_wheel.ctrl,hit) end
+  down_last=false;right_down_last=false;pressed=nil;A.scroll_drag=nil;A.source_wave_scroll_drag=nil;A.curve_drag=nil;A.field_drag=nil;return
  end
  local hit=UI.widget_at(mouse_x,mouse_y)
  if A.job then
   local down=(gfx.mouse_cap&1)~=0;gfx.mouse_wheel=0
   if down and not down_last then pressed=hit and hit.id=='execute' and 'execute' or nil end
   if not down and down_last then if pressed=='execute' and hit and hit.id=='execute' then UI.cancel_job() end;pressed=nil end
-  down_last=down;return
+  down_last=down;right_down_last=(gfx.mouse_cap&2)~=0;return
  end
- local wheel=gfx.mouse_wheel or 0;gfx.mouse_wheel=0;UI.apply_wheel(wheel,mouse_x,mouse_y,(gfx.mouse_cap&8)~=0,hit)
- local down=(gfx.mouse_cap&1)~=0
+ local wheel=gfx.mouse_wheel or 0;gfx.mouse_wheel=0;UI.apply_wheel(wheel,mouse_x,mouse_y,(gfx.mouse_cap&8)~=0,(gfx.mouse_cap&4)~=0 or (gfx.mouse_cap&32)~=0,hit)
+ local down=(gfx.mouse_cap&1)~=0;local rdown=(gfx.mouse_cap&2)~=0
+ if rdown and not right_down_last then
+  local ri=UI.source_region_at(mouse_x,mouse_y)
+  if ri then
+   local v=UI.waveform_item();if v and v.source_key then if not UI.source_region_selected(v.source_key,ri) then UI.select_source_region(v,ri) end;UI.delete_selected_source_region() end
+  end
+ end
  if down and not down_last then
   pressed=hit and hit.id or nil;pressed_mods=gfx.mouse_cap&60
   if hit and hit.id=='matrix_scroll_thumb' and A.scroll_geom then A.scroll_drag={startY=mouse_y,startScroll=A.item_scroll} end
+  if hit and hit.id=='source_scroll_thumb' then UI.begin_source_wave_scroll_drag(mouse_x) end
+  if hit and hit.enabled and hit.id:match('^source_left_%d+$') then UI.begin_source_wave_drag('left',tonumber(hit.id:match('(%d+)$')),mouse_x)
+  elseif hit and hit.enabled and hit.id:match('^source_right_%d+$') then UI.begin_source_wave_drag('right',tonumber(hit.id:match('(%d+)$')),mouse_x)
+  elseif hit and hit.enabled and hit.id:match('^source_anchor_%d+$') then UI.begin_source_wave_drag('anchor',tonumber(hit.id:match('(%d+)$')),mouse_x)
+  elseif hit and hit.enabled and hit.id:match('^source_region_%d+$') then UI.begin_source_wave_drag('move',tonumber(hit.id:match('(%d+)$')),mouse_x)
+  elseif hit and hit.id=='source_wave' and A.source_wave_geom and A.source_wave_geom.editable then
+   UI.begin_source_wave_drag((gfx.mouse_cap&16)~=0 and 'add' or 'select',nil,mouse_x)
+  end
   if hit and hit.id=='pitch_curve_graph' and A.curve_graph_geom then
    local mods=gfx.mouse_cap&60;local alt=(mods&16)~=0;local ctrl=(mods&4)~=0 or (mods&32)~=0
    local pi,pts,pending=A.pitch_curve_point_at(mouse_x,mouse_y)
@@ -5925,26 +6657,31 @@ function UI.interact(external_wheel)
   local g=A.scroll_geom;local span=max(1,g.trackH-g.thumbH);local delta=(mouse_y-A.scroll_drag.startY)/span*g.maxscroll
   A.item_scroll=clamp(floor(A.scroll_drag.startScroll+delta+.5),0,g.maxscroll)
  end
+ if down and A.source_wave_scroll_drag then UI.update_source_wave_scroll_drag(mouse_x) end
  if down and A.curve_drag and A.curve_graph_geom then A.update_pitch_curve_guide(mouse_x,mouse_y,false) end
+ if down and A.source_wave_drag then UI.update_source_wave_drag(mouse_x) end
  if down and A.field_drag then A.update_field_drag(mouse_y,(gfx.mouse_cap&8)~=0) end
  if not down and down_last then
   local curve_was_drag=A.curve_drag and A.curve_drag.moved
   if curve_was_drag then A.finish_pitch_curve_guide() end
-  local field_was_drag=A.field_drag and A.field_drag.moved;local was_drag=A.scroll_drag~=nil or curve_was_drag or field_was_drag
-  A.scroll_drag=nil;A.curve_drag=nil;A.field_drag=nil;click_mods=pressed_mods
+  local source_was_drag=A.source_wave_drag and A.source_wave_drag.moved;if A.source_wave_drag then UI.finish_source_wave_drag() end
+  local field_was_drag=A.field_drag and A.field_drag.moved;local wave_scroll_was_drag=A.source_wave_scroll_drag~=nil;local was_drag=A.scroll_drag~=nil or wave_scroll_was_drag or curve_was_drag or source_was_drag or field_was_drag
+  A.scroll_drag=nil;A.source_wave_scroll_drag=nil;A.curve_drag=nil;A.field_drag=nil;click_mods=pressed_mods
   if not was_drag then
    if hit and hit.enabled and pressed==hit.id then if UI.commit_edit() then hit.fn() end
    elseif edit then UI.commit_edit() end
   end
   pressed=nil;pressed_mods=0;click_mods=0
  end
- down_last=down
+ down_last=down;right_down_last=rdown
 end
 function UI.keypress(k)
  k=BLT.key(k);if k==0 then return end
+ if k==32 and not edit and not A.job and not A.source_job and not A.source_execute_pending then R.Main_OnCommand(40044,0);return end
 
  if k==27 then if edit then edit=nil elseif A.job then UI.cancel_job() elseif A.source_job then local restore=A.source_execute_pending and A.source_execute_pending.restore_selection;UI.stop_source_job();A.source_execute_pending=nil;A.source_queue={};A.source_queue_i=1;UI.restore_item_selection(A.project,restore,true);UI.notice('素材の事前解析を中止しました。') else A.closing=true end;return end;if A.job then if k==13 then UI.cancel_job() end;return end
- if k==13 then if edit then UI.commit_edit() else UI.execute() end;return end;if not edit then return end
+ if k==6579564 and not edit then if UI.delete_selected_source_region() then return end end
+ if k==13 then if edit then UI.commit_edit() else UI.primary_action() end;return end;if not edit then return end
  if k==9 then UI.commit_edit() elseif k==1 then edit.selected=true elseif k==8 or k==6579564 then edit.text=edit.selected and '' or edit.text:sub(1,-2);edit.selected=false
  elseif k>=48 and k<=57 or k==45 or k==46 then local c=string.char(k);if edit.selected then edit.text=c elseif #edit.text<14 then edit.text=edit.text..c end;edit.selected=false end
 end
@@ -6012,11 +6749,11 @@ function BLT.restoreTexture(v)
 end
 
 BLT.variantDefaults={settings=BLT.copy(Core.defaults),locks={},texture=BLT.emptyTexturePreset()};for _,k in ipairs(Core.FEATURES) do BLT.variantDefaults.locks[k]=false end;function BLT.captureVariant() BLT.variantView=BLT.variantView or {};BLT.variantView.settings=S;BLT.variantView.locks=A.apply.lock;BLT.variantView.texture=BLT.captureTexture();return BLT.variantView end
-function BLT.pick(obj,keys) local v=BLT.valueView or {};BLT.valueView=v;for k in pairs(keys) do v[k]=obj[k] end;return v end
 Chrome.titleH=Chrome.title_h;Chrome.titleText=Chrome.title_text or "V A R I A N T   F O R G E";Chrome.windowTitle=Chrome.title
 PrimaryButton.painter={C=C,gradient=gradient,line=line,rect=rect,corners=finish_corners,disc=disc,label=label}
 PrimaryButton.painter.motion=function(now) return (gfx.mouse_x-ox)/scale,(gfx.mouse_y-oy)/scale,effects_active and 1 or 0 end
 PrimaryButton.wake=function() redraw_dirty=true;A.content_dirty=true;next_draw_time=0 end
+Media.state=A;Media.onchange=function() if BLT.host and BLT.host.wake then BLT.host.wake() end end
 BLT.attach({
  R=R,C=C,Chrome=Chrome,Chameleon=Chameleon,section=Core.SECTION,faces=fonts,font=font,
  geometry=function() return scale,ox,oy end,active=function() local f=gfx.getchar(65536);return (f&1)==0 or (f&2)~=0 end,
@@ -6040,7 +6777,7 @@ function BLT.drawIcon()
  scale,ox,oy=bs,bx,by
 end
 
-if ...=='blt_test' then return {BLT=BLT,A=A,Core=Core,S=S ,UI=UI} end
+if ...=='blt_test' then return {Media=Media,BLT=BLT,A=A,Core=Core,S=S ,UI=UI} end
 if ...=='ui_test' then return {draw=UI.draw,state=A,settings=S,refresh=UI.refresh,execute=UI.execute,work=UI.work_step,interact=UI.interact,key=UI.keypress,reset=UI.reset_window_size} end
 do
  local chrome_ok,chrome_err=UI.titlebar_api_ready();if not chrome_ok then Language.mb(BLT.publicError(chrome_err),'BLT Variant Forge | エラー',0);return end
@@ -6055,15 +6792,14 @@ gfx.ext_retina=BLT_MAC and 0 or 1;if finite(wx) and finite(wy) then gfx.init(Chr
  R.atexit(UI.close)
 end
 function UI.loop()
- BLT.tick(R.time_precise());PrimaryButton.tick(R.time_precise(),BLT.host.active(),PrimaryButton.wake)
-
- if A.closing then UI.close();return end
- local k=BLT.key(gfx.getchar());if k<0 then UI.close();return end
  local ok,err=xpcall(function()
-  local now=R.time_precise()
-  Chameleon.tick(now)
-  local flags=gfx.getchar(65536)
-  local input_active=(flags&1)==0 or ((flags&2)~=0 and (flags&4)~=0)
+ local now=R.time_precise();BLT.tick(now);PrimaryButton.tick(now,BLT.host.active(),PrimaryButton.wake)
+
+ if A.closing then A.closing=true;return end
+ local k=BLT.key(gfx.getchar());if k<0 then A.closing=true;return end
+    Chameleon.tick(now)
+  local flags=gfx.getchar(65536);local activation_down=(gfx.mouse_cap&1)~=0
+  local input_active=(flags&1)==0 or ((flags&2)~=0 and (flags&4)~=0) or UI.activation_press(activation_down)
   if last_input_active==nil or input_active~=last_input_active then
    last_input_active=input_active;request_redraw(now,.28)
   end
@@ -6073,24 +6809,23 @@ function UI.loop()
   while k>0 and n<32 do
    key_activity=true
    if animations_active then UI.keypress(k) end
-   n=n+1;k=gfx.getchar()
+   n=n+1;k=BLT.key(gfx.getchar())
   end
   if key_activity then wake_visuals(now,.40) end
   if A.closing then return end
 
   UI.flush_persist(false)
+  UI.poll_target_lock(now)
 
   -- Project/selection observation stays alive at its cheap polling cadence.  A
   -- detected change invalidates the cached frame, but an unchanged project does
   -- not redraw anything.
-  if not A.job and not A.source_job and now>A.poll then
+  if Media.ready() and not A.job and not A.source_job and now>A.poll then
    A.poll=now+.35
    local project=R.EnumProjects(-1,'');local revision=R.GetProjectStateChangeCount(project);local selection_signature=Core.selection_signature(project)
    if project~=A.project or selection_signature~=A.selection_signature or revision~=A.revision then
     UI.refresh();request_redraw(now,.40)
-   else
-    local track_signature=Core.track_topology_signature(A.items)
-    if track_signature~=A.track_signature then UI.refresh();request_redraw(now,.40) end
+
    end
   end
 
@@ -6129,7 +6864,7 @@ function UI.loop()
    last_window_w,last_window_h=gfx.w,gfx.h;wake_visuals(now,.45,.20)
   end
 
-  local dragging=A.scroll_drag or A.curve_drag or A.field_drag or Chrome.drag or Chrome.resize or ((raw_cap or 0)&1)~=0
+  local dragging=A.scroll_drag or A.curve_drag or A.source_wave_drag or A.field_drag or Chrome.drag or Chrome.resize or ((raw_cap or 0)&1)~=0
   if dragging then request_effect_activity(now,.12) end
   local hover_animating=animations_active and now<hover_anim_until
   local effects_were_active=effects_active

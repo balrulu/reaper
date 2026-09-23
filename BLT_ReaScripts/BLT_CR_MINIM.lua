@@ -1,10 +1,10 @@
 -- @description CR MINIM
--- @version 0.5.6
+-- @version 0.5.10
 -- @author Balrulu
 -- @provides
 --   . > ../
 -- @changelog
---   Increase preset capacity and show shared overflow dialogs.
+--   BLT SERIES Beta TEST UPLOAD
 -- @about
 --   BLT SERIES Beta TEST UPLOAD
 
@@ -13,6 +13,157 @@ local BLTPresetLimits={bytes=16777216,stringBytes=2097152,nodes=262144,entries=8
 function BLTPresetLimits.show(english)
  reaper.MB(english and 'Preset capacity limit exceeded. Export presets individually instead of as a bundle.' or '容量上限オーバーです。一括ではなく個別に保存してください。','BLT PRESET',0)
 end
+
+-- BLT media availability 1.0.2. Pause audio work, never the UI defer loop.
+local function create_media_gate(api,graphics)
+ local M={waiting=false,epoch=0};local P=setmetatable({}, {__index=api})
+ local accessors={};local next_check=0;local ready=true;local settle=0;local last_active
+ local function valid(project,p,kind)
+  return p and (not api.ValidatePtr2 or api.ValidatePtr2(project,p,kind))
+ end
+ local function application_active()
+  if graphics and graphics.getchar then
+   local flags=graphics.getchar(65537)
+   if flags>=0 and ((flags&1)==0 or (flags&2)~=0) then return true end
+  end
+  if not (api.JS_Window_GetForeground and api.GetMainHwnd and api.JS_Window_GetParent) then return nil end
+  local foreground=api.JS_Window_GetForeground();local main=api.GetMainHwnd()
+  for _=1,32 do
+   if not foreground then return false end
+   if foreground==main then return true end
+   local parent=api.JS_Window_GetParent(foreground)
+   if parent==foreground then return nil end;foreground=parent
+  end
+  return nil
+ end
+ local function offline(project,take)
+  -- targets() resolves or validates each pointer in this same defer pass.
+  if not take then return false end
+  if api.TakeIsMIDI and api.TakeIsMIDI(take) then return false end
+  if not api.GetMediaItemTake_Source then return false end
+  local source=api.GetMediaItemTake_Source(take);local seen={}
+  for _=1,32 do
+   if not source or seen[source] then break end;seen[source]=true
+   local is_offline=false
+   if api.CF_GetMediaSourceOnline then
+    is_offline=not api.CF_GetMediaSourceOnline(source)
+   elseif api.GetMediaSourceSampleRate and api.GetMediaSourceNumChannels then
+    is_offline=api.GetMediaSourceSampleRate(source)<=0 or api.GetMediaSourceNumChannels(source)<=0
+   end
+   if is_offline then
+    local file=api.GetMediaSourceFileName and api.GetMediaSourceFileName(source,'') or ''
+    if file~='' and (not api.file_exists or api.file_exists(file)) then return true end
+   end
+   source=api.GetMediaSourceParent and api.GetMediaSourceParent(source) or nil
+  end
+  return false
+ end
+ local fields={'info','v','source','snapshot','plans','items','list','queue','entries','reader','data','p','left','right','parts','sources','source_items'}
+ local function targets(project,all_items)
+  local takes,seen,items={},{},{};local invalid=false
+  local function item(p,fresh)
+   if p and items[p] then return end
+   if not p or (not fresh and not valid(project,p,'MediaItem*')) then invalid=true;return end
+   items[p]=true
+   local take=api.GetActiveTake and api.GetActiveTake(p)
+   if take then takes[take]=true end
+  end
+  local function visit(v,depth)
+   if type(v)~='table' or seen[v] or depth>12 then return end;seen[v]=true
+   if v.project and v.project~=project then invalid=true;return end
+   if v.item then item(v.item) end
+   if v.take then
+    if takes[v.take] or valid(project,v.take,'MediaItem_Take*') then takes[v.take]=true else invalid=true end
+   end
+   if v.temp_take and (takes[v.temp_take] or valid(project,v.temp_take,'MediaItem_Take*')) then takes[v.temp_take]=true end
+   for _,key in ipairs(fields) do visit(v[key],depth+1) end
+   for _,entry in ipairs(v) do if type(entry)=='table' then visit(entry,depth+1) end end
+  end
+  if api.CountSelectedMediaItems and api.GetSelectedMediaItem then
+   for i=0,api.CountSelectedMediaItems(project)-1 do item(api.GetSelectedMediaItem(project,i),true) end
+  end
+  local a=M.state
+  if a then
+   for _,key in ipairs({'job','analysis','batch','source_job','wave_job','pjob','xjob','ajob'}) do visit(a[key],0) end
+   if a.job or a.batch or a.source_job then visit(a.items,0);visit(a.queue,0) end
+  end
+  if (all_items or (M.all_items and M.state and M.state.job)) and api.CountMediaItems and api.GetMediaItem then
+   for i=0,api.CountMediaItems(project)-1 do item(api.GetMediaItem(project,i),true) end
+  end
+  return takes,invalid
+ end
+ function M.ready(force,all_items)
+  local now=api.time_precise()
+  if not force and now<next_check then return ready end
+  next_check=now+.10
+  local project=api.EnumProjects(-1,'')
+  local takes,invalid=targets(project,all_items);local blocked=false
+  if M.state and M.state.project and M.state.project~=project then invalid=true end
+  if not invalid then
+   if next(takes) and not api.CF_GetMediaSourceOnline and application_active()==false then blocked=true
+   else for take in pairs(takes) do if offline(project,take) then blocked=true;break end end end
+  end
+  if invalid or not next(takes) then settle=0 end
+  if blocked then settle=now+.25 end
+  local waiting=not invalid and (blocked or now<settle)
+  ready=not waiting
+  if waiting~=M.waiting then
+   M.waiting=waiting;if not waiting then M.epoch=M.epoch+1 end
+   if M.onchange then M.onchange() end
+  end
+  return ready
+ end
+ function M.tick()
+  local active=application_active()
+  if active~=last_active then next_check=0;last_active=active end
+  return M.ready()
+ end
+ function M.message(section)
+  return api.GetExtState(section,'ui_language')=='EN' and 'Waiting for media to come online…' or 'メディアのオンライン復帰を待っています…'
+ end
+ local function signature(take)
+  if not (api.GetMediaItemTake_Item and api.GetItemStateChunk) then return nil end
+  local item=api.GetMediaItemTake_Item(take);if not item then return nil end
+  local ok,chunk=api.GetItemStateChunk(item,'',false)
+  return ok and chunk or nil
+ end
+ if api.CreateTakeAudioAccessor then
+  function P.CreateTakeAudioAccessor(take)
+   local aa=api.CreateTakeAudioAccessor(take)
+   if aa then accessors[aa]={take=take,project=api.EnumProjects(-1,''),signature=signature(take),revision=api.GetProjectStateChangeCount and api.GetProjectStateChangeCount(api.EnumProjects(-1,'')),epoch=M.epoch} end
+   return aa
+  end
+ end
+ if api.CreateTrackAudioAccessor then
+  function P.CreateTrackAudioAccessor(track)
+   local aa=api.CreateTrackAudioAccessor(track);local project=api.EnumProjects(-1,'')
+   if aa then accessors[aa]={track=track,project=project,revision=api.GetProjectStateChangeCount(project),epoch=M.epoch} end
+   return aa
+  end
+ end
+ local function resume(aa)
+  local state=accessors[aa]
+  if not state or state.epoch==M.epoch or M.waiting then return end
+  state.epoch=M.epoch
+  if api.EnumProjects(-1,'')~=state.project then return end
+  local unchanged=state.take and valid(state.project,state.take,'MediaItem_Take*') and state.signature and signature(state.take)==state.signature
+  if state.take and state.revision and api.GetProjectStateChangeCount(state.project)~=state.revision then unchanged=false end
+  if state.track then unchanged=valid(state.project,state.track,'MediaTrack*') and api.GetProjectStateChangeCount(state.project)==state.revision end
+  if unchanged and api.AudioAccessorUpdate then api.AudioAccessorUpdate(aa) end
+ end
+ if api.AudioAccessorStateChanged then
+  function P.AudioAccessorStateChanged(aa) resume(aa);return api.AudioAccessorStateChanged(aa) end
+ end
+ if api.GetAudioAccessorSamples then
+  function P.GetAudioAccessorSamples(...) local aa=...;resume(aa);return api.GetAudioAccessorSamples(...) end
+ end
+ if api.DestroyAudioAccessor then
+  function P.DestroyAudioAccessor(aa) accessors[aa]=nil;return api.DestroyAudioAccessor(aa) end
+ end
+ return M,P
+end
+local Media,reaper=create_media_gate(reaper,gfx)
+
 
 -- BLT window geometry 1.0.0. Embedded; screen coordinates only.
 local function create_window_geometry(api,graphics)
@@ -425,12 +576,7 @@ function B.unpack(data)
  end
  local ok,v=pcall(read,0);if capacity then BLTPresetLimits.show(Language.code=='EN') end;if ok and at==#data+1 then return v end
 end
-function B.cleanText(text)
- text=tostring(text);B.cleanCache=B.cleanCache or {};local v=B.cleanCache[text];if v then return v end
- v=text:gsub('[%z\1-\31\127]',' ')
- B.cleanCount=(B.cleanCount or 0)+1;if B.cleanCount>512 then B.cleanCache={};B.cleanCount=1 end
- B.cleanCache[text]=v;return v
-end
+
 function B.publicError(value,fallback)
  local text=tostring(value or '')
  text=text:match('^(.-)\nstack traceback:') or text
@@ -658,24 +804,8 @@ local function update_window_resize() host.resize() end
 local function clear_chrome_tooltip() B.popupUntil=nil;if R.TrackCtl_SetToolTip then R.TrackCtl_SetToolTip('',0,0,true) end end
 B.clearTooltip=clear_chrome_tooltip
 -- Non-modal dependency hint. Uses the existing tick, with no extra defer loop.
-function B.inputNotice()
- local x,y=gfx.clienttoscreen(gfx.mouse_x,gfx.mouse_y+18)
- R.TrackCtl_SetToolTip(Language.message('ReaImGui 0.10以降が必要です。ReaPackで導入・更新してください。'),x,y,true)
- B.popupUntil=R.time_precise()+1;B.tip=nil;B.tipVisible=false
-end
-function B.requireInput(ime)
- if ime.api then return true end
- if type(R.ImGui_GetBuiltinPath)~='function' then B.inputNotice();return false end
- local ok,api=pcall(function() return dofile(R.ImGui_GetBuiltinPath()..'/imgui.lua')('0.10') end)
- if not ok or type(api)~='table' then B.inputNotice();return false end
- ime.api=api;return true
-end
-function B.switch(x,y,state,enabled)
- local s,bx,by=host.geometry();local cy=by+(y+12)*s;local cx=bx+(x+7+12*state)*s
- local c=C.edge2;gfx.set(c[1],c[2],c[3],enabled and .45 or .2);gfx.line(bx+(x+3)*s,cy,bx+(x+23)*s,cy,1)
- c=C.faint;gfx.set(c[1],c[2],c[3],enabled and .8 or .4);gfx.circle(cx,cy,4.2*s,1,1)
- if state>.001 and enabled then c=C.accent;gfx.set(c[1],c[2],c[3],.06*state);gfx.circle(cx,cy,7*s,1,1);c=C.accent2;gfx.set(c[1],c[2],c[3],.94*state);gfx.circle(cx,cy,4.2*s,1,1) end
-end
+
+
 function B.blend(dt)
  if B.blendDt~=dt then B.blendDt=dt;B.blendValue=1-math.exp(-12*dt) end
  return B.blendValue
@@ -960,8 +1090,6 @@ local function custom_titlebar(blocked)
   end
   local rcx,rcy=resetX+resetW*.5,Chrome.titleH*.5
   local rcol=hoverReset and Chrome.mint or C.muted
-
-  -- Reference-style outlined window; arrow explicitly points LOWER LEFT.
   gfx.set(rcol[1],rcol[2],rcol[3],hoverReset and .98 or .82)
   gfx.roundrect(rcx-6,rcy-6,12,12,1,1)
   gfx.line(rcx+3,rcy-3,rcx-3,rcy+3,1)
@@ -1091,6 +1219,7 @@ local project_undo=create_project_undo(R,{
  after=function(project) if host.undoRefresh then host.undoRefresh(project) end;wake_visuals() end,
 })
 function B.key(k)
+ if k<0 then return k end
  if Presets.open then Presets.key(k);return 0 end
  if host and not host.localUndo then
   if host.undoAction then
@@ -1104,6 +1233,7 @@ function B.key(k)
  return k
 end
 function B.tick(now)
+ Media.tick()
  if not host then return end
  if B.windowW~=gfx.w or B.windowH~=gfx.h then B.windowW,B.windowH=gfx.w,gfx.h;B.lastRect=nil;wake_visuals() end
  B.viewport(host.geometry(),gfx.ext_retina or 1)
@@ -1157,13 +1287,26 @@ function B.cleanup(fn,...)
 end
 function B.recoverInput(state,err)
  gfx.dest=-1;gfx.mode=0;gfx.a=1
- for _,key in ipairs({'drag','number_drag','pointer_capture','field_drag','fieldDrag','curve_drag','scroll_drag','seam_drag','seam_hold','pressed','popup','name_dialog','duplicate_modal'}) do state[key]=nil end
+ for _,key in ipairs({'drag','number_drag','pointer_capture','field_drag','fieldDrag','scrollDrag','source_wave_drag','curve_drag','scroll_drag','seam_drag','seam_hold','pressed','popup','name_dialog','duplicate_modal'}) do state[key]=nil end
  if host.cancelEdit then B.cleanup(host.cancelEdit) end
- Presets.open=false;Presets.swallow=false
+ Presets.open=false;Presets.swallow=false;Presets.pressed=nil;Presets.hoverSince=nil
+ Chrome.drag=nil;Chrome.resize=nil
+ if host.cursor then B.cleanup(host.cursor,nil) end
  B.recoveryMode=true
  local ok,why=pcall(B.bar)
  B.recoveryMode=nil
- if not ok then B.logError(why) end
+ if not ok then
+  B.logError(why)
+  -- A failed font, preset or theme draw must still allow closing the window.
+  local down=((gfx.mouse_cap or 0)&1)~=0
+  local hit=gfx.mouse_y>=0 and gfx.mouse_y<26 and gfx.mouse_x>=gfx.w-38 and gfx.mouse_x<gfx.w
+  if down and not B.emergencyDown then B.emergencyClose=hit end
+  if not down and B.emergencyDown then
+   if B.emergencyClose and hit then Chrome.requestClose=true end
+   B.emergencyClose=nil
+  end
+  B.emergencyDown=down
+ else B.emergencyDown=nil;B.emergencyClose=nil end
  pcall(B.footer,B.publicError(err),true,gfx.w,0,B.footerVersion or '')
  pcall(gfx.update)
  if Chrome.requestClose then state.closing=true end
@@ -1205,6 +1348,7 @@ end
 B.chaosViolet={.62,.23,.94};B.chaosEmber={.92,.27,.65};B.chaosPale={.87,.69,1};B.chaosSurface={.038,.014,.068}
 
 function B.footer(message,bad,width,height,version,progress)
+ if Media.waiting then message=Media.message(host.section);bad=false;progress=nil end
  if version~='' then B.footerVersion=version end
  scale,ox,oy=host.geometry();message=Language.message(B.notice or tostring(message or ''))
  if B.notice then bad=B.noticeBad end
@@ -1237,7 +1381,7 @@ end)()
 local min,max,abs,floor=math.min,math.max,math.abs,math.floor
 local function finite(n) return type(n)=='number' and n==n and abs(n)<math.huge end
 local function clamp(n,a,b) return max(a,min(b,n)) end
-local Core={VERSION='0.5.6',SECTION='BLT_CR_MINIM'}
+local Core={VERSION='0.5.10',SECTION='BLT_CR_MINIM'}
 -- Presentation only: show message content without source locations or filenames.
 function Core.display_message(value)
  local text=tostring(value or '')
@@ -1617,7 +1761,7 @@ function Core.start(p,s,target)
  local j={source=p,plan=plan,target=target,temp=target..'.blt-part',frame=0,event=1,peak=0}
  local ok,err=pcall(function()
   local old=io.open(j.temp,'rb');if old then old:close();j.temp=nil;error('作業ファイルが既に存在します。') end
-  j.reader=Core.reader(p,true);j.file=assert(io.open(j.temp,'wb'));assert(j.file:write(Core.wav_header(plan.sr,plan.frames)))
+  j.reader=Core.reader(p,true);j.file=assert(io.open(j.temp,'wb'),'出力先BLTフォルダーへ書き込めません。保存先とアクセス権を確認してください。');assert(j.file:write(Core.wav_header(plan.sr,plan.frames)))
  end)
  if not ok then Core.abort(j);error(err,0) end
  return j
@@ -1891,7 +2035,7 @@ end
 
 -- CHAMELEON THEME ADAPTER
 --
--- Porting contract for other BLT scripts:
+-- Theme adapter interface:
 --   Required palette tables : C, C_DEFAULT
 --   Optional chrome colors   : Chrome, CHROME_DEFAULT
 --   Persistence              : SECTION / ExtState key "chameleon"
@@ -1899,8 +2043,6 @@ end
 --   UI integration           : Chameleon.enabled / Chameleon.set(...)
 --   Main-loop integration    : Chameleon.tick(now)
 --
--- Keep this block intact when porting; normally only the title-bar button
--- placement and the host hooks need adapting in another BLT script.
 Chameleon.keys={
   -- Main/surface colors
   "col_main_bg2","col_main_bg","col_arrangebg","col_tracklistbg","col_mixerbg",
@@ -2472,10 +2614,12 @@ function UI.safe(fn)
  return ok
 end
 function UI.geometry()
- scale=min(gfx.w/W,(gfx.h-Chrome.titleH)/H);ox=(gfx.w-W*scale)/2;oy=Chrome.titleH+(gfx.h-Chrome.titleH-H*scale)/2-22*scale;BLT.viewport(scale,gfx.ext_retina or 1)
+ -- Anchor content below the app bar; extra window height belongs below the UI.
+ scale=min(gfx.w/W,(gfx.h-Chrome.titleH)/H);ox=(gfx.w-W*scale)/2;oy=Chrome.titleH-22*scale;BLT.viewport(scale,gfx.ext_retina or 1)
  mouse_x=(gfx.mouse_x-ox)/scale;mouse_y=(gfx.mouse_y-oy)/scale
 end
 function UI.poll(now,force)
+ if not Media.ready() then return end
  if A.busy or not force and now<(A.poll_at or 0) then return end;A.poll_at=now+.4
  local project=R.EnumProjects(-1,'');local rev=R.GetProjectStateChangeCount(project)
  local selected=R.GetSelectedMediaItem(project,0);local count=R.CountSelectedMediaItems(project)
@@ -2506,18 +2650,30 @@ function UI.chaos()
  A.chaos_next=mode=='bank' and 'random' or 'bank'
  UI.refresh()
 end
+-- Shared generated-audio destination. Keep project recording settings unchanged.
+local function blt_output_directory(project)
+ local root=R.GetProjectPathEx(project,'')
+ assert(type(root)=='string' and root~='' and not root:find('%z'),
+  '音声の保存先を取得できません。プロジェクトのメディア保存先を設定してください。')
+ assert(root:match('^%a:[/\\]') or root:sub(1,1)=='/' or root:sub(1,2)=='\\\\',
+  '音声の保存先が絶対パスではありません。プロジェクトのメディア保存先を確認してください。')
+ local dir=root:gsub('[/\\]+$','')..'/BLT'
+ R.RecursiveCreateDirectory(dir,0) -- Existing BLT folders are reused.
+ return dir
+end
 function UI.execute()
+ if not A.job and not A.busy and not A.batch and not Media.ready() then return end
  if A.busy then UI.cancel();return end
  if A.retrigger_on==false and A.tail_on==false then return end
  if not UI.commit_edit() then return end
  UI.poll(R.time_precise(),true);assert(A.source,A.source_problem);assert(A.plan,A.problem)
- local dir=R.GetProjectPathEx(A.project,'')..'/CR MINIM'
- R.RecursiveCreateDirectory(dir,0)
+ local dir=blt_output_directory(A.project)
  local id=R.genGuid():gsub('[^%w]','');local target=dir..'/CR_MINIM_'..id..'.wav'
  local s={};for k in pairs(Core.defaults) do s[k]=A[k] end
  A.job=Core.start(A.source,s,target);A.busy=true;A.progress=0;UI.dirty()
 end
 function UI.step()
+ if not Media.ready() then return end
  local j=A.job
  Core.validate_target(j.source)
  if not j.audio_done then j.audio_done=Core.step(j);A.progress=j.frame/j.plan.frames*.95 end
@@ -2642,6 +2798,7 @@ function UI.wave_close()
  if A.zoom_job then A.zoom_job.reader.file:close();A.zoom_job=nil end
 end
 function UI.wave_load()
+ if not Media.ready() then return end
  local p=A.source
  local signature=p and table.concat({p.path,p.offset,p.duration,p.wav.size},'|') or ''
  if signature==A.wave_signature then return end
@@ -2651,6 +2808,7 @@ function UI.wave_load()
  UI.dirty()
 end
 function UI.wave_step()
+ if not Media.ready() then return end
  UI.zoom_step()
  local j=A.wave_job;if not j then return end
  local clock=R.time_precise or os.clock;local deadline=clock()+.006
@@ -2944,12 +3102,11 @@ function UI.close()
  end
 end
 function UI.loop()
- BLT.tick(R.time_precise());PrimaryButton.tick(R.time_precise(),BLT.host.active(),PrimaryButton.wake)
-
- local k=BLT.key(gfx.getchar());if k<0 or A.closed then UI.close();return end
- local now=R.time_precise()
  UI.safe(function()
-  local flags=gfx.getchar(65537);A.active=(flags&1)==0 or (flags&2)~=0
+ local now=R.time_precise();BLT.tick(now);PrimaryButton.tick(now,BLT.host.active(),PrimaryButton.wake)
+
+ local k=BLT.key(gfx.getchar());if k<0 or A.closed then A.closing=true;return end
+   local flags=gfx.getchar(65537);A.active=(flags&1)==0 or (flags&2)~=0
   if gfx.mouse_x~=last_raw_mouse_x or gfx.mouse_y~=last_raw_mouse_y or gfx.mouse_cap~=last_raw_mouse_cap or gfx.mouse_wheel~=0 or k>0 then wake_visuals(now) end
   -- App-bar input is consumed during drawing: preserve every button edge.
   if gfx.mouse_cap~=last_raw_mouse_cap or gfx.mouse_wheel~=0 then next_draw_time=now end
@@ -2973,6 +3130,7 @@ function BLT.pick(obj,keys) local v=BLT.valueView or {};BLT.valueView=v;for k in
 PrimaryButton.painter={C=C,gradient=gradient,line=line,rect=rect,corners=finish_corners,disc=disc,label=label}
 PrimaryButton.painter.motion=function(now) return (gfx.mouse_x-ox)/scale,(gfx.mouse_y-oy)/scale,visual_speed(now) end
 PrimaryButton.wake=function() redraw_dirty=true;A.content_dirty=true;next_draw_time=0 end
+Media.state=A;Media.onchange=function() if BLT.host and BLT.host.wake then BLT.host.wake() end end
 BLT.attach({
  chaosPainter={cut=cut_panel,gradient=gradient,disc=disc,line=line,label=label},
  R=R,C=C,Chrome=Chrome,Chameleon=Chameleon,section=SECTION,faces=fonts,font=font,
@@ -2989,15 +3147,9 @@ BLT.attach({
 
 })
 if ...=='blt_test' then function BLT.testDraw(now) UI.draw(now or R.time_precise()) end end
-function BLT.drawIcon()
- flush_text_queue();
- local bs,bx,by=scale,ox,oy;ox,oy=ox+(W-102)*scale,oy+31*scale;scale=scale*.78
- UI.icon()
- flush_text_queue();
- scale,ox,oy=bs,bx,by
-end
 
-if ...=='blt_test' then return {BLT=BLT,A=A,Core=Core ,UI=UI} end
+
+if ...=='blt_test' then return {Media=Media,BLT=BLT,A=A,Core=Core ,UI=UI} end
 if ...=='ui_test' then return {Core=Core,A=A,UI=UI,Chameleon=Chameleon,palette=C} end
 local chrome_ok,chrome_err=titlebar_api_ready()
 if not chrome_ok then Language.mb(Core.display_message(chrome_err),'BLT CR MINIM | 必要な拡張',0);return end

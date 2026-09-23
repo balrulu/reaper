@@ -1,10 +1,10 @@
 -- @description LOOP RM STUDIO
--- @version 0.5.6
+-- @version 0.5.20
 -- @author Balrulu
 -- @provides
 --   . > ../
 -- @changelog
---   Increase preset capacity and show shared overflow dialogs.
+--   BLT SERIES Beta TEST UPLOAD
 -- @about
 --   BLT SERIES Beta TEST UPLOAD
 
@@ -13,6 +13,157 @@ local BLTPresetLimits={bytes=16777216,stringBytes=2097152,nodes=262144,entries=8
 function BLTPresetLimits.show(english)
  reaper.MB(english and 'Preset capacity limit exceeded. Export presets individually instead of as a bundle.' or '容量上限オーバーです。一括ではなく個別に保存してください。','BLT PRESET',0)
 end
+
+-- BLT media availability 1.0.2. Pause audio work, never the UI defer loop.
+local function create_media_gate(api,graphics)
+ local M={waiting=false,epoch=0};local P=setmetatable({}, {__index=api})
+ local accessors={};local next_check=0;local ready=true;local settle=0;local last_active
+ local function valid(project,p,kind)
+  return p and (not api.ValidatePtr2 or api.ValidatePtr2(project,p,kind))
+ end
+ local function application_active()
+  if graphics and graphics.getchar then
+   local flags=graphics.getchar(65537)
+   if flags>=0 and ((flags&1)==0 or (flags&2)~=0) then return true end
+  end
+  if not (api.JS_Window_GetForeground and api.GetMainHwnd and api.JS_Window_GetParent) then return nil end
+  local foreground=api.JS_Window_GetForeground();local main=api.GetMainHwnd()
+  for _=1,32 do
+   if not foreground then return false end
+   if foreground==main then return true end
+   local parent=api.JS_Window_GetParent(foreground)
+   if parent==foreground then return nil end;foreground=parent
+  end
+  return nil
+ end
+ local function offline(project,take)
+  -- targets() resolves or validates each pointer in this same defer pass.
+  if not take then return false end
+  if api.TakeIsMIDI and api.TakeIsMIDI(take) then return false end
+  if not api.GetMediaItemTake_Source then return false end
+  local source=api.GetMediaItemTake_Source(take);local seen={}
+  for _=1,32 do
+   if not source or seen[source] then break end;seen[source]=true
+   local is_offline=false
+   if api.CF_GetMediaSourceOnline then
+    is_offline=not api.CF_GetMediaSourceOnline(source)
+   elseif api.GetMediaSourceSampleRate and api.GetMediaSourceNumChannels then
+    is_offline=api.GetMediaSourceSampleRate(source)<=0 or api.GetMediaSourceNumChannels(source)<=0
+   end
+   if is_offline then
+    local file=api.GetMediaSourceFileName and api.GetMediaSourceFileName(source,'') or ''
+    if file~='' and (not api.file_exists or api.file_exists(file)) then return true end
+   end
+   source=api.GetMediaSourceParent and api.GetMediaSourceParent(source) or nil
+  end
+  return false
+ end
+ local fields={'info','v','source','snapshot','plans','items','list','queue','entries','reader','data','p','left','right','parts','sources','source_items'}
+ local function targets(project,all_items)
+  local takes,seen,items={},{},{};local invalid=false
+  local function item(p,fresh)
+   if p and items[p] then return end
+   if not p or (not fresh and not valid(project,p,'MediaItem*')) then invalid=true;return end
+   items[p]=true
+   local take=api.GetActiveTake and api.GetActiveTake(p)
+   if take then takes[take]=true end
+  end
+  local function visit(v,depth)
+   if type(v)~='table' or seen[v] or depth>12 then return end;seen[v]=true
+   if v.project and v.project~=project then invalid=true;return end
+   if v.item then item(v.item) end
+   if v.take then
+    if takes[v.take] or valid(project,v.take,'MediaItem_Take*') then takes[v.take]=true else invalid=true end
+   end
+   if v.temp_take and (takes[v.temp_take] or valid(project,v.temp_take,'MediaItem_Take*')) then takes[v.temp_take]=true end
+   for _,key in ipairs(fields) do visit(v[key],depth+1) end
+   for _,entry in ipairs(v) do if type(entry)=='table' then visit(entry,depth+1) end end
+  end
+  if api.CountSelectedMediaItems and api.GetSelectedMediaItem then
+   for i=0,api.CountSelectedMediaItems(project)-1 do item(api.GetSelectedMediaItem(project,i),true) end
+  end
+  local a=M.state
+  if a then
+   for _,key in ipairs({'job','analysis','batch','source_job','wave_job','pjob','xjob','ajob'}) do visit(a[key],0) end
+   if a.job or a.batch or a.source_job then visit(a.items,0);visit(a.queue,0) end
+  end
+  if (all_items or (M.all_items and M.state and M.state.job)) and api.CountMediaItems and api.GetMediaItem then
+   for i=0,api.CountMediaItems(project)-1 do item(api.GetMediaItem(project,i),true) end
+  end
+  return takes,invalid
+ end
+ function M.ready(force,all_items)
+  local now=api.time_precise()
+  if not force and now<next_check then return ready end
+  next_check=now+.10
+  local project=api.EnumProjects(-1,'')
+  local takes,invalid=targets(project,all_items);local blocked=false
+  if M.state and M.state.project and M.state.project~=project then invalid=true end
+  if not invalid then
+   if next(takes) and not api.CF_GetMediaSourceOnline and application_active()==false then blocked=true
+   else for take in pairs(takes) do if offline(project,take) then blocked=true;break end end end
+  end
+  if invalid or not next(takes) then settle=0 end
+  if blocked then settle=now+.25 end
+  local waiting=not invalid and (blocked or now<settle)
+  ready=not waiting
+  if waiting~=M.waiting then
+   M.waiting=waiting;if not waiting then M.epoch=M.epoch+1 end
+   if M.onchange then M.onchange() end
+  end
+  return ready
+ end
+ function M.tick()
+  local active=application_active()
+  if active~=last_active then next_check=0;last_active=active end
+  return M.ready()
+ end
+ function M.message(section)
+  return api.GetExtState(section,'ui_language')=='EN' and 'Waiting for media to come online…' or 'メディアのオンライン復帰を待っています…'
+ end
+ local function signature(take)
+  if not (api.GetMediaItemTake_Item and api.GetItemStateChunk) then return nil end
+  local item=api.GetMediaItemTake_Item(take);if not item then return nil end
+  local ok,chunk=api.GetItemStateChunk(item,'',false)
+  return ok and chunk or nil
+ end
+ if api.CreateTakeAudioAccessor then
+  function P.CreateTakeAudioAccessor(take)
+   local aa=api.CreateTakeAudioAccessor(take)
+   if aa then accessors[aa]={take=take,project=api.EnumProjects(-1,''),signature=signature(take),revision=api.GetProjectStateChangeCount and api.GetProjectStateChangeCount(api.EnumProjects(-1,'')),epoch=M.epoch} end
+   return aa
+  end
+ end
+ if api.CreateTrackAudioAccessor then
+  function P.CreateTrackAudioAccessor(track)
+   local aa=api.CreateTrackAudioAccessor(track);local project=api.EnumProjects(-1,'')
+   if aa then accessors[aa]={track=track,project=project,revision=api.GetProjectStateChangeCount(project),epoch=M.epoch} end
+   return aa
+  end
+ end
+ local function resume(aa)
+  local state=accessors[aa]
+  if not state or state.epoch==M.epoch or M.waiting then return end
+  state.epoch=M.epoch
+  if api.EnumProjects(-1,'')~=state.project then return end
+  local unchanged=state.take and valid(state.project,state.take,'MediaItem_Take*') and state.signature and signature(state.take)==state.signature
+  if state.take and state.revision and api.GetProjectStateChangeCount(state.project)~=state.revision then unchanged=false end
+  if state.track then unchanged=valid(state.project,state.track,'MediaTrack*') and api.GetProjectStateChangeCount(state.project)==state.revision end
+  if unchanged and api.AudioAccessorUpdate then api.AudioAccessorUpdate(aa) end
+ end
+ if api.AudioAccessorStateChanged then
+  function P.AudioAccessorStateChanged(aa) resume(aa);return api.AudioAccessorStateChanged(aa) end
+ end
+ if api.GetAudioAccessorSamples then
+  function P.GetAudioAccessorSamples(...) local aa=...;resume(aa);return api.GetAudioAccessorSamples(...) end
+ end
+ if api.DestroyAudioAccessor then
+  function P.DestroyAudioAccessor(aa) accessors[aa]=nil;return api.DestroyAudioAccessor(aa) end
+ end
+ return M,P
+end
+local Media,reaper=create_media_gate(reaper,gfx)
+
 
 -- BLT window geometry 1.0.0. Embedded; screen coordinates only.
 local function create_window_geometry(api,graphics)
@@ -95,6 +246,19 @@ end
 
 -- Latest embedded application catalog.
 local LanguageCatalog={en={
+ ['レンダリングの準備中…']='Preparing render...',
+ ['書き出し範囲と埋め込み情報を確認しています…']='Checking render ranges and metadata...',
+ ['出力先とファイル名を準備しています…']='Preparing output folder and file name...',
+ ['REAPERでレンダリング中… 詳細な進捗は標準レンダラーに表示されます。']='Rendering in REAPER... Detailed progress is shown in the native renderer.',
+ ['レンダーされたWAVを確認しています…']='Checking rendered WAV...',
+ ['音声と区間情報を書き込んでいます…']='Writing audio and region metadata...',
+ ['書き出し結果を検証しています…']='Verifying exported WAV...',
+ ['一時WAVを整理しています…']='Cleaning up temporary WAV...',
+ ['書き出しを中止しました。']='Export cancelled.',
+ ['前回の一時WAVを削除できません。再試行してください。']='Cannot remove the previous temporary WAV. Retry.',
+ ['一時WAVを削除できないため、一括書き出しを停止しました。完了済み: %d / %d件。']='Batch export stopped because a temporary WAV could not be removed. Completed: %d / %d.',
+ ['工程全体の進捗です。標準レンダー中の詳細はREAPERのレンダラーに表示されます。']='Overall stage progress. Detailed native render progress is shown in REAPER.',
+ ['書き出しを中止。完成済みのWAVは保持します。']='Cancel export. Keep completed WAV files.',
  ["ファクトリーデフォルト"]="Factory Default",
  ["ファクトリーデフォルトは変更できません。"]="Factory Default is read-only.",
  ["「"]="\"",
@@ -147,7 +311,9 @@ local LanguageCatalog={en={
  ["間隔により挿入位置がプロジェクト先頭より前になります。"]="Spacing would place content before project start.",
  ["基準幅は0より大きい値で指定してください。秒は mm:ss または hh:mm:ss も使えます。"]="Base width must be positive. Seconds also accept mm:ss or hh:mm:ss.",
  ["間隔補正は-864000〜864000秒で指定してください。秒は -mm:ss または -hh:mm:ss も使えます。"]="Gap offset must be -864000 to 864000 seconds. -mm:ss or -hh:mm:ss is also accepted.",
- ["個数は1〜1000の整数で指定してください。"]="Count must be an integer from 1 to 1000.",
+ ["個数は0〜1000の整数で指定してください（0＝A：自動）。"]="Count must be an integer from 0 to 1000 (0 = A: automatic).",
+ ["クリック入力 / 上下ドラッグ / ホイール。0＝A：選択時間÷（基準幅＋間隔補正）の整数部分を自動挿入。計算できない場合は1個、最大1000個。"]="Click to type / Drag vertically / Wheel. 0 = A: insert the whole-number count from time-selection duration / (base width + gap offset). Use 1 if unavailable; maximum 1000.",
+ ["自動個数が1000個を超えるため、1000個に制限して挿入しました。"]="Automatic count exceeded 1000; insertion was limited to 1000.",
  ["基準幅の単位が不正です。"]="Invalid base width unit.",
  ["基準幅の値が不正です。"]="Invalid base width value.",
  ["間隔補正の単位が不正です。"]="Invalid gap offset unit.",
@@ -194,6 +360,7 @@ local LanguageCatalog={en={
  ["出力先は新しいWAVファイルを指定してください。"]="Choose a new WAV file as the destination.",
  ["レンダーのサンプルレートが一致しません。"]="Render sample rate mismatch.",
  ["レンダーの長さが一致しません。\n指定範囲: %.9f ～ %.9f 秒\n予定: %d samples (%.9f 秒)\n実際: %d samples (%.9f 秒)\n差: %+d samples / %+.6f ms\nサンプルレート: %d Hz"]="Render duration mismatch.\nRange: %.9f to %.9f s\nExpected: %d samples (%.9f s)\nActual: %d samples (%.9f s)\nDifference: %+d samples / %+.6f ms\nSample rate: %d Hz",
+ ["レンダー音声に必要な切り出し範囲が含まれていません。"]="Rendered audio does not contain the complete required slice.",
  ["メタデータが実際のWAV終端を超えています。"]="Metadata exceeds the actual WAV end.",
  ["BWF時刻が上限を超えています。"]="BWF time exceeds limit.",
  ["4 GiBを超えるWAVには対応していません。"]="WAV files over 4 GiB are unsupported.",
@@ -320,7 +487,7 @@ local LanguageCatalog={en={
  ["波形を見る音声アイテムを選択してください。"]="Select audio items to view the waveform.",
  ["対象リージョンと重なる音声アイテムは同じトラックから選択してください。"]="Select audio overlapping the target region from one track.",
  ["選択したサステインと重なる音声アイテムを選択してください。"]="Select audio overlapping the selected sustain.",
- ["選択アイテムが離れた複数の素材群に分かれています。対象を分けて選択してください。"]="Selected items form separate groups. Select targets separately.",
+ ["選択アイテムが離れた複数の素材群に分かれています。対象を分けて選択してください。"]="Selected items form separate blocks. Select targets separately.",
  ["選択アイテムを対象トラック上で確認できませんでした。"]="Cannot find selected items on target track.",
  ["サステイン全体を覆う、隙間のない連続音声アイテムを同じトラックに配置してください。"]="Place contiguous audio covering the full sustain on one track.",
  ["仮想素材として扱える連続アイテムは1000個までです。"]="Virtual source supports at most 1000 contiguous items.",
@@ -539,6 +706,8 @@ local LanguageCatalog={en={
  ["プリセットを読み込みました: ファクトリーデフォルト"]="Loaded: Factory Default",
  ["選択中のトラック / バスを指定"]="Use selected track / bus",
 },patterns={
+ {"^処理中  (%d+)/(%d+)$","Processing  %d/%d"},
+ {"^一時WAVを削除できないため、一括書き出しを停止しました。完了済み: (%d+) / (%d+)件。$","Batch export stopped because a temporary WAV could not be removed. Completed: %d / %d."},
  {"^「(.*)」を上書きしますか？$","Overwrite \"%s\"?"},
  {"^([%+%-]?[%d%.eE]+)–([%+%-]?[%d%.eE]+) / ([%+%-]?[%d%.eE]+)   スクロールで選択$","%d–%d / %d   Scroll to browse"},
  {"^解析中%.%.%.([%+%-]?[%d%.eE]+)%%$","Analyzing...%d%%"},
@@ -614,9 +783,9 @@ local LanguageCatalog={en={
 
 LanguageCatalog.en["選択アイテム"]="Selected items"
 LanguageCatalog.en["個別"]="Each"
-LanguageCatalog.en["グループ"]="Groups"
+LanguageCatalog.en["ブロック"]="Blocks"
 LanguageCatalog.en["全体"]="All"
-LanguageCatalog.en["選択アイテム（グループ）"]="Selected item groups"
+LanguageCatalog.en["選択アイテム（ブロック）"]="Selected item blocks"
 LanguageCatalog.en["選択アイテムから配置範囲を作成"]="Build ranges from selected items"
 
 local Language=create_language(reaper,"BLT_REGION_FORGE",LanguageCatalog)
@@ -766,12 +935,7 @@ function B.unpack(data)
  end
  local ok,v=pcall(read,0);if capacity then BLTPresetLimits.show(Language.code=='EN') end;if ok and at==#data+1 then return v end
 end
-function B.cleanText(text)
- text=tostring(text);B.cleanCache=B.cleanCache or {};local v=B.cleanCache[text];if v then return v end
- v=text:gsub('[%z\1-\31\127]',' ')
- B.cleanCount=(B.cleanCount or 0)+1;if B.cleanCount>512 then B.cleanCache={};B.cleanCount=1 end
- B.cleanCache[text]=v;return v
-end
+
 function B.publicError(value,fallback)
  local text=tostring(value or '')
  text=text:match('^(.-)\nstack traceback:') or text
@@ -1011,12 +1175,7 @@ function B.requireInput(ime)
  if not ok or type(api)~='table' then B.inputNotice();return false end
  ime.api=api;return true
 end
-function B.switch(x,y,state,enabled)
- local s,bx,by=host.geometry();local cy=by+(y+12)*s;local cx=bx+(x+7+12*state)*s
- local c=C.edge2;gfx.set(c[1],c[2],c[3],enabled and .45 or .2);gfx.line(bx+(x+3)*s,cy,bx+(x+23)*s,cy,1)
- c=C.faint;gfx.set(c[1],c[2],c[3],enabled and .8 or .4);gfx.circle(cx,cy,4.2*s,1,1)
- if state>.001 and enabled then c=C.accent;gfx.set(c[1],c[2],c[3],.06*state);gfx.circle(cx,cy,7*s,1,1);c=C.accent2;gfx.set(c[1],c[2],c[3],.94*state);gfx.circle(cx,cy,4.2*s,1,1) end
-end
+
 function B.blend(dt)
  if B.blendDt~=dt then B.blendDt=dt;B.blendValue=1-math.exp(-12*dt) end
  return B.blendValue
@@ -1301,8 +1460,6 @@ local function custom_titlebar(blocked)
   end
   local rcx,rcy=resetX+resetW*.5,Chrome.titleH*.5
   local rcol=hoverReset and Chrome.mint or C.muted
-
-  -- Reference-style outlined window; arrow explicitly points LOWER LEFT.
   gfx.set(rcol[1],rcol[2],rcol[3],hoverReset and .98 or .82)
   gfx.roundrect(rcx-6,rcy-6,12,12,1,1)
   gfx.line(rcx+3,rcy-3,rcx-3,rcy+3,1)
@@ -1432,6 +1589,7 @@ local project_undo=create_project_undo(R,{
  after=function(project) if host.undoRefresh then host.undoRefresh(project) end;wake_visuals() end,
 })
 function B.key(k)
+ if k<0 then return k end
  if Presets.open then Presets.key(k);return 0 end
  if host and not host.localUndo then
   if host.undoAction then
@@ -1445,6 +1603,7 @@ function B.key(k)
  return k
 end
 function B.tick(now)
+ Media.tick()
  if not host then return end
  if B.windowW~=gfx.w or B.windowH~=gfx.h then B.windowW,B.windowH=gfx.w,gfx.h;B.lastRect=nil;wake_visuals() end
  B.viewport(host.geometry(),gfx.ext_retina or 1)
@@ -1498,13 +1657,26 @@ function B.cleanup(fn,...)
 end
 function B.recoverInput(state,err)
  gfx.dest=-1;gfx.mode=0;gfx.a=1
- for _,key in ipairs({'drag','number_drag','pointer_capture','field_drag','fieldDrag','curve_drag','scroll_drag','seam_drag','seam_hold','pressed','popup','name_dialog','duplicate_modal'}) do state[key]=nil end
+ for _,key in ipairs({'drag','number_drag','pointer_capture','field_drag','fieldDrag','scrollDrag','source_wave_drag','curve_drag','scroll_drag','seam_drag','seam_hold','pressed','popup','name_dialog','duplicate_modal'}) do state[key]=nil end
  if host.cancelEdit then B.cleanup(host.cancelEdit) end
- Presets.open=false;Presets.swallow=false
+ Presets.open=false;Presets.swallow=false;Presets.pressed=nil;Presets.hoverSince=nil
+ Chrome.drag=nil;Chrome.resize=nil
+ if host.cursor then B.cleanup(host.cursor,nil) end
  B.recoveryMode=true
  local ok,why=pcall(B.bar)
  B.recoveryMode=nil
- if not ok then B.logError(why) end
+ if not ok then
+  B.logError(why)
+  -- A failed font, preset or theme draw must still allow closing the window.
+  local down=((gfx.mouse_cap or 0)&1)~=0
+  local hit=gfx.mouse_y>=0 and gfx.mouse_y<26 and gfx.mouse_x>=gfx.w-38 and gfx.mouse_x<gfx.w
+  if down and not B.emergencyDown then B.emergencyClose=hit end
+  if not down and B.emergencyDown then
+   if B.emergencyClose and hit then Chrome.requestClose=true end
+   B.emergencyClose=nil
+  end
+  B.emergencyDown=down
+ else B.emergencyDown=nil;B.emergencyClose=nil end
  pcall(B.footer,B.publicError(err),true,gfx.w,0,B.footerVersion or '')
  pcall(gfx.update)
  if Chrome.requestClose then state.closing=true end
@@ -1519,33 +1691,10 @@ function B.title(title,subtitle,width,divider)
  B.font(10,1,false,scale,host.faces);gfx.set(C.accent2[1],C.accent2[2],C.accent2[3],1);gfx.x=ox+26*scale;gfx.y=origin+44*scale;gfx.drawstr(UI.fit(Language.text(subtitle),(width-155)*scale))
  if divider~=false then gfx.set(C.edge2[1],C.edge2[2],C.edge2[3],.26);gfx.line(ox+24*scale,origin+62*scale,ox+(width-24)*scale,origin+62*scale,1) end
 end
-function B.chaosButton(cx,cy,cw,ch,enabled,hot,pushed,time,glow)
- local d=host.chaosPainter
- local violet=Chameleon.enabled and C.accent2 or B.chaosViolet
- local ember=Chameleon.enabled and C.accent or B.chaosEmber
- local pale=Chameleon.enabled and C.text or B.chaosPale
- local surface=Chameleon.enabled and C.field or B.chaosSurface
- local alive=enabled and 1 or .25
- local breath=(.5+.5*math.sin(time*.85))*alive
- local y=cy+(pushed and 1 or 0);local center=ch/2
- -- Keep both the outer glow and the pressed face inside the registered bounds.
- d.cut(cx,cy,cw,ch,11,violet,.025*alive,violet,.10+.07*breath)
- d.cut(cx,y+2,cw,ch-4,9,surface,1,violet,(.45+.3*glow)*alive)
- d.gradient(cx+2,y+4,cw-4,ch-8,violet,C.bg,.12+.15*glow,.015,true)
- for i=1,6 do
-  local phase=time*.3+i*1.7;local px=cx+12+(i-1)*(cw-29)/5
-  local py=y+center+math.sin(phase)*(center-6)
-  local alpha=(.18+.22*math.sin(phase*.7)^2)*alive
-  if px<cx+36 or px>cx+cw-36 or math.abs(py-y-center)>11 then
-   d.disc(px,py,3,violet,alpha*.08);d.disc(px,py,.7,i%2==0 and ember or pale,alpha)
-  end
- end
- d.line(cx+cw*.335,y+ch-5,cx+cw*.665,y+ch-5,violet,(.18+.22*breath+.2*glow)*alive)
- d.label('C H A O S',cx+24,y+center-9,17,enabled and pale or C.faint,2,cw-48,22,1,true)
-end
-B.chaosViolet={.62,.23,.94};B.chaosEmber={.92,.27,.65};B.chaosPale={.87,.69,1};B.chaosSurface={.038,.014,.068}
+
 
 function B.footer(message,bad,width,height,version,progress)
+ if Media.waiting then message=Media.message(host.section);bad=false;progress=nil end
  if version~='' then B.footerVersion=version end
  scale,ox,oy=host.geometry();message=Language.message(B.notice or tostring(message or ''))
  if B.notice then bad=B.noticeBad end
@@ -1583,12 +1732,13 @@ local function optional_number(fn,...)
  local ok,value=pcall(fn,...)
  return ok and finite(value) and value or nil
 end
-local Core={VERSION='0.5.6',SECTION='BLT_REGION_FORGE',MAX_METADATA=16*1024*1024,SEAM_SECONDS=.006,SEAM_DRAG_SECONDS=.250,
+local Core={VERSION='0.5.20',SECTION='BLT_REGION_FORGE',MAX_METADATA=16*1024*1024,SEAM_SECONDS=.006,SEAM_DRAG_SECONDS=.250,
  PERIOD_ANALYSIS_MIN=7,PERIOD_ANALYSIS_MAX=100,CROSSFADE_GUARD_FRAMES=1024}
 Core.PERIOD_FAILURE='[BLT:PERIOD_FAILURE]'
 -- REAPER's stock rate list (also verified in the installed executable).
 Core.sample_rates={8000,11025,16000,22050,32000,44100,48000,88200,96000,176400,192000}
 Core.channel_options={1,2,4,6,8}
+Core.count_spec={0,1000,true,1,0}
 Core.length_specs={
  seconds={.001,864000,false,1,3,1},
  beats={.001,100000,false,1,3,1},bars={1,10000,true,1,0,1},grid={1,100000,true,1,0,1}
@@ -1655,25 +1805,84 @@ function Core.selected_project_regions(project,rows)
  table.sort(selected,function(a,b) return (order[a] or math.huge)<(order[b] or math.huge) end)
  return selected,table.concat(selected,':')
 end
-function Core.selected_project_region(project,rows)
- local selected,signature=Core.selected_project_regions(project,rows)
- if #selected==1 then return selected[1],nil,signature end
- if #selected>1 then return nil,'REAPERで選択するリージョンは1つにしてください。',signature end
- return nil,nil,signature
+
+function Core.read_grid(project)
+ local _,division,mode,swing=R.GetSetProjectGrid(project,false)
+ mode=mode or 0
+ if mode==3 then return {mode='measure'} end
+ if not finite(division) or division<=0 or not finite(division*4) then
+  return nil,"現在のグリッド設定を取得できません。"
+ end
+ if mode==1 and (not finite(swing) or swing < -1 or swing > 1) then
+  return nil,"現在のグリッド設定を取得できません。"
+ end
+ return {mode=mode==1 and 'swing' or 'straight',qn=division*4,swing=mode==1 and swing or 0}
 end
-function Core.grid_qn(project)
- local _,division=R.GetSetProjectGrid(project,false)
- assert(finite(division) and division>0,'現在のグリッド設定を取得できません。')
- -- GetSetProjectGrid uses whole-note units; TimeMap2_* uses quarter notes.
- return division*4
+
+local function measure_at(project,qn)
+ local index,first,last=R.TimeMap_QNToMeasures(project,qn)
+ if not finite(index) or not finite(first) or not finite(last) or last<=first then return nil end
+ return index,first,last
 end
-function Core.advance(project,origin,amount,unit,grid_qn)
+
+-- Piecewise grid coordinates retain the reference's position between grid lines.
+local function swing_map(project,qn,grid,inverse)
+ local _,first,last=measure_at(project,qn)
+ if not first then return nil end
+ local step=grid.qn
+ local function knot(i)
+  local straight=math.min(last,first+i*step)
+  if straight>=last then return last end
+  return math.min(last,straight+(i%2)*step*grid.swing*.5)
+ end
+ local index=math.max(0,math.floor((qn-first)/step))
+ if inverse then
+  if knot(index)>qn then index=math.max(0,index-1)
+  elseif knot(index+1)<=qn then index=index+1 end
+  local lo,hi=knot(index),knot(index+1)
+  if hi<=lo then return nil end
+  local a,b=math.min(last,first+index*step),math.min(last,first+(index+1)*step)
+  return a+(qn-lo)/(hi-lo)*(b-a)
+ end
+ local a,b=first+index*step,math.min(last,first+(index+1)*step)
+ if b<=a then return nil end
+ return knot(index)+(qn-a)/(b-a)*(knot(index+1)-knot(index))
+end
+
+function Core.advance_grid(project,reference,amount,unit,grid)
+ if amount==0 then return reference end
+ if unit~='grid' then return reference+amount end
+ local qn=R.TimeMap2_timeToQN(project,reference)
+ if not finite(qn) then return nil end
+ local target
+ if grid.mode=='measure' then
+  local index,first,last=measure_at(project,qn)
+  if not index then return nil end
+  local coordinate=index+(qn-first)/(last-first)+amount
+  local next_index=math.floor(coordinate)
+  local _,a,b=R.TimeMap_GetMeasureInfo(project,next_index)
+  if not finite(a) or not finite(b) or b<=a then return nil end
+  target=a+(coordinate-next_index)*(b-a)
+ elseif grid.mode=='swing' and grid.swing~=0 then
+  local straight=swing_map(project,qn,grid,true)
+  if not straight then return nil end
+  target=swing_map(project,straight+amount*grid.qn,grid,false)
+ else
+  target=qn+amount*grid.qn
+ end
+ if not finite(target) then return nil end
+ return R.TimeMap2_QNToTime(project,target)
+end
+
+function Core.advance(project,origin,amount,unit,grid)
  assert(finite(origin) and finite(amount),'基準幅／間隔補正が不正です。')
  if unit=='seconds' then return origin+amount end
  if unit=='grid' then
-  local qn=R.TimeMap2_timeToQN(project,origin)
-  assert(finite(qn),'グリッド位置を取得できません。')
-  return R.TimeMap2_QNToTime(project,qn+amount*(grid_qn or Core.grid_qn(project)))
+  if amount==0 then return origin end
+  grid=grid or assert(Core.read_grid(project))
+  local target=Core.advance_grid(project,origin,amount,unit,grid)
+  assert(finite(target),'グリッド位置を取得できません。')
+  return target
  end
  if amount==0 then return origin end
  local beat,measure,numerator,fullbeats=R.TimeMap2_timeToBeats(project,origin)
@@ -1707,46 +1916,78 @@ function Core.duration(text,unit)
  assert(finite(v) and v>0 and v<=864000,'基準幅は0より大きい値で指定してください。秒は mm:ss または hh:mm:ss も使えます。')
  return v
 end
-function Core.interval_duration(text,unit)
- local v=time_number(text,unit)
- assert(finite(v) and abs(v)<=864000,'間隔補正は-864000〜864000秒で指定してください。秒は -mm:ss または -hh:mm:ss も使えます。')
- return v
-end
--- Shared overlap grouping: positive overlap, transitive across all tracks.
-function Core.overlap_groups(ranges)
+
+-- Shared overlap block formation: positive overlap, transitive across all tracks.
+function Core.overlap_blocks(ranges)
  local sorted={};for i,r in ipairs(ranges) do sorted[i]=r end
  table.sort(sorted,function(a,b) return a.start==b.start and a.finish<b.finish or a.start<b.start end)
- local groups={}
+ local blocks={}
  for _,r in ipairs(sorted) do
-  local g=groups[#groups]
-  if not g or r.start>=g.finish then g={start=r.start,finish=r.finish,members={}};groups[#groups+1]=g end
+  local g=blocks[#blocks]
+  if not g or r.start>=g.finish then g={start=r.start,finish=r.finish,members={}};blocks[#blocks+1]=g end
   g.finish=math.max(g.finish,r.finish);g.members[#g.members+1]=r
  end
- return groups
+ return blocks
+end
+
+-- Count complete base-width + gap cycles in a window with the selection's
+-- duration, anchored at the insertion cursor. Reading here keeps A live between
+-- insertions without adding background polling or retained range caches.
+function Core.auto_insert_count(project,cursor,length,unit,interval,interval_unit,grid)
+ local first,last=R.GetSet_LoopTimeRange2(project,false,false,0,0,false)
+ if not finite(first) or not finite(last) then return 1,false end
+ local duration=last-first
+ if not finite(duration) or duration<=0 then return 1,false end
+ local limit=Core.count_spec[2]
+ if unit=='seconds' and (interval_unit=='seconds' or interval==0) then
+  local step=length+interval
+  if not finite(step) or step<=0 then return 1,false end
+  local quotient=duration/step
+  if not finite(quotient) then return 1,false end
+  -- Correct only floating-point boundary noise, never a meaningful remainder.
+  local tolerance=min(1e-7,max(1,abs(first),abs(last),duration)*2^-48/step)
+  local count=max(1,floor(quotient+tolerance))
+  return min(limit,count),count>limit
+ end
+ -- Reuse the placement map for musical/mixed units: tempo, meter and swing can
+ -- make successive cycles differ in seconds. A fixed 1001-step budget prevents
+ -- runaway work even for tiny positive spacing or malformed tempo data.
+ local start=cursor;local count=0
+ for i=1,limit+1 do
+  local nominal_end=Core.advance(project,start,length,unit,grid)
+  local ok,next_start=pcall(Core.advance,project,nominal_end,interval,interval_unit,grid)
+  if not ok or not finite(next_start) then return 1,false end
+  local epsilon=max(1,abs(start),abs(nominal_end),abs(next_start))*2^-48
+  if next_start-start<=epsilon then return 1,false end
+  local tolerance=max(epsilon*i,max(1,abs(first),abs(last))*2^-48)
+  if next_start-cursor>duration+tolerance then break end
+  count=i;start=next_start
+ end
+ return max(1,min(limit,count)),count>limit
 end
 
 function Core.add_ranges(project,mode,kind,length,unit,count,interval,interval_unit)
  local ranges={}
  if mode=='cursor' then
-  assert(finite(count) and count>=1 and count<=1000 and count%1==0,'個数は1〜1000の整数で指定してください。')
+  assert(finite(count) and count>=Core.count_spec[1] and count<=Core.count_spec[2] and count%1==0,'個数は0〜1000の整数で指定してください（0＝A：自動）。')
   local spec=Core.length_specs[unit];assert(spec,'基準幅の単位が不正です。')
   assert(finite(length) and length>=spec[1] and length<=spec[2] and (not spec[3] or length%1==0),'基準幅の値が不正です。')
   interval=interval or 0;interval_unit=interval_unit or unit
   local interval_spec=Core.interval_specs[interval_unit];assert(interval_spec,'間隔補正の単位が不正です。')
   assert(finite(interval) and interval>=interval_spec[1] and interval<=interval_spec[2]
    and (not interval_spec[3] or interval%1==0),'間隔補正の値が不正です。')
-  local length_grid=unit=='grid' and Core.grid_qn(project) or nil
-  local interval_grid=interval_unit=='grid' and Core.grid_qn(project) or nil
+  local grid=(unit=='grid' or (interval_unit=='grid' and interval~=0)) and assert(Core.read_grid(project)) or nil
   local cursor=R.GetCursorPositionEx(project);local s=cursor
+  if count==0 then count,ranges.auto_limited=Core.auto_insert_count(project,cursor,length,unit,interval,interval_unit,grid) end
   for i=0,count-1 do
    -- Markers remain points, but their next-position pitch keeps the same
    -- notional length used before interval support was added.
-   local nominal_end=Core.advance(project,s,length,unit,length_grid)
+   local nominal_end=Core.advance(project,s,length,unit,grid)
    local e=kind=='marker' and s or nominal_end
    ranges[#ranges+1]={start=s,finish=e}
-   if i<count-1 then s=Core.advance(project,nominal_end,interval,interval_unit,interval_grid) end
+   if i<count-1 then s=Core.advance(project,nominal_end,interval,interval_unit,grid) end
   end
- elseif mode=='items' or mode=='itemspan' or mode=='itemgroups' then
+ elseif mode=='items' or mode=='itemspan' or mode=='itemblocks' then
   local n=R.CountSelectedMediaItems(project);assert(n>0,'アイテムを選択してください。');assert(n<=1000,'選択アイテムは1000個までにしてください。')
   for i=0,n-1 do
    local item=R.GetSelectedMediaItem(project,i)
@@ -1755,7 +1996,7 @@ function Core.add_ranges(project,mode,kind,length,unit,count,interval,interval_u
    ranges[#ranges+1]={start=s,finish=s+len}
   end
   table.sort(ranges,function(a,b) return a.start==b.start and a.finish<b.finish or a.start<b.start end)
-  if mode=='itemgroups' then ranges=Core.overlap_groups(ranges)
+  if mode=='itemblocks' then ranges=Core.overlap_blocks(ranges)
   elseif mode=='itemspan' then
    local finish=ranges[1].finish;for _,r in ipairs(ranges) do finish=max(finish,r.finish) end
    ranges={{start=ranges[1].start,finish=finish}}
@@ -1978,9 +2219,12 @@ function Core.copy_start(source,target,p)
  local wav=Core.scan(source)
  assert(wav.sr==p.sr,'レンダーのサンプルレートが一致しません。')
  local window=p.render_window or {frames=p.frames,pre=0}
- assert(wav.frames==window.frames,string.format('レンダーの長さが一致しません。\n指定範囲: %.9f ～ %.9f 秒\n予定: %d samples (%.9f 秒)\n実際: %d samples (%.9f 秒)\n差: %+d samples / %+.6f ms\nサンプルレート: %d Hz',window.start or p.start,window.finish or p.finish,window.frames,window.frames/p.sr,wav.frames,wav.frames/wav.sr,wav.frames-window.frames,(wav.frames-window.frames)*1000/p.sr,p.sr))
- -- Never publish a WAV whose audio length differs from its sample-based plan.
- for _,e in ipairs(p.entries) do assert(e.start<=wav.frames and e.finish<=wav.frames,'メタデータが実際のWAV終端を超えています。') end
+ -- Tolerate only +/-1 frame in the intermediate render; keep the final slice unchanged.
+ assert(abs(wav.frames-window.frames)<=1,string.format('レンダーの長さが一致しません。\n指定範囲: %.9f ～ %.9f 秒\n予定: %d samples (%.9f 秒)\n実際: %d samples (%.9f 秒)\n差: %+d samples / %+.6f ms\nサンプルレート: %d Hz',window.start or p.start,window.finish or p.finish,window.frames,window.frames/p.sr,wav.frames,wav.frames/wav.sr,wav.frames-window.frames,(wav.frames-window.frames)*1000/p.sr,p.sr))
+ -- The complete slice must remain inside audio data, never padding or following chunks.
+ assert(window.pre+p.frames<=wav.frames,'レンダー音声に必要な切り出し範囲が含まれていません。')
+ -- Metadata is relative to the final WAV, not the padded intermediate render.
+ for _,e in ipairs(p.entries) do assert(e.start<=p.frames and e.finish<=p.frames,'メタデータが実際のWAV終端を超えています。') end
  local blob=Core.metadata(p);local keep={};local size=12+#blob
  local function add(c) keep[#keep+1]=c;size=size+c.total end
  local function bytes(data) add({bytes=data,total=#data}) end
@@ -2146,7 +2390,7 @@ function Core.add_names(kind,name,count,numbering,start)
  local names={}
  for i=1,count do
   local text=name
-  if numbering then text=text..(text~='' and '_' or '')..string.format('%0'..width..'d',first+i-1) end
+  if numbering then text=text..string.format('%0'..width..'d',first+i-1) end
   local raw=(Core.tags[kind] and kind~='region') and (Core.tags[kind]..(text~='' and ' '..text or '')) or text
   if kind=='region' then local k=Core.classify(true,text);if k~='region' then raw=Core.tags.region..' '..text end end
   names[i]=raw
@@ -2692,7 +2936,7 @@ function Core.loop_adjust_start(project,rows,mode,edge,direction,items_override,
  assert(count>0 and count<=1000,'音声アイテムを選択してください。')
  local j={project=project,revision=R.GetProjectStateChangeCount(project),plans={},index=1,window=1,at=0,done=0,total=0,mode=mode,edge=edge,direction=direction,relative=relative==true and edge~=nil}
  local target_row=#rows==1 and rows[1].kind=='sustain' and rows[1] or nil
- local groups,by_row={},{}
+ local blocks,by_row={},{}
  for i=0,count-1 do
   local item=items_override and items_override[i+1] or R.GetSelectedMediaItem(project,i)
   local pos=R.GetMediaItemInfo_Value(item,'D_POSITION');local length=R.GetMediaItemInfo_Value(item,'D_LENGTH')
@@ -2703,13 +2947,13 @@ function Core.loop_adjust_start(project,rows,mode,edge,direction,items_override,
   end end end
   assert(row,'選択アイテムと重なるサステインがありません。')
   local key=row.key or tostring(row);local g=by_row[key]
-  if not g then g={row=row,items={}};by_row[key]=g;groups[#groups+1]=g end
+  if not g then g={row=row,items={}};by_row[key]=g;blocks[#blocks+1]=g end
   g.items[#g.items+1]={item=item,pos=pos,ending=ending}
  end
- table.sort(groups,function(a,b) return a.row.start==b.row.start and a.row.finish<b.row.finish or a.row.start<b.row.start end)
- local function plan_for(group)
+ table.sort(blocks,function(a,b) return a.row.start==b.row.start and a.row.finish<b.row.finish or a.row.start<b.row.start end)
+ local function plan_for(block)
   local sources,source_items,track={},{},nil
-  for _,entry in ipairs(group.items) do
+  for _,entry in ipairs(block.items) do
    local take=R.GetActiveTake(entry.item);assert(take and not R.TakeIsMIDI(take),'音声アイテムを選択してください。')
    local item_track=R.GetMediaItem_Track(entry.item)
    assert(not track or track==item_track,'同じループを構成する音声アイテムは同じトラックから選択してください。')
@@ -2724,7 +2968,7 @@ function Core.loop_adjust_start(project,rows,mode,edge,direction,items_override,
    assert(source.pos<=max_time+1e-7,'サステイン上の選択アイテム間に隙間があります。連続するアイテムを選択してください。')
    if source.ending>max_time then max_time=source.ending;right_source=source end
   end
-  local mix=Core.track_mix_source(project,source_items);local first=sources[1];local row=group.row
+  local mix=Core.track_mix_source(project,source_items);local first=sources[1];local row=block.row
   local p={item=first.item,take=first.take,row=row,s=mix.s,sr=mix.sr,ch=mix.ch,lo=mix.lo,hi=mix.hi,audio_source=mix,
    sources=sources,left_source=first,right_source=right_source,snapshots={},windows={},features={},bin_sum=0,bin_cross=0,bin_count=0,previous={},min_time=min_time,max_time=max_time}
   for _,source in ipairs(sources) do
@@ -2734,8 +2978,8 @@ function Core.loop_adjust_start(project,rows,mode,edge,direction,items_override,
   assert(row.finish<=p.max_time+1e-7,'サステイン終了を覆う音声アイテムも選択してください。')
   return p
  end
- for _,group in ipairs(groups) do
-  local p=plan_for(group);local row=p.row
+ for _,block in ipairs(blocks) do
+  local p=plan_for(block);local row=p.row
   if mode=='zero' then
    for _,which in ipairs(edge and {edge} or {'start','finish'}) do
     local t=which=='start' and row.start or row.finish;local source=p.audio_source
@@ -3160,11 +3404,20 @@ function Core.seam_wave_shift(delta,half_width)
  return -delta/Core.SEAM_SECONDS*half_width
 end
 
-function Core.seam_boundary_delta(delta,edge,start,finish,relative)
+function Core.seam_boundary_delta(delta,edge,start,finish,relative,min_time,max_time)
  assert(finite(delta) and finite(start) and finite(finish) and finish>start,'サステイン範囲が不正です。')
- if relative then return delta end
- local limit=finish-start-1e-6
- return edge=='finish' and max(delta,-limit) or edge=='start' and min(delta,limit) or error('移動する境界が不正です。',0)
+ assert(edge=='start' or edge=='finish','移動する境界が不正です。')
+ local lo,hi=-math.huge,math.huge
+ if not relative then
+  local limit=finish-start-1e-6
+  if edge=='finish' then lo=-limit else hi=limit end
+ end
+ if finite(min_time) and finite(max_time) then
+  if relative or edge=='start' then lo=max(lo,max(0,min_time)-start) end
+  if relative or edge=='finish' then hi=min(hi,max_time-finish) end
+ end
+ assert(lo<=hi,'選択アイテム内に有効なループ範囲を確保できません。')
+ return clamp(delta,lo,hi)
 end
 
 function Core.seam_geometry(x,width)
@@ -3221,11 +3474,11 @@ local SECTION=Core.SECTION
 local W,H=980,926
 local A={status='時間選択から区間を追加し、WAVへ書き出します。',warning=false,content_dirty=true,wave_dirty=true,closed=false,
  rows={},selected=nil,selected_regions={},poll_at=0,active=true,sr=48000,bits=24,channels=2,encoding='UTF-8',
- directory='',filename='Mix',busy=false,progress=0,use_default_directory=false,use_default_filename=false,use_format=false,
- embed_markers=true,embed_regions=true,exclude_selected_region=false,embed_loop_region=true,
+ directory='',filename='$region',busy=false,progress=0,use_default_directory=true,use_default_filename=false,use_format=false,
+ embed_markers=true,embed_regions=true,exclude_selected_region=true,embed_loop_region=true,
  add_mode='selection',length=1,length_values={seconds=1,beats=1,bars=1,grid=1},unit='seconds',
- interval=0,interval_values={seconds=0,beats=0,bars=0,grid=0},interval_unit='seconds',count=1,omit_name=true,
- xfade_seconds=.020,relative_lock=false,auto_audition=false,wave_items={},audition=nil,period_notice=nil,
+ interval=0,interval_values={seconds=0,beats=0,bars=0,grid=0},interval_unit='seconds',count=0,omit_name=true,
+ xfade_seconds=3,relative_lock=false,auto_audition=false,wave_items={},audition=nil,period_notice=nil,
  loop_enable={crossfade=false,zero=false,period=false}}
 local UI={}
 
@@ -3342,9 +3595,7 @@ end
 local function notice(s,warn) A.status=warn and BLT.publicError(s) or tostring(s or '');A.warning=warn or false;A.status_until=R.time_precise()+7;A.content_dirty=true;wake_visuals() end
 local function invalidate_wave_surface() A.wave_dirty=true;A.content_dirty=true;wake_visuals() end
 
--- Reuse text commands and font buckets. The UI contains many labels, so
--- rebuilding these short-lived tables on every animated frame is needlessly
--- expensive in the same way as the older BLT text renderer.
+-- Cache text commands and font buckets across animated frames.
 local text_queue={count=0,buckets={},order={},order_count=0,specs={},spec_scale=nil}
 local function font_spec(size,kind,bold) return BLT.spec(size,kind,bold,scale) end
 
@@ -3437,7 +3688,7 @@ end
 
 -- CHAMELEON THEME ADAPTER
 --
--- Porting contract for other BLT scripts:
+-- Theme adapter interface:
 --   Required palette tables : C, C_DEFAULT
 --   Optional chrome colors   : Chrome, CHROME_DEFAULT
 --   Persistence              : SECTION / ExtState key "chameleon"
@@ -3445,8 +3696,6 @@ end
 --   UI integration           : Chameleon.enabled / Chameleon.set(...)
 --   Main-loop integration    : Chameleon.tick(now)
 --
--- Keep this block intact when porting; normally only the title-bar button
--- placement and the host hooks need adapting in another BLT script.
 Chameleon.keys={
   -- Main/surface colors
   "col_main_bg2","col_main_bg","col_arrangebg","col_tracklistbg","col_mixerbg",
@@ -4100,7 +4349,9 @@ function UI.safe(fn)
   if A.pjob and BLT.cleanup(Core.loop_audio_close,A.pjob) then A.pjob=nil end
   if A.audition and UI.stop_loop_audition then BLT.cleanup(UI.stop_loop_audition,true) end
   BLT.cleanup(Core.retry_file_deletes,true)
-  A.busy=false;A.seam_hold=nil;A.render_batch=nil
+  A.busy=false;A.seam_hold=nil;A.seam_drag=nil;A.render_batch=nil;A.render_complete_until=nil
+  if not A.pjob then A.seam_refreshing=false;A.preview_signature=nil;A.preview_at=0 end
+  pressed=nil;down_last=(gfx.mouse_cap&1)~=0
   local cleanup_ok,cleaned=BLT.cleanup(UI.cleanup_raw)
   cleaned=cleanup_ok and cleaned
   local msg=BLT.publicError(err)
@@ -4164,7 +4415,7 @@ function UI.loop_target_items(project,mode,allow_empty,selected_key)
  local seeds=UI.wave_target_items(project,allow_empty)
  if #seeds==0 then return seeds end
  local row=Core.loop_target(project,A.rows,selected_key,seeds)
- local margin=mode=='zero' and .1 or mode=='drag' and Core.SEAM_DRAG_SECONDS or 0
+ local margin=mode=='zero' and .1 or 0
  local items=Core.virtual_loop_items(project,row,seeds,margin)
  return items,row
 end
@@ -4198,6 +4449,7 @@ function UI.options(selected_key)
   exclude_selected_region=A.exclude_selected_region,embed_loop_region=A.embed_loop_region}
 end
 function UI.preflight()
+ if not Media.ready() then return end
  local selected=UI.selected_rows();local start,ending=UI.bounds()
  A.start,A.finish=start,ending;A.plans={}
  if #selected==0 or not finite(start) or not finite(ending) or ending<=start then
@@ -4224,7 +4476,7 @@ function UI.load_project(project)
  end
  A.project=project;A.selected=nil;A.selected_regions={};A.region_selection_signature=nil;A.region_selection_problem=nil
  local function get(key,default) local _,v=R.GetProjExtState(project,SECTION,key);return v~='' and v or default end
- A.filename=get('filename','Mix');A.directory=get('directory','')
+ A.filename=get('filename','$region');A.directory=get('directory','')
  if A.directory=='' then A.directory=R.GetProjectPathEx(project,'')..'/BLT Renders' end
  A.encoding=get('encoding','UTF-8');if A.encoding~='UTF-8' and A.encoding~='CP932' then A.encoding='UTF-8' end
  for k,default in pairs({sr=48000,bits=24,channels=2}) do A[k]=tonumber(get(k,tostring(default))) or default end
@@ -4232,20 +4484,20 @@ function UI.load_project(project)
  if A.bits~=16 and A.bits~=24 and A.bits~=32 then A.bits=24 end
  local channel_ok=false;for _,v in ipairs(Core.channel_options) do if A.channels==v then channel_ok=true end end
  if not channel_ok then A.channels=2 end
- A.use_default_directory=get('use_default_directory','false')=='true'
+ A.use_default_directory=get('use_default_directory','true')=='true'
  A.use_default_filename=get('use_default_filename','false')=='true'
  A.embed_markers=get('embed_markers','true')=='true'
  A.embed_regions=get('embed_regions','true')=='true'
- A.exclude_selected_region=get('exclude_selected_region','false')=='true'
+ A.exclude_selected_region=get('exclude_selected_region','true')=='true'
  A.embed_loop_region=get('embed_loop_region','true')=='true'
  A.omit_name=get('omit_name','true')=='true'
  A.auto_audition=get('auto_audition','false')=='true'
- A.xfade_seconds=tonumber(get('xfade_seconds','.020'))
- if not finite(A.xfade_seconds) or A.xfade_seconds<.000001 or A.xfade_seconds>10 then A.xfade_seconds=.020 end
+ A.xfade_seconds=tonumber(get('xfade_seconds','3'))
+ if not finite(A.xfade_seconds) or A.xfade_seconds<.000001 or A.xfade_seconds>10 then A.xfade_seconds=3 end
  A.xfade_seconds=Core.normalize_spec_number(A.xfade_seconds,{.000001,10,false,1,6,nil,false,6})
  A.edit=nil;A.name_dialog=nil
  A.use_format=get('use_format','false')=='true';A.popup=nil
- A.add_mode=get('add_mode','selection');if not ({selection=true,items=true,itemgroups=true,itemspan=true,cursor=true})[A.add_mode] then A.add_mode='selection' end
+ A.add_mode=get('add_mode','selection');if not ({selection=true,items=true,itemblocks=true,itemspan=true,cursor=true})[A.add_mode] then A.add_mode='selection' end
  A.unit=get('unit','seconds');if not Core.length_specs[A.unit] then A.unit='seconds' end
  A.length_values={}
  for unit,spec in pairs(Core.length_specs) do
@@ -4262,7 +4514,7 @@ function UI.load_project(project)
   A.interval_values[unit]=Core.normalize_spec_number(value,spec)
  end
  A.interval=A.interval_values[A.interval_unit]
- A.count=tonumber(get('count','1')) or 1;if not finite(A.count) or A.count<1 or A.count>1000 or A.count%1~=0 then A.count=1 end
+ A.count=tonumber(get('count','0')) or 0;if not finite(A.count) or A.count<Core.count_spec[1] or A.count>Core.count_spec[2] or A.count%1~=0 then A.count=0 end
  A.relative_lock=get('relative_lock','false')=='true'
  A.revision=nil
 end
@@ -4292,17 +4544,19 @@ function UI.set_interval_unit(unit)
  A.interval_values[A.interval_unit]=A.interval;A.interval_unit=unit;A.interval=A.interval_values[unit]
 end
 function UI.set_add_mode(mode)
- assert(mode=='selection' or mode=='items' or mode=='itemspan' or mode=='itemgroups' or mode=='cursor','配置元が不正です。')
+ assert(mode=='selection' or mode=='items' or mode=='itemspan' or mode=='itemblocks' or mode=='cursor','配置元が不正です。')
  A.add_mode=mode;A.add_kind_flash=R.time_precise();UI.refresh()
 end
-function UI.poll(now,force)
- if A.busy or (not force and now<A.poll_at) then return end;A.poll_at=now+.12
+function UI.poll(now,force,render_prepare)
+ if (A.busy and not render_prepare) or (not force and now<A.poll_at) then return end
+ if not Media.ready() then return end;A.poll_at=now+.12
  local project=R.EnumProjects(-1,'')
  if project~=A.project then UI.load_project(project);force=true end
  local _,dir=R.GetSetProjectInfo_String(project,'RENDER_FILE','',false)
  local _,pattern=R.GetSetProjectInfo_String(project,'RENDER_PATTERN','',false)
  if dir~=A.default_directory or pattern~=A.default_pattern then A.default_directory=dir;A.default_pattern=pattern;UI.dirty() end
- local native_ok,native=pcall(Core.native_format,project)
+ local native_ok,native
+ if A.use_format then native_ok,native=pcall(Core.native_format,project) end
  local format
  if A.use_format then format=native_ok and native or nil else format={sr=A.sr,bits=A.bits,channels=A.channels} end
  local problem=A.use_format and not native_ok and BLT.publicError(native) or nil
@@ -4316,7 +4570,11 @@ function UI.poll(now,force)
   A.selected_regions=selected;A.selected=selected[1];A.region_selection_problem=nil;A.region_selection_signature=selection_signature;force=true;UI.dirty()
  end
  local s,e=UI.bounds()
- if force or rev~=A.plan_revision or s~=A.start or e~=A.finish then UI.preflight();A.plan_revision=rev;UI.dirty() end
+ if force or rev~=A.plan_revision or s~=A.start or e~=A.finish then
+  if render_prepare then A.start,A.finish=s,e
+  else UI.preflight();A.plan_revision=rev end
+  UI.dirty()
+ end
 end
 function UI.refresh() UI.save_settings();UI.poll(R.time_precise(),true) end
 function UI.choose_directory()
@@ -4365,6 +4623,7 @@ function UI.add_commit(kind,ranges,names,project)
   end,debug.traceback)
   if not ok then for _,id in ipairs(added) do R.DeleteProjectMarker(project,id,kind~='marker') end;error(err,0) end
  end)
+ if ranges.auto_limited then notice('自動個数が1000個を超えるため、1000個に制限して挿入しました。',true) end
 end
 function UI.add(kind)
  if not UI.commit_edit() then return end
@@ -4432,6 +4691,7 @@ function UI.follow_loop_selection(project,plans)
  if R.UpdateTimeline then R.UpdateTimeline() else R.UpdateArrange() end
 end
 function UI.crossfade()
+ if not Media.ready() then return end
  if not UI.commit_edit() then return end
  local project=R.EnumProjects(-1,'')
  if project~=A.project then UI.load_project(project) end
@@ -4450,6 +4710,7 @@ function UI.crossfade()
  notice('クロスフェード用のループ素材を作成中…',false)
 end
 function UI.crossfade_step()
+ if not Media.ready() then return end
  local j=A.xjob;if not j then return end
  if not j.committed then
   if not Core.crossfade_step(j) then A.progress=j.progress;UI.dirty();return end
@@ -4471,6 +4732,7 @@ function UI.crossfade_step()
 end
 
 function UI.adjust_loop(mode,edge,direction)
+ if not Media.ready() then return end
  if not UI.commit_edit() then return end
  A.period_notice=nil
  local project=R.EnumProjects(-1,'')
@@ -4492,6 +4754,7 @@ function UI.show_period_failure()
  A.status='周期解析を終了しました。リージョンは変更していません。';A.warning=false;UI.dirty()
 end
 function UI.adjust_loop_step()
+ if not Media.ready() then return end
  local j=A.ajob;if not j then return end
  local ok,done=xpcall(function() return Core.loop_adjust_step(j) end,debug.traceback)
  if not ok then
@@ -4560,23 +4823,57 @@ function UI.output_path(p,batch_index,batch_count)
  R.RecursiveCreateDirectory(target_directory,0)
  return Core.unique(target)
 end
+-- A stage is presented by gfx.update before its work can run on a later defer turn.
+-- Native rendering stays synchronous: never invent a live percentage while REAPER
+-- owns the call. Overall percentages are weighted stages, not elapsed-time estimates.
+UI.render_stages={
+ prepare={caption='PREPARING',message='レンダリングの準備中…'},
+ plan={caption='PREPARING',message='書き出し範囲と埋め込み情報を確認しています…'},
+ path={caption='PREPARING',fraction=0,message='出力先とファイル名を準備しています…'},
+ render={caption='RENDERING',fraction=.05,message='REAPERでレンダリング中… 詳細な進捗は標準レンダラーに表示されます。'},
+ inspect={caption='CHECKING WAV',fraction=.80,message='レンダーされたWAVを確認しています…'},
+ embed={caption='EMBEDDING',fraction=.83,message='リージョン情報を埋め込んでいます…'},
+ copy={caption='WRITING WAV',fraction=.85,message='音声と区間情報を書き込んでいます…'},
+ verify={caption='VERIFYING',fraction=.98,message='書き出し結果を検証しています…'},
+ cleanup={caption='FINALIZING',fraction=.99,message='一時WAVを整理しています…'},
+}
+function UI.render_progress(fraction)
+ local b=A.render_batch
+ if not b or not b.total_frames or b.total_frames<=0 or not b.plans[b.index] then return end
+ local value=.05+.95*(b.completed_frames+b.plans[b.index].frames*clamp(fraction,0,1))/b.total_frames
+ -- Reserve 100% for verified output AND successful cleanup of the entire batch.
+ A.progress=max(A.progress or 0,min(.99,value));A.content_dirty=true
+end
+function UI.render_stage(phase)
+ local b=assert(A.render_batch);local spec=assert(UI.render_stages[phase])
+ b.phase=phase;b.presented=false
+ if spec.fraction then UI.render_progress(spec.fraction) end
+ notice(spec.message,false);UI.dirty();next_draw_time=0
+end
+function UI.render_mix()
+ if A.busy or A.render_batch or A.closed or A.closing then return end
+ -- No media scan, planning, path I/O or native command before this first busy frame.
+ A.render_complete_until=nil;A.progress=0;A.busy=true
+ A.render_batch={project=R.EnumProjects(-1,''),plans={},outputs={},index=0,count=0,completed_frames=0}
+ UI.render_stage('prepare')
+end
 function UI.start_copy(source,p,target)
  A.job=Core.copy_start(source,target,p);A.busy=true
- local batch=A.render_batch;A.progress=batch and (batch.index-1)/batch.count or 0
- notice('リージョン情報を埋め込んでいます…',false)
+ if A.render_batch then UI.render_stage('copy')
+ else A.progress=0;notice('リージョン情報を埋め込んでいます…',false) end
 end
-function UI.render_one(p,batch_index,batch_count)
+function UI.render_one(p,batch_index,batch_count,target)
  assert(R.EnumProjects(-1,'')==A.project,'書き出し中にプロジェクトが切り替わりました。')
- local target=UI.output_path(p,batch_index,batch_count)
+ target=target or UI.output_path(p,batch_index,batch_count)
  local token=R.genGuid():gsub('[^%w]','')
- -- Render under the final name so native metadata wildcards such as
- -- $filename and $directory resolve against the actual deliverable.
+ -- Keep path resolution and native metadata wildcards identical to previous releases.
  local pattern=assert(target:match('[/\\]([^/\\]+)$')):sub(1,-5)
  local outputdir=assert(target:match('^(.*)[/\\][^/\\]+$'))
  local raw=outputdir..'/_BLT_RENDER_'..token..'.wav';assert(not Core.exists(raw),'一時ファイル名が衝突しました。')
  assert(not Core.exists(target),'出力先に同名ファイルが作成されました。再実行してください。')
- A.busy=true;A.raw=target;A.own_raw=true
- notice((batch_count or 1)>1 and string.format('REAPERでミックスダウン中… %d / %d',batch_index,batch_count) or 'REAPERでミックスダウン中…',false)
+ assert(R.GetPlayStateEx(A.project)==0,'再生・録音を停止してから書き出してください。')
+ assert(abs(R.Master_GetPlayRate(A.project)-1)<1e-9,'プロジェクトの再生速度を1.0にしてください。')
+ A.raw=target;A.own_raw=true
  local snapshot=Core.snapshot_render(A.project);A.render_snapshot=snapshot
  local ok,err=xpcall(function()
   snapshot.selection_changed=true
@@ -4587,60 +4884,118 @@ function UI.render_one(p,batch_index,batch_count)
   assert(norm(wav_target)==norm(target),'REAPERが予期しないWAV出力先を返しました: '..targets)
   R.Main_OnCommand(41824,0) -- Synchronous native render; never automate overwrite dialogs.
  end,debug.traceback)
- Core.restore_render(snapshot);A.render_snapshot=nil;A.busy=false
+ -- Never yield with temporary project render settings or selection still installed.
+ Core.restore_render(snapshot);A.render_snapshot=nil
  if not ok then error(err,0) end
  assert(Core.exists(target),'レンダーがキャンセルされたか、WAVが作成されませんでした。')
  assert(os.rename(target,raw),'レンダー音声を一時保存名へ変更できませんでした。')
  A.raw=raw
- local audio=Core.scan(raw)
- assert(audio.channels==A.format.channels and audio.bits==A.format.bits and (A.format.bits~=32 or audio.tag==3),'レンダーされたWAVのチャンネル数／ビット深度が設定と一致しません。')
- UI.start_copy(raw,p,target)
+ return raw
 end
-function UI.render_mix()
- UI.poll(R.time_precise(),true)
- if #(A.selected_regions or {})==0 then UI.show_transient_notice('リージョンを選択されていません');return end
- local planned,problem=pcall(UI.preflight)
- if not planned then A.plan=nil;A.plans={};A.problem=BLT.publicError(problem) end
- if not A.plans or #A.plans==0 then
-  UI.show_transient_notice(A.problem or '選択したリージョンからレンダー範囲を取得できませんでした');return
+function UI.render_stop(message,warning,transient)
+ local b=A.render_batch
+ if b then A.last_outputs=b.outputs end
+ A.render_batch=nil;A.busy=false;A.render_complete_until=nil
+ notice(message,warning);if transient then UI.show_transient_notice(message) end
+ UI.dirty();next_draw_time=0
+end
+function UI.render_step()
+ local b=A.render_batch
+ if not b or not b.presented or A.closed or A.closing then return end
+ assert(R.EnumProjects(-1,'')==b.project,'書き出し中にプロジェクトが切り替わりました。')
+ if not Media.ready() then return end
+ local phase=b.phase
+ if phase=='prepare' then
+  if not UI.commit_edit() then UI.render_stop('書き出しを中止しました。',false);return end
+  UI.poll(R.time_precise(),true,true)
+  b.selected=UI.selected_rows();b.rows=A.rows;b.count=#b.selected
+  A.plans=b.plans;A.plan=nil;A.problem=nil
+  if b.count==0 then UI.render_stop('リージョンを選択されていません',false,true);return end
+  if A.format_problem then A.problem=A.format_problem;UI.render_stop(A.problem,true,true);return end
+  assert(R.GetPlayStateEx(b.project)==0,'再生・録音を停止してから書き出してください。')
+  assert(abs(R.Master_GetPlayRate(b.project)-1)<1e-9,'プロジェクトの再生速度を1.0にしてください。')
+  assert(UI.cleanup_raw(),'前回の一時WAVを削除できません。再試行してください。')
+  b.total_frames=0;A.progress=.01;UI.render_stage('plan')
+ elseif phase=='plan' then
+  local deadline=R.time_precise()+.004
+  for _=1,8 do
+   local row=b.selected[#b.plans+1];if not row then break end
+   local p=Core.plan(b.rows,row.start,row.finish,A.format.sr,UI.options(row.key));p.target_row=row
+   assert(p.frames*A.format.channels*(A.format.bits//8)<0xffffffff-32*1024*1024,'4 GiBを超える出力には対応していません。')
+   b.plans[#b.plans+1]=p;b.total_frames=b.total_frames+p.frames
+   A.progress=.01+.04*#b.plans/b.count;A.content_dirty=true
+   if R.time_precise()>=deadline then break end
+  end
+  if #b.plans==b.count then
+   b.rows=nil;b.selected=nil;b.index=1;A.plan=b.plans[1]
+   A.plan_revision=R.GetProjectStateChangeCount(b.project);UI.save_settings()
+   UI.render_stage('path')
+  end
+ elseif phase=='path' then
+  b.target=UI.output_path(b.plans[b.index],b.index,b.count)
+  UI.render_stage('render')
+ elseif phase=='render' then
+  b.raw=UI.render_one(b.plans[b.index],b.index,b.count,b.target)
+  UI.render_stage('inspect')
+ elseif phase=='inspect' then
+  local audio=Core.scan(b.raw)
+  assert(audio.channels==A.format.channels and audio.bits==A.format.bits and (A.format.bits~=32 or audio.tag==3),'レンダーされたWAVのチャンネル数／ビット深度が設定と一致しません。')
+  UI.render_stage('embed')
+ elseif phase=='embed' then
+  UI.start_copy(b.raw,b.plans[b.index],b.target)
+ elseif phase=='copy' or phase=='verify' then
+  UI.step()
+ elseif phase=='cleanup' then
+  local cleaned=UI.cleanup_raw()
+  b.completed_frames=b.completed_frames+b.plans[b.index].frames
+  if not cleaned then
+   local message=b.index<b.count and string.format('一時WAVを削除できないため、一括書き出しを停止しました。完了済み: %d / %d件。',#b.outputs,b.count)
+    or '書き出しは完了しましたが、一時WAVを削除できませんでした。終了前に再試行します。'
+   UI.render_stop(message,true);return
+  end
+  if b.index<b.count then
+   b.index=b.index+1;b.target=nil;b.raw=nil;UI.render_stage('path')
+  else
+   A.last_outputs=b.outputs;A.render_batch=nil;A.busy=false;A.progress=1
+   A.render_complete_until=R.time_precise()+.7
+   notice(b.count>1 and ('書き出し完了: '..b.count..'件') or '書き出し完了。',false);UI.dirty();next_draw_time=0
+  end
  end
- assert(R.GetPlayStateEx(A.project)==0,'再生・録音を停止してから書き出してください。')
- assert(abs(R.Master_GetPlayRate(A.project)-1)<1e-9,'プロジェクトの再生速度を1.0にしてください。')
- for _,p in ipairs(A.plans) do
-  assert(p.frames*A.format.channels*(A.format.bits//8)<0xffffffff-32*1024*1024,'4 GiBを超える出力には対応していません。')
- end
- UI.save_settings();A.render_batch={plans=A.plans,index=1,count=#A.plans,outputs={}}
- UI.render_one(A.plans[1],1,#A.plans)
 end
 function UI.cancel()
+ if A.render_batch then
+  local b=A.render_batch
+  if A.render_snapshot then Core.restore_render(A.render_snapshot);A.render_snapshot=nil end
+  Core.copy_abort(A.job);A.job=nil
+  local cleaned=UI.cleanup_raw();local done=#b.outputs
+  UI.render_stop(cleaned and (done>0 and ('一括書き出しを中止しました。完了済み: '..done..'件。') or '書き出しを中止しました。')
+   or '処理を中止しました。一時WAVを削除できませんでした。終了前に再試行します。',not cleaned)
+  return
+ end
  if A.ajob then Core.loop_audio_close(A.ajob);A.ajob=nil;A.busy=false;notice('解析を中止しました。リージョンは変更していません。',false) end
  if A.xjob then Core.crossfade_abort(A.xjob);A.xjob=nil;A.busy=false;notice('クロスフェード処理を中止しました。',false) end
  if A.job then
-  Core.copy_abort(A.job);A.job=nil;A.busy=false;local done=A.render_batch and #A.render_batch.outputs or 0;A.render_batch=nil
+  Core.copy_abort(A.job);A.job=nil;A.busy=false
   local cleaned=UI.cleanup_raw()
-  notice(cleaned and (done>0 and ('一括書き出しを中止しました。完了済み: '..done..'件。') or '埋め込みを中止しました。') or '処理を中止しました。一時WAVを削除できませんでした。終了前に再試行します。',not cleaned)
+  notice(cleaned and '埋め込みを中止しました。' or '処理を中止しました。一時WAVを削除できませんでした。終了前に再試行します。',not cleaned)
  end
 end
 function UI.step()
- if not A.job then return end
- local j=A.job
+ if not Media.ready() or not A.job then return end
+ local j=A.job;local b=A.render_batch
+ if b and b.phase=='copy' and not j.chunks[j.index] then UI.render_stage('verify');return end
  if Core.copy_step(j) then
-  A.job=nil;A.busy=false;A.last_output=j.target
-  local raw_problem=not UI.cleanup_raw()
-  if raw_problem then notice('書き出しは完了しましたが、一時WAVを削除できませんでした。終了前に再試行します。',true) end
-  local batch=A.render_batch
-  if batch then
-   batch.outputs[#batch.outputs+1]=j.target
-   if not raw_problem and batch.index<batch.count then
-    batch.index=batch.index+1;A.progress=(batch.index-1)/batch.count
-    UI.render_one(batch.plans[batch.index],batch.index,batch.count);return
-   end
-   A.render_batch=nil;A.progress=1;A.last_outputs=batch.outputs
-   if not raw_problem then notice(batch.count>1 and ('書き出し完了: '..batch.count..'件') or '書き出し完了。',false) end
-  elseif not raw_problem then A.progress=1;notice('書き出し完了。',false) end
+  A.job=nil;A.last_output=j.target
+  if b then
+   b.outputs[#b.outputs+1]=j.target;UI.render_stage('cleanup')
+  else
+   A.busy=false;local raw_problem=not UI.cleanup_raw()
+   if raw_problem then notice('書き出しは完了しましたが、一時WAVを削除できませんでした。終了前に再試行します。',true)
+   else A.progress=1;notice('書き出し完了。',false) end
+  end
  else
-  local batch=A.render_batch
-  A.progress=batch and ((batch.index-1)+j.copied/j.size)/batch.count or j.copied/j.size;A.content_dirty=true
+  if b then UI.render_progress(.85+.13*clamp(j.copied/max(1,j.size-12-#j.blob),0,1))
+  else A.progress=j.copied/j.size;A.content_dirty=true end
  end
 end
 local function button(id,x,y,w,h,title,fn,hint,enabled,accent,content_pad,prominent,text_size,no_topline,full_hover,text_flags,text_right_pad,text_y_offset,selected)
@@ -4685,7 +5040,7 @@ local function panel(x,y,w,h,title,code)
  label(title,x+16,y+31,16,C.text,1,w-30,26,0,true)
 end
 
-local ADD_LABELS={selection='選択範囲',items='選択アイテム（個別）',itemgroups='選択アイテム（グループ）',itemspan='選択アイテム全体',cursor='カーソル位置'}
+local ADD_LABELS={selection='選択範囲',items='選択アイテム（個別）',itemblocks='選択アイテム（ブロック）',itemspan='選択アイテム全体',cursor='カーソル位置'}
 local UNIT_LABELS={seconds='秒',beats='拍',bars='小節',grid='グリッド'}
 local ENCODING_HINT='原則UTF-8を推奨\nSoundForgeで日本語を文字化けさせたくない場合のみCP932を選択してください。\nただし他の大多数アプリケーションで文字化けします。※英語圏には無関係な機能です'
 function UI.menu(values,current,display,fn)
@@ -4797,14 +5152,15 @@ local function relative_toggle(x,y,w,h)
  label('相対保持',x+4,y+(h-16)/2,9.5,checked and C.warn or hot and C.text or C.muted,1,w-8,16,1|4,checked)
  register(id,x,y,w,h,function() A.relative_lock=not A.relative_lock;UI.refresh() end,'ONでは開始と終了を同じ量だけ移動し、ループ尺を保持',enabled)
 end
-local field_specs={count={1,1000,true,1,0},serial_start={0,999999999999,true,1,0},
+local field_specs={count=Core.count_spec,serial_start={0,999999999999,true,1,0},
  xfade_seconds={.000001,10,false,1,6,nil,false,6}}
 local function field_spec(key)
  if key=='length' then return Core.length_specs[A.unit] end
  if key=='interval' then return Core.interval_specs[A.interval_unit] end
  return field_specs[key]
 end
-local function field_text(value,spec)
+local function field_text(value,spec,key)
+ if key=='count' and tonumber(value)==0 then return 'A' end
  if not spec then return tostring(value or '') end
  value=tonumber(value) or spec[1]
  if spec[3] then return tostring(floor(value+.5)) end
@@ -4813,6 +5169,7 @@ local function field_text(value,spec)
  return spec[7] and text or text:gsub('0+$',''):gsub('%.$','')
 end
 local function parse_field(e,text)
+ if e.key=='count' and tostring(text):match('^%s*[Aa]%s*$') then return 0 end
  if e.key=='length' and A.unit=='seconds' then return time_number(text,A.unit) end
  if e.key=='interval' and A.interval_unit=='seconds' then return time_number(text,A.interval_unit) end
  return tonumber(text)
@@ -4862,7 +5219,7 @@ function UI.commit_edit()
 end
 function UI.begin_edit(id,owner,key,spec)
  if not UI.commit_edit() then return end
- local text=key=='serial_start' and tostring(owner[key]) or field_text(owner[key],spec)
+ local text=key=='serial_start' and tostring(owner[key]) or field_text(owner[key],spec,key)
  if spec and spec[8] then text=string.format('%.'..spec[8]..'f',owner[key]):gsub('0+$',''):gsub('%.$','') end
  A.edit={id=id,owner=owner,key=key,spec=spec,text=text,selected=true}
  if not spec and not IME.open(id) then A.edit=nil end
@@ -4880,7 +5237,7 @@ function UI.edit_key(k)
  elseif k>=32 and k<=126 or (k&0xff000000)==0x75000000 then
   local cp=k>=0x75000000 and (k&0xffffff) or k
   if cp>0x10ffff or cp>=0xd800 and cp<=0xdfff then return end
-  if e.spec and not (cp>=48 and cp<=57 or cp==46 or cp==45 or cp==58) then UI.flash(e.id);return end
+  if e.spec and not (cp>=48 and cp<=57 or cp==46 or cp==45 or cp==58 or e.key=='count' and (cp==65 or cp==97)) then UI.flash(e.id);return end
   if #e.text<512 then e.text=(e.selected and '' or e.text)..utf8.char(cp);e.selected=false end
  end
  if e.spec then
@@ -4907,7 +5264,7 @@ function UI.field(key,x,y,w,enabled,owner,textonly)
  line(x,y+fh-1,x+w,y+fh-1,glow>0 and C.red or C.edge,.38+.25*focus)
  line(x,y,x,y+fh,glow>0 and C.red or enabled and C.accent2 or C.edge,.22+.48*focus+.42*glow)
  finish_corners(x,y,w,fh,6,false,glow>0 and C.red or C.edge2,.28+.38*focus+.42*glow)
- local str=active and A.edit.text or (textonly or key=='serial_start') and tostring(owner[key]) or field_text(owner[key],spec)
+ local str=active and A.edit.text or (textonly or key=='serial_start') and tostring(owner[key]) or field_text(owner[key],spec,key)
  local value_size=20.5
  if not textonly then
   local measured=measure(str,value_size,3,true);local available=max(1,w-16)
@@ -4926,6 +5283,7 @@ function UI.field(key,x,y,w,enabled,owner,textonly)
   label(str,x+8,y,textonly and 13 or value_size,enabled and C.text or C.faint,textonly and 1 or 3,w-16,fh,textonly and 4 or 6,not textonly,true)
  end
  local hint=spec and 'クリック入力 / 上下ドラッグ / ホイール' or 'クリックして直接入力'
+ if key=='count' then hint='クリック入力 / 上下ドラッグ / ホイール。0＝A：選択時間÷（基準幅＋間隔補正）の整数部分を自動挿入。計算できない場合は1個、最大1000個。' end
  if key=='filename' then hint=hint..' / REAPERワイルドカード使用可' end
  if spec and Core.field_allows_fine(key,spec) then hint=hint..' / Shiftで微調整' end
  register(id,x,y,w,fh,function() UI.begin_edit(id,owner,key,spec) end,hint,enabled)
@@ -4992,6 +5350,7 @@ function UI.preview_signature_now()
  return table.concat(keys,':')
 end
 function UI.preview_refresh(signature)
+ if not Media.ready() then return end
  if A.pjob then Core.loop_audio_close(A.pjob);A.pjob=nil end
  if signature then A.preview_signature=signature end;A.seam_problem=nil;A.seam_refreshing=true
  local enabled=pcall(UI.refresh_loop_enable)
@@ -5006,12 +5365,14 @@ function UI.preview_refresh(signature)
  UI.dirty()
 end
 function UI.preview_tick(now)
+ if not Media.ready() then return end
  if A.busy or now<(A.preview_at or 0) then return end
  A.preview_at=now+.35
  local signature=UI.preview_signature_now()
  if signature~=A.preview_signature then UI.preview_refresh(signature) end
 end
 function UI.preview_step()
+ if not Media.ready() then return end
  local j=A.pjob;if not j then return end
  local ok,done=pcall(Core.loop_adjust_step,j)
  if not ok then
@@ -5054,8 +5415,9 @@ function UI.seam_input(hit,down)
  local started=false
  UI.safe(function()
    local items,row=UI.loop_target_items(A.project,'drag')
+   local bounds=Core.loop_move_plan(A.project,{row},row.key,'start',0,false,items)
    A.seam_drag={x=mouse_x,delta=0,edge=mouse_x<seam.mid and 'finish' or 'start',seconds_per_px=seam.seconds_per_px,
-    revision=R.GetProjectStateChangeCount(A.project),selected=row.key,relative=A.relative_lock,row_start=row.start,row_finish=row.finish,moved=false}
+    revision=R.GetProjectStateChangeCount(A.project),selected=row.key,relative=A.relative_lock,row_start=row.start,row_finish=row.finish,min_time=bounds.min_time,max_time=bounds.max_time,moved=false}
    started=true
   end)
   down_last=down;pressed=started and 'seam_drag' or nil;UI.dirty();return true
@@ -5064,7 +5426,7 @@ function UI.seam_input(hit,down)
  if d and down then
   local dx=mouse_x-d.x
   if abs(dx)>=2 then
-   d.moved=true;d.delta=Core.seam_boundary_delta(Core.seam_drag_delta(dx,d.seconds_per_px),d.edge,d.row_start,d.row_finish,d.relative)
+   d.moved=true;d.delta=Core.seam_boundary_delta(Core.seam_drag_delta(dx,d.seconds_per_px),d.edge,d.row_start,d.row_finish,d.relative,d.min_time,d.max_time)
   end
   down_last=down;UI.dirty();return true
  end
@@ -5332,7 +5694,7 @@ function UI.draw(now)
  UI.icon()
  panel(20,92,940,156,'ループ・リージョン・マーカーを追加','01  /  AUTHOR')
  local kinds={{'marker',36,178,'マーカー'},{'region',222,178,'リージョン'},{'sustain',408,390,'ループ（サステイン）'}}
- local item_mode=A.add_mode=='items' or A.add_mode=='itemgroups' or A.add_mode=='itemspan'
+ local item_mode=A.add_mode=='items' or A.add_mode=='itemblocks' or A.add_mode=='itemspan'
  if item_mode then A.last_item_mode=A.add_mode end
  local function mode_button(mode,x,y,w,h,text)
   local selected=A.add_mode==mode
@@ -5343,7 +5705,7 @@ function UI.draw(now)
  button('mode_items_parent',138,153,282,18,'選択アイテム',function() UI.set_add_mode(A.last_item_mode or 'items') end,'選択アイテムから配置範囲を作成',true,nil,nil,nil,11.5,nil,nil,nil,nil,nil,item_mode)
  line(148,172,410,172,item_mode and C.accent2 or C.edge,.5)
  mode_button('items',138,176,88,20,'個別')
- mode_button('itemgroups',232,176,88,20,'グループ')
+ mode_button('itemblocks',232,176,88,20,'ブロック')
  mode_button('itemspan',326,176,94,20,'全体')
  mode_button('cursor',426,159,92,32,ADD_LABELS.cursor)
  local cursor=A.add_mode=='cursor'
@@ -5466,16 +5828,19 @@ end,'ファイル名のみREAPER本体の設定を使用。ワイルドカード
  local message=A.problem and BLT.publicError(A.problem) or (A.plan and ('出力 '..#A.plans..'件 / 埋め込み '..entry_count..'件 / 除外 '..omitted_count..'件 / 範囲外 '..outside_count..'件 / 切詰め '..clipped_count..'件') or '')
  local w,h=310,52;local x,y=(W-w)/2,864;local execute_y=y
  local ready=not A.busy;local hot=ready and inside(x,y,w,h) and not Chrome.mouseActive
- local batch_progress=A.render_batch and string.format('  %d/%d',A.render_batch.index,A.render_batch.count) or ''
- PrimaryButton.draw(PrimaryButton.painter,x,y,w,h,A.busy and ('処理中'..batch_progress) or 'レンダリング実行',A.ajob and 'ANALYZING' or A.busy and 'WRITING WAV' or 'RENDER',ready,A.busy,A.busy and A.progress or nil,hot,pressed=='execute' and (gfx.mouse_cap&1)~=0,R.time_precise(),BLT.host.active())
- register('execute',x,execute_y,w,h,UI.render_mix,'Master mixをレンダーして区間情報を埋め込む',ready)
- if A.busy and (A.job or A.xjob or A.ajob) then
+ local b=A.render_batch;local completed=not A.busy and A.render_complete_until and now<A.render_complete_until
+ local batch_progress=b and b.index>0 and string.format('  %d/%d',b.index,b.count) or ''
+ local caption=b and UI.render_stages[b.phase].caption or A.ajob and 'ANALYZING' or A.busy and 'WRITING WAV' or completed and 'COMPLETE' or 'RENDER'
+ PrimaryButton.draw(PrimaryButton.painter,x,y,w,h,A.busy and ('処理中'..batch_progress) or 'レンダリング実行',caption,ready,A.busy,A.busy and A.progress or completed and 1 or nil,hot,pressed=='execute' and (gfx.mouse_cap&1)~=0,R.time_precise(),BLT.host.active())
+ register('execute',x,execute_y,w,h,UI.render_mix,b and '工程全体の進捗です。標準レンダー中の詳細はREAPERのレンダラーに表示されます。' or 'Master mixをレンダーして区間情報を埋め込む',ready)
+ if A.busy and (A.render_batch or A.job or A.xjob or A.ajob) then
   rect(678,877,92,29,C.field,1);label('中止',680,880,13,C.warn,1,86,23,1)
-  register('cancel',678,877,92,29,UI.cancel,'埋め込みを中止。元のWAVは保持',true)
+  register('cancel',678,877,92,29,UI.cancel,A.render_batch and '書き出しを中止。完成済みのWAVは保持します。' or '埋め込みを中止。元のWAVは保持',true)
  end
 
- BLT.footer(A.warning and A.status or (message~='' and message or A.status),A.warning or A.problem,W,H+22,'0.5.6')
+ BLT.footer((A.warning or A.render_batch or completed) and A.status or (message~='' and message or A.status),A.warning or (not A.render_batch and A.problem),W,H+22,'0.5.20')
  draw_hover_tooltip(hover_hint);UI.draw_name_dialog();UI.draw_popup();UI.draw_period_notice(now);flush_text_queue();custom_titlebar();gfx.update();A.content_dirty=false;redraw_dirty=false
+ if A.render_batch then A.render_batch.presented=true end
 end
 
 function UI.interact()
@@ -5507,7 +5872,7 @@ function UI.close()
  Core.copy_abort(A.job);A.job=nil
  Core.retry_file_deletes(true)
  UI.cleanup_raw()
- A.render_batch=nil
+ A.render_batch=nil;A.render_complete_until=nil
  if A.xjob then Core.crossfade_abort(A.xjob);A.xjob=nil end
  if A.ajob then Core.loop_audio_close(A.ajob);A.ajob=nil end
  if A.pjob then Core.loop_audio_close(A.pjob);A.pjob=nil end
@@ -5525,12 +5890,11 @@ function UI.close()
  end
 end
 function UI.loop()
- BLT.tick(R.time_precise());PrimaryButton.tick(R.time_precise(),BLT.host.active(),PrimaryButton.wake)
-
- local k=BLT.key(gfx.getchar());if k<0 or A.closed then UI.close();return end
- local now=R.time_precise()
  UI.safe(function()
-  local flags=gfx.getchar(65537)
+ local now=R.time_precise();BLT.tick(now);PrimaryButton.tick(now,BLT.host.active(),PrimaryButton.wake)
+
+ local k=BLT.key(gfx.getchar());if k<0 or A.closed then A.closing=true;return end
+   local flags=gfx.getchar(65537)
   A.active=((flags&1)==0) or ((flags&2)~=0)
  local changed=gfx.mouse_x~=last_raw_mouse_x or gfx.mouse_y~=last_raw_mouse_y or gfx.mouse_cap~=last_raw_mouse_cap or gfx.mouse_wheel~=0
   if changed or k>0 then wake_visuals(now) end
@@ -5554,9 +5918,11 @@ function UI.loop()
   UI.period_notice_tick(now)
   if gfx.w~=last_window_w or gfx.h~=last_window_h then last_window_w,last_window_h=gfx.w,gfx.h;UI.dirty() end
   UI.geometry();UI.interact()
-  if A.job then UI.step() end
+  if A.render_batch then UI.render_step() elseif A.job then UI.step() end
   if A.xjob then UI.crossfade_step() end
   if A.ajob then UI.adjust_loop_step() end
+  now=R.time_precise()
+  if A.render_complete_until and now>=A.render_complete_until then A.render_complete_until=nil;UI.dirty() end
   local moving=IME.active or (A.active and visual_speed(now)>0) or #icon_particles>0 or Chrome.drag or Chrome.resize or A.period_notice~=nil
   local interval=(A.busy or moving) and 1/30 or 4
   if (A.content_dirty or redraw_dirty or moving or A.busy) and now>=next_draw_time then
@@ -5572,12 +5938,13 @@ function BLT.pick(obj,keys) local v=BLT.valueView or {};BLT.valueView=v;for k in
 PrimaryButton.painter={C=C,gradient=gradient,line=line,rect=rect,corners=finish_corners,disc=disc,label=label}
 PrimaryButton.painter.motion=function(now) return (gfx.mouse_x-ox)/scale,(gfx.mouse_y-oy)/scale,visual_speed(now) end
 PrimaryButton.wake=function() redraw_dirty=true;A.content_dirty=true;next_draw_time=0 end
+Media.state=A;Media.onchange=function() if BLT.host and BLT.host.wake then BLT.host.wake() end end
 BLT.attach({
  R=R,C=C,Chrome=Chrome,Chameleon=Chameleon,section=SECTION,faces=fonts,font=font,
  geometry=function() return scale,ox,oy end,active=function() local f=gfx.getchar(65536);return (f&1)==0 or (f&2)~=0 end,
  wake=function() A.content_dirty=true;redraw_dirty=true;next_draw_time=0;wake_visuals() end,
  defaults=BLT.factorySettings,capture=function() return BLT.pick(A,BLT.factorySettings) end,
- valid=function(v) local function valid(n,r) return type(n)=='number' and n>=r[1] and n<=r[2] and (not r[3] or n%1==0) end;if not Core.length_specs[v.unit] or not Core.interval_specs[v.interval_unit] then return false end;if not valid(v.count,{1,1000,true}) or not valid(v.xfade_seconds,{.000001,10}) or not valid(v.sr,{8000,384000,true}) then return false end;for k,n in pairs(v.length_values) do local r=Core.length_specs[k];if not r or not valid(n,r) then return false end end;for k,n in pairs(v.interval_values) do local r=Core.interval_specs[k];if not r or not valid(n,r) then return false end end;if not valid(v.length,Core.length_specs[v.unit]) or not valid(v.interval,Core.interval_specs[v.interval_unit]) then return false end;local channel=false;for _,x in ipairs(Core.channel_options) do if v.channels==x then channel=true end end;return channel and (v.encoding=='UTF-8' or v.encoding=='CP932') and (v.add_mode=='selection' or v.add_mode=='items' or v.add_mode=='itemgroups' or v.add_mode=='itemspan' or v.add_mode=='cursor') and (v.bits==16 or v.bits==24 or v.bits==32) end,apply=function(v) for k,x in pairs(v) do A[k]=x end;UI.refresh() end,
+ valid=function(v) local function valid(n,r) return type(n)=='number' and n>=r[1] and n<=r[2] and (not r[3] or n%1==0) end;if not Core.length_specs[v.unit] or not Core.interval_specs[v.interval_unit] then return false end;if not valid(v.count,Core.count_spec) or not valid(v.xfade_seconds,{.000001,10}) or not valid(v.sr,{8000,384000,true}) then return false end;for k,n in pairs(v.length_values) do local r=Core.length_specs[k];if not r or not valid(n,r) then return false end end;for k,n in pairs(v.interval_values) do local r=Core.interval_specs[k];if not r or not valid(n,r) then return false end end;if not valid(v.length,Core.length_specs[v.unit]) or not valid(v.interval,Core.interval_specs[v.interval_unit]) then return false end;local channel=false;for _,x in ipairs(Core.channel_options) do if v.channels==x then channel=true end end;return channel and (v.encoding=='UTF-8' or v.encoding=='CP932') and (v.add_mode=='selection' or v.add_mode=='items' or v.add_mode=='itemblocks' or v.add_mode=='itemspan' or v.add_mode=='cursor') and (v.bits==16 or v.bits==24 or v.bits==32) end,apply=function(v) for k,x in pairs(v) do A[k]=x end;UI.refresh() end,
  undoAction=UI.project_undo,
  busy=function() return A.busy end,commit=function() return UI.commit_edit() end,
  cancelEdit=function() IME.stop(false);A.edit=nil;A.field_drag=nil;A.popup=nil end,editing=function() return A.edit~=nil end,
@@ -5587,15 +5954,9 @@ BLT.attach({
 
 })
 if ...=='blt_test' then function BLT.testDraw(now) UI.draw(now or R.time_precise()) end end
-function BLT.drawIcon()
- flush_text_queue();
- local bs,bx,by=scale,ox,oy;ox,oy=ox+(W-102)*scale,oy+31*scale;scale=scale*.78
- UI.icon()
- flush_text_queue();
- scale,ox,oy=bs,bx,by
-end
 
-if ...=='blt_test' then return {BLT=BLT,A=A,Core=Core ,UI=UI} end
+
+if ...=='blt_test' then return {Media=Media,BLT=BLT,A=A,Core=Core ,UI=UI} end
 if ...=='ui_test' then return {Core=Core,A=A,UI=UI,Chameleon=Chameleon,palette=C,Chrome=Chrome,set_content_cursor=set_content_cursor} end
 local chrome_ok,chrome_err=titlebar_api_ready()
 if not chrome_ok then Language.mb(BLT.publicError(chrome_err),'BLT LOOP RM STUDIO | 必要な拡張',0);return end

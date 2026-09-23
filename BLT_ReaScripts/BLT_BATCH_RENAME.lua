@@ -1,10 +1,10 @@
 -- @description BATCH RENAME
--- @version 0.5.4
+-- @version 0.5.6
 -- @author Balrulu
 -- @provides
 --   . > ../
 -- @changelog
---   Increase preset capacity and show shared overflow dialogs.
+--   BLT SERIES Beta TEST UPLOAD
 -- @about
 --   BLT SERIES Beta TEST UPLOAD
 
@@ -156,7 +156,7 @@ local LanguageCatalog={en={
  ["選択が変更されました。読み直してください。"]="Selection changed. Reload it.",
  ["数値を入力してください。"]="Enter a number.",
  ["開始番号または桁数が無効です。"]="Invalid start number or digit count.",
- ["接頭詞・末尾詞を含む名前は4096バイト以内にしてください。"]="Names including prefix/suffix must fit in 4096 bytes.",
+ ["接頭辞・接尾辞を含む名前は4096バイト以内にしてください。"]="Names including prefix/suffix must fit in 4096 bytes.",
  ["選択またはプロジェクトが変わりました。一覧を自動更新します。もう一度対応関係を確認してください。"]="Selection or project changed. List refreshed; check mappings again.",
  ["対象の選択が変わりました。一覧を自動更新します。もう一度対応関係を確認してください。"]="Target selection changed. List refreshed; check mappings again.",
  ["対象の並び順が変わりました。一覧を自動更新します。もう一度対応関係を確認してください。"]="Target order changed. List refreshed; check mappings again.",
@@ -168,18 +168,18 @@ local LanguageCatalog={en={
  ["変更に失敗したため、元の名前に戻しました。"]="Rename failed. Original names restored.",
  ["復元に失敗した項目があります。REAPERのUndoで戻してください。"]="Some names could not be restored. Use REAPER Undo.",
  ["クリップボードを読み込んでください。"]="Load the clipboard.",
- ["接頭詞・末尾詞は改行なしの512バイト以内にしてください。"]="Prefix/suffix must be single-line text up to 512 bytes.",
+ ["接頭辞・接尾辞は改行なしの512バイト以内にしてください。"]="Prefix/suffix must be single-line text up to 512 bytes.",
  ["選択を自動反映しました。上のトラックから、開始位置順に対応します。"]="Selection synced. Mapped by track order, then start time.",
  ["テキストを解析しています。"]="Parsing text.",
  ["入力を取り消しました。"]="Input cancelled.",
  [" 元の値へ戻しました。"]=" Previous value restored.",
- ["取り込んだ名前をクリアしました。{name} や接頭詞・末尾詞だけでもリネームできます。"]="Imported names cleared. You can still rename with {name} or prefix/suffix.",
+ ["取り込んだ名前をクリアしました。{name} や接頭辞・接尾辞だけでもリネームできます。"]="Imported names cleared. You can still rename with {name} or prefix/suffix.",
  ["直接入力できます。Enter：確定 ／ Esc：取消 ／ Ctrl+A：全選択 ／ Ctrl+V：欄に貼付"]="Type directly. Enter: confirm / Esc: cancel / Ctrl+A: select all / Ctrl+V: paste",
  ["入力欄には改行なしの512バイト以内の文字を貼り付けてください。"]="Paste single-line text up to 512 bytes into this field.",
  ["この欄には数字を入力してください。"]="Enter digits here.",
  ["入力は512バイト以内にしてください。"]="Keep input under 512 bytes.",
- ["接頭詞"]="Prefix",
- ["末尾詞"]="Suffix",
+ ["接頭辞"]="Prefix",
+ ["接尾辞"]="Suffix",
  ["をクリアしました。"]=" cleared.",
  ["〈空欄〉"]="<empty>",
  ["選択の変更を自動反映しました。対応関係を確認して実行してください。"]="Selection synced. Check mappings, then run.",
@@ -218,7 +218,7 @@ local LanguageCatalog={en={
  ["行番号を1～%dへ補正しました。"]="Row number clamped to 1–%d.",
  ["行番号を直接入力 ／ 上下ドラッグ・ホイール：1行"]="Type row / Drag vertically or wheel: 1 row",
  ["リネームの結果重複するファイル名があります"]="Some renamed items will have duplicate names",
- ["必要であればキャンセルして、接頭詞・末尾詞や連番を調整してください。"]="Cancel to adjust prefix/suffix or numbering if needed.",
+ ["必要であればキャンセルして、接頭辞・接尾辞や連番を調整してください。"]="Cancel to adjust prefix/suffix or numbering if needed.",
  ["ほか %d組"]="%d more groups",
  ["キャンセル"]="Cancel",
  ["Esc：キャンセル"]="Esc: cancel",
@@ -236,17 +236,17 @@ local LanguageCatalog={en={
  ["開始"]="No.",
  ["桁数"]="Pad",
  ["{n} 挿入"]="{n}",
- ["接頭詞のカーソル位置へ、選択順の連番 {n} を挿入します。"]="Insert sequence number {n} at the prefix cursor.",
+ ["接頭辞のカーソル位置へ、選択順の連番 {n} を挿入します。"]="Insert sequence number {n} at the prefix cursor.",
  ["{name} 元の名前"]="{name} Original",
- ["接頭詞のカーソル位置へ、現在のアクティブテイク名 {name} を挿入します。"]="Insert the active take name {name} at the prefix cursor.",
- ["末尾詞のカーソル位置へ、選択順の連番 {n} を挿入します。"]="Insert sequence number {n} at the suffix cursor.",
- ["末尾詞のカーソル位置へ、現在のアクティブテイク名 {name} を挿入します。"]="Insert the active take name {name} at the suffix cursor.",
- ["{n} = 選択順の連番    {name} = 現在のテイク名    貼付名は接頭詞と末尾詞の間に入ります。"]="{n} = sequence    {name} = current take    Pasted names go between prefix and suffix.",
+ ["接頭辞のカーソル位置へ、現在のアクティブテイク名 {name} を挿入します。"]="Insert the active take name {name} at the prefix cursor.",
+ ["接尾辞のカーソル位置へ、選択順の連番 {n} を挿入します。"]="Insert sequence number {n} at the suffix cursor.",
+ ["接尾辞のカーソル位置へ、現在のアクティブテイク名 {name} を挿入します。"]="Insert the active take name {name} at the suffix cursor.",
+ ["{n} = 選択順の連番    {name} = 現在のテイク名    貼付名は接頭辞と接尾辞の間に入ります。"]="{n} = sequence    {name} = current take    Pasted names go between prefix and suffix.",
  ["空行の扱い"]="BLANKS",
- ["接頭/末尾詞のみ反映"]="Affixes only",
- ["空行では貼付名を使わず、接頭詞・末尾詞だけを反映します。{n} と {name} も展開されます。"]="For blank rows, apply prefix/suffix only; expand {n} and {name}.",
+ ["接頭辞/接尾辞のみ反映"]="Affixes only",
+ ["空行では貼付名を使わず、接頭辞・接尾辞だけを反映します。{n} と {name} も展開されます。"]="For blank rows, apply prefix/suffix only; expand {n} and {name}.",
  ["変更しない"]="Keep unchanged",
- ["貼付データの空行に対応するアイテムは、接頭詞・末尾詞も含めて変更しません。"]="Leave items mapped to blank rows unchanged, including prefix/suffix.",
+ ["貼付データの空行に対応するアイテムは、接頭辞・接尾辞も含めて変更しません。"]="Leave items mapped to blank rows unchanged, including prefix/suffix.",
  ["貼付データの空行に対応するテイク名を空にします。元ファイル名は変更しません。"]="Clear take names mapped to blank rows. Keep source file names.",
  ["空行は行位置を維持します。"]="Blank rows keep their positions.",
  ["貼付後に空行の扱いを選択できます。"]="Choose blank-row handling after pasting.",
@@ -455,12 +455,7 @@ function B.unpack(data)
  end
  local ok,v=pcall(read,0);if capacity then BLTPresetLimits.show(Language.code=='EN') end;if ok and at==#data+1 then return v end
 end
-function B.cleanText(text)
- text=tostring(text);B.cleanCache=B.cleanCache or {};local v=B.cleanCache[text];if v then return v end
- v=text:gsub('[%z\1-\31\127]',' ')
- B.cleanCount=(B.cleanCount or 0)+1;if B.cleanCount>512 then B.cleanCache={};B.cleanCount=1 end
- B.cleanCache[text]=v;return v
-end
+
 function B.publicError(value,fallback)
  local text=tostring(value or '')
  text=text:match('^(.-)\nstack traceback:') or text
@@ -700,12 +695,7 @@ function B.requireInput(ime)
  if not ok or type(api)~='table' then B.inputNotice();return false end
  ime.api=api;return true
 end
-function B.switch(x,y,state,enabled)
- local s,bx,by=host.geometry();local cy=by+(y+12)*s;local cx=bx+(x+7+12*state)*s
- local c=C.edge2;gfx.set(c[1],c[2],c[3],enabled and .45 or .2);gfx.line(bx+(x+3)*s,cy,bx+(x+23)*s,cy,1)
- c=C.faint;gfx.set(c[1],c[2],c[3],enabled and .8 or .4);gfx.circle(cx,cy,4.2*s,1,1)
- if state>.001 and enabled then c=C.accent;gfx.set(c[1],c[2],c[3],.06*state);gfx.circle(cx,cy,7*s,1,1);c=C.accent2;gfx.set(c[1],c[2],c[3],.94*state);gfx.circle(cx,cy,4.2*s,1,1) end
-end
+
 function B.blend(dt)
  if B.blendDt~=dt then B.blendDt=dt;B.blendValue=1-math.exp(-12*dt) end
  return B.blendValue
@@ -990,8 +980,6 @@ local function custom_titlebar(blocked)
   end
   local rcx,rcy=resetX+resetW*.5,Chrome.titleH*.5
   local rcol=hoverReset and Chrome.mint or C.muted
-
-  -- Reference-style outlined window; arrow explicitly points LOWER LEFT.
   gfx.set(rcol[1],rcol[2],rcol[3],hoverReset and .98 or .82)
   gfx.roundrect(rcx-6,rcy-6,12,12,1,1)
   gfx.line(rcx+3,rcy-3,rcx-3,rcy+3,1)
@@ -1121,6 +1109,7 @@ local project_undo=create_project_undo(R,{
  after=function(project) if host.undoRefresh then host.undoRefresh(project) end;wake_visuals() end,
 })
 function B.key(k)
+ if k<0 then return k end
  if Presets.open then Presets.key(k);return 0 end
  if host and not host.localUndo then
   if host.undoAction then
@@ -1187,13 +1176,26 @@ function B.cleanup(fn,...)
 end
 function B.recoverInput(state,err)
  gfx.dest=-1;gfx.mode=0;gfx.a=1
- for _,key in ipairs({'drag','number_drag','pointer_capture','field_drag','fieldDrag','curve_drag','scroll_drag','seam_drag','seam_hold','pressed','popup','name_dialog','duplicate_modal'}) do state[key]=nil end
+ for _,key in ipairs({'drag','number_drag','pointer_capture','field_drag','fieldDrag','scrollDrag','source_wave_drag','curve_drag','scroll_drag','seam_drag','seam_hold','pressed','popup','name_dialog','duplicate_modal'}) do state[key]=nil end
  if host.cancelEdit then B.cleanup(host.cancelEdit) end
- Presets.open=false;Presets.swallow=false
+ Presets.open=false;Presets.swallow=false;Presets.pressed=nil;Presets.hoverSince=nil
+ Chrome.drag=nil;Chrome.resize=nil
+ if host.cursor then B.cleanup(host.cursor,nil) end
  B.recoveryMode=true
  local ok,why=pcall(B.bar)
  B.recoveryMode=nil
- if not ok then B.logError(why) end
+ if not ok then
+  B.logError(why)
+  -- A failed font, preset or theme draw must still allow closing the window.
+  local down=((gfx.mouse_cap or 0)&1)~=0
+  local hit=gfx.mouse_y>=0 and gfx.mouse_y<26 and gfx.mouse_x>=gfx.w-38 and gfx.mouse_x<gfx.w
+  if down and not B.emergencyDown then B.emergencyClose=hit end
+  if not down and B.emergencyDown then
+   if B.emergencyClose and hit then Chrome.requestClose=true end
+   B.emergencyClose=nil
+  end
+  B.emergencyDown=down
+ else B.emergencyDown=nil;B.emergencyClose=nil end
  pcall(B.footer,B.publicError(err),true,gfx.w,0,B.footerVersion or '')
  pcall(gfx.update)
  if Chrome.requestClose then state.closing=true end
@@ -1208,31 +1210,7 @@ function B.title(title,subtitle,width,divider)
  B.font(10,1,false,scale,host.faces);gfx.set(C.accent2[1],C.accent2[2],C.accent2[3],1);gfx.x=ox+26*scale;gfx.y=origin+44*scale;gfx.drawstr(UI.fit(Language.text(subtitle),(width-155)*scale))
  if divider~=false then gfx.set(C.edge2[1],C.edge2[2],C.edge2[3],.26);gfx.line(ox+24*scale,origin+62*scale,ox+(width-24)*scale,origin+62*scale,1) end
 end
-function B.chaosButton(cx,cy,cw,ch,enabled,hot,pushed,time,glow)
- local d=host.chaosPainter
- local violet=Chameleon.enabled and C.accent2 or B.chaosViolet
- local ember=Chameleon.enabled and C.accent or B.chaosEmber
- local pale=Chameleon.enabled and C.text or B.chaosPale
- local surface=Chameleon.enabled and C.field or B.chaosSurface
- local alive=enabled and 1 or .25
- local breath=(.5+.5*math.sin(time*.85))*alive
- local y=cy+(pushed and 1 or 0);local center=ch/2
- -- Keep both the outer glow and the pressed face inside the registered bounds.
- d.cut(cx,cy,cw,ch,11,violet,.025*alive,violet,.10+.07*breath)
- d.cut(cx,y+2,cw,ch-4,9,surface,1,violet,(.45+.3*glow)*alive)
- d.gradient(cx+2,y+4,cw-4,ch-8,violet,C.bg,.12+.15*glow,.015,true)
- for i=1,6 do
-  local phase=time*.3+i*1.7;local px=cx+12+(i-1)*(cw-29)/5
-  local py=y+center+math.sin(phase)*(center-6)
-  local alpha=(.18+.22*math.sin(phase*.7)^2)*alive
-  if px<cx+36 or px>cx+cw-36 or math.abs(py-y-center)>11 then
-   d.disc(px,py,3,violet,alpha*.08);d.disc(px,py,.7,i%2==0 and ember or pale,alpha)
-  end
- end
- d.line(cx+cw*.335,y+ch-5,cx+cw*.665,y+ch-5,violet,(.18+.22*breath+.2*glow)*alive)
- d.label('C H A O S',cx+24,y+center-9,17,enabled and pale or C.faint,2,cw-48,22,1,true)
-end
-B.chaosViolet={.62,.23,.94};B.chaosEmber={.92,.27,.65};B.chaosPale={.87,.69,1};B.chaosSurface={.038,.014,.068}
+
 
 function B.footer(message,bad,width,height,version,progress)
  if version~='' then B.footerVersion=version end
@@ -1340,9 +1318,7 @@ function Core.parse_step(j,budget)
   end
   return j.done
 end
-function Core.parse(text)
-  local j=Core.parser(text); while not Core.parse_step(j) do end; return j.rows,j
-end
+
 
 Core.WINDOWS_COMMAND=[[powershell.exe -NoLogo -NoProfile -NonInteractive -STA -WindowStyle Hidden -Command "$ErrorActionPreference='Stop'; [Console]::OutputEncoding=New-Object System.Text.UTF8Encoding($false); $text=[string](Get-Clipboard -Raw); [Console]::Write(('RN1 '+[Text.Encoding]::UTF8.GetByteCount($text)+[char]10+$text))"]]
 function Core.process_output(output,framed)
@@ -1477,7 +1453,7 @@ function Core.preview(items,names,s,loaded)
         ..Core.affix(s.suffix,ss,sd,i,row.before)
       row.kind="rename"
     end
-    if #row.after>Core.MAX_NAME then error("接頭詞・末尾詞を含む名前は4096バイト以内にしてください。",0) end
+    if #row.after>Core.MAX_NAME then error("接頭辞・接尾辞を含む名前は4096バイト以内にしてください。",0) end
     row.change=item and item.take and (row.kind=="rename" or row.kind=="blank" or row.kind=="empty_affix") and row.after~=row.before or false
     if (row.kind=="rename" or row.kind=="blank" or row.kind=="empty_affix") and not row.change then row.kind="same" end
     if row.change then stats.change=stats.change+1 end
@@ -1576,7 +1552,7 @@ local IME={active=false,bounds={}}
 local function edit_value(e)
   local value=Core.Edit.value(e)
   if e.key=="prefix" or e.key=="suffix" then
-    if #value>512 or value:find("[%z\1-\31\127]") or not utf8.len(value) then return nil,"接頭詞・末尾詞は改行なしの512バイト以内にしてください。" end
+    if #value>512 or value:find("[%z\1-\31\127]") or not utf8.len(value) then return nil,"接頭辞・接尾辞は改行なしの512バイト以内にしてください。" end
   else
     local normalized,_,err=Core.normalize_numeric(e.key,value)
     if not normalized then return nil,err end
@@ -1664,7 +1640,7 @@ local function clear_paste()
   if not commit_edit() then return end
   if A.applied then refresh() end
   A.parser=nil; A.names={}; A.loaded=false; A.input_error=false; A.invalid=false
-  rebuild(); notice("取り込んだ名前をクリアしました。{name} や接頭詞・末尾詞だけでもリネームできます。")
+  rebuild(); notice("取り込んだ名前をクリアしました。{name} や接頭辞・接尾辞だけでもリネームできます。")
 end
 local function change_setting(k,v)
   if not commit_edit() then return end
@@ -1701,7 +1677,7 @@ local function clear_text_field(key)
   if E and E.key==key then IME.stop(false);E=nil; A.edit_dirty=nil end
   if A.applied then refresh() end
   S[key]=""; persist(); A.applied=false; rebuild()
-  notice((key=="prefix" and "接頭詞" or "末尾詞").."をクリアしました。")
+  notice((key=="prefix" and "接頭辞" or "接尾辞").."をクリアしました。")
 end
 local function duplicate_display_name(name,limit)
   if name=="" then return "〈空欄〉" end
@@ -2057,7 +2033,7 @@ end
 
 -- CHAMELEON THEME ADAPTER
 --
--- Porting contract for other BLT scripts:
+-- Theme adapter interface:
 --   Required palette tables : C, C_DEFAULT
 --   Optional chrome colors   : Chrome, CHROME_DEFAULT
 --   Persistence              : SECTION / ExtState key "chameleon"
@@ -2065,8 +2041,6 @@ end
 --   UI integration           : Chameleon.enabled / Chameleon.set(...)
 --   Main-loop integration    : Chameleon.tick(now)
 --
--- Keep this block intact when porting; normally only the title-bar button
--- placement and the host hooks need adapting in another BLT script.
 Chameleon.keys={
   -- Main/surface colors
   "col_main_bg2","col_main_bg","col_arrangebg","col_tracklistbg","col_mixerbg",
@@ -2879,7 +2853,7 @@ local function begin_input_draw(key,x,y,w,h,placeholder)
       line(cx+16+offset,cy+7+dy,cx+7+offset,cy+ch-7+dy,cc,al)
     end
     widget("clear_field_"..key,cx,cy,cw,ch,function() clear_text_field(key) end,
-      (key=="prefix" and "接頭詞" or "末尾詞").."をクリアします。",can_clear)
+      (key=="prefix" and "接頭辞" or "接尾辞").."をクリアします。",can_clear)
   end
 end
 local function input(key,x,y,w,h,placeholder) begin_input_draw(key,x,y,w,h,placeholder) end
@@ -3025,7 +2999,7 @@ local function draw_duplicate_modal()
   label("リネームの結果重複するファイル名があります",x+24,y+31,22,C.text,1,w-48,34,0,true)
   right_label(string.format("%d GROUPS / %d ITEMS",A.stats.duplicate_groups or 0,A.stats.duplicate_items or 0),x+w-24,y+20,8,C.muted,3,true)
 
-  label("必要であればキャンセルして、接頭詞・末尾詞や連番を調整してください。",x+24,y+88,11,C.faint,1,w-48,20,0,false)
+  label("必要であればキャンセルして、接頭辞・接尾辞や連番を調整してください。",x+24,y+88,11,C.faint,1,w-48,20,0,false)
 
   local groups=A.stats.duplicates or {}
   local shown=min(#groups,6)
@@ -3067,7 +3041,7 @@ local function draw()
     "このツールに取り込んだ名前だけをクリアします。クリップボード本体は変更しません。",not A.parser and (A.loaded or A.input_error),true)
 
   draw_glass_group(22,173,490,126,"PREFIX")
-  label("接頭詞",34,190,16,C.text,1,220,22,0,true)
+  label("接頭辞",34,190,16,C.text,1,220,22,0,true)
   input("prefix",34,216,466,36,"追加なし（入力があれば有効化します）")
   rect(32,258,344,34,C.field,.36)
   line(32,258,376,258,C.edge2,.22); line(32,292,376,292,C.edge,.20)
@@ -3079,13 +3053,13 @@ local function draw()
   input("prefix_digits",252,260,38,30,"3")
   numeric_stepper("prefix_digits","prefix_digits",290,260,20,30)
   small_button("number_prefix","{n} 挿入",316,260,56,30,function() insert_number("prefix") end,
-    "接頭詞のカーソル位置へ、選択順の連番 {n} を挿入します。",not A.parser)
+    "接頭辞のカーソル位置へ、選択順の連番 {n} を挿入します。",not A.parser)
   line(386,261,386,289,C.edge2,.22)
   small_button("name_prefix","{name} 元の名前",396,260,104,30,function() insert_current_name("prefix") end,
-    "接頭詞のカーソル位置へ、現在のアクティブテイク名 {name} を挿入します。",not A.parser)
+    "接頭辞のカーソル位置へ、現在のアクティブテイク名 {name} を挿入します。",not A.parser)
 
   draw_glass_group(528,173,488,126,"SUFFIX")
-  label("末尾詞",540,190,16,C.text,1,220,22,0,true)
+  label("接尾辞",540,190,16,C.text,1,220,22,0,true)
   input("suffix",540,216,464,36,"追加なし（入力があれば有効化します）")
   rect(538,258,344,34,C.field,.36)
   line(538,258,882,258,C.edge2,.22); line(538,292,882,292,C.edge,.20)
@@ -3097,12 +3071,12 @@ local function draw()
   input("suffix_digits",758,260,38,30,"3")
   numeric_stepper("suffix_digits","suffix_digits",796,260,20,30)
   small_button("number_suffix","{n} 挿入",822,260,56,30,function() insert_number("suffix") end,
-    "末尾詞のカーソル位置へ、選択順の連番 {n} を挿入します。",not A.parser)
+    "接尾辞のカーソル位置へ、選択順の連番 {n} を挿入します。",not A.parser)
   line(892,261,892,289,C.edge2,.22)
   small_button("name_suffix","{name} 元の名前",902,260,102,30,function() insert_current_name("suffix") end,
-    "末尾詞のカーソル位置へ、現在のアクティブテイク名 {name} を挿入します。",not A.parser)
+    "接尾辞のカーソル位置へ、現在のアクティブテイク名 {name} を挿入します。",not A.parser)
 
-  label("{n} = 選択順の連番    {name} = 現在のテイク名    貼付名は接頭詞と末尾詞の間に入ります。",24,309,10.5,C.muted,1,992,16,0,false)
+  label("{n} = 選択順の連番    {name} = 現在のテイク名    貼付名は接頭辞と接尾辞の間に入ります。",24,309,10.5,C.muted,1,992,16,0,false)
 
   label("空行の扱い",24,335,12.5,C.text,1,86,18,2,true)
   glow_line(112,341,126,341,C.accent2,.42)
@@ -3111,10 +3085,10 @@ local function draw()
   glow_line(370,352,370,356,C.edge2,.16)
   glow_line(490,352,490,356,C.edge2,.16)
   rect(120,339,3,3,C.accent2,.70)
-  segment_button("affix_only","接頭/末尾詞のみ反映",130,328,176,27,S.empty=="affix",function() change_setting("empty","affix") end,
-    "空行では貼付名を使わず、接頭詞・末尾詞だけを反映します。{n} と {name} も展開されます。",A.loaded and not A.parser)
+  segment_button("affix_only","接頭辞/接尾辞のみ反映",130,328,176,27,S.empty=="affix",function() change_setting("empty","affix") end,
+    "空行では貼付名を使わず、接頭辞・接尾辞だけを反映します。{n} と {name} も展開されます。",A.loaded and not A.parser)
   segment_button("skip","変更しない",314,328,112,27,S.empty=="skip",function() change_setting("empty","skip") end,
-    "貼付データの空行に対応するアイテムは、接頭詞・末尾詞も含めて変更しません。",A.loaded and not A.parser)
+    "貼付データの空行に対応するアイテムは、接頭辞・接尾辞も含めて変更しません。",A.loaded and not A.parser)
   segment_button("clear","無名にする",434,328,112,27,S.empty=="clear",function() change_setting("empty","clear") end,
     "貼付データの空行に対応するテイク名を空にします。元ファイル名は変更しません。",A.loaded and not A.parser)
   label(A.loaded and "空行は行位置を維持します。" or "貼付後に空行の扱いを選択できます。",564,333,9,C.faint,1,246,18,0,false)
@@ -3153,7 +3127,7 @@ local function draw()
     message=string.format("注意：変更後に同名となる名前が %d組（%dアイテム）あります。実行時に確認します。",st.duplicate_groups,st.duplicate_items or 0)
     message_bad=true
   end
-  BLT.footer(message,message_bad,W,H+22,'0.5.4')
+  BLT.footer(message,message_bad,W,H+22,'0.5.6')
   draw_duplicate_modal()
   custom_titlebar()
 end
@@ -3308,7 +3282,7 @@ local function close()
   BLT.logError(err)
  end
 end
-function BLT.pick(obj,keys) local v=BLT.valueView or {};BLT.valueView=v;for k in pairs(keys) do v[k]=obj[k] end;return v end
+
 PrimaryButton.painter={C=C,gradient=gradient,line=line,rect=rect,corners=finish_corners,disc=disc,label=label}
 PrimaryButton.painter.motion=function(now) return (gfx.mouse_x-ox)/scale,(gfx.mouse_y-oy)/scale,visual_speed(now) end
 PrimaryButton.wake=function() redraw_dirty=true;A.content_dirty=true;next_draw_time=0 end
@@ -3351,12 +3325,11 @@ if Chameleon.enabled then Chameleon.refresh(true) end
 R.atexit(close)
 guarded(refresh)
 local function loop()
- BLT.tick(R.time_precise());PrimaryButton.tick(R.time_precise(),BLT.host.active(),PrimaryButton.wake)
-
-  local k=BLT.key(gfx.getchar()); if k<0 or A.closing then close(); return end
   guarded(function()
-    local now=R.time_precise()
-    Chameleon.tick(now)
+ local now=R.time_precise();BLT.tick(now);PrimaryButton.tick(now,BLT.host.active(),PrimaryButton.wake)
+
+  local k=BLT.key(gfx.getchar()); if k<0 or A.closing then A.closing=true; return end
+        Chameleon.tick(now)
     local flags=gfx.getchar(65537)
     local window_active=((flags & 1)==0) or ((flags & 2)~=0)
     if last_window_active==nil or window_active~=last_window_active then last_window_active=window_active; wake_visuals(now) end
@@ -3364,7 +3337,7 @@ local function loop()
     local ime_was_active=IME.active
     IME.frame()
     local key_activity=false; local count=0
-    while k>0 and count<32 do key_activity=true; if not ime_was_active and not IME.active then keypress(k) end; count=count+1; k=gfx.getchar() end
+    while k>0 and count<32 do key_activity=true; if not ime_was_active and not IME.active then keypress(k) end; count=count+1; k=BLT.key(gfx.getchar()) end
     if key_activity then wake_visuals(now) end
     if A.closing then return end
 

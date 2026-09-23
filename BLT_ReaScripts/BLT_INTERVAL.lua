@@ -1,10 +1,10 @@
 -- @description INTERVAL
--- @version 0.5.5
+-- @version 0.5.9
 -- @author Balrulu
 -- @provides
 --   . > ../
 -- @changelog
---   Increase preset capacity and show shared overflow dialogs.
+--   BLT SERIES Beta TEST UPLOAD
 -- @about
 --   BLT SERIES Beta TEST UPLOAD
 
@@ -162,7 +162,7 @@ end
 -- BLT PORTING CONFIGURATION: shared chrome metrics, app identity and title.
 -- Keep this script self-contained; no external module loading is required.
 local App={
-  version="0.5.5",section="BLT_INTERVAL",windowTitle="BLT Interval",
+  version="0.5.9",section="BLT_INTERVAL",windowTitle="BLT Interval",
   chromeTitle="I N T E R V A L",title="INTERVAL",
   subtitle="ITEM SPACING  アイテム間隔を整列",
 }
@@ -267,7 +267,7 @@ LanguageCatalog.en={
  ['戻る']='Back', ['プリセット']='Presets', ['上書き保存']='Save', ['名前を付けて保存…']='Save As...', ['インポート…']='Import...',
  ['現在: ']='Current: ', ['未選択']='None',
  ['間隔モード']='SPACING', ['終了点 → 開始点']='End → Start', ['開始点 → 開始点']='Start → Start',
- ['グループ']='Groups', ['全体']='All items', ['トラック毎']='By track', ['終了点 → 開始点の間隔']='End-to-start gap', ['開始点 → 開始点の間隔']='Start-to-start spacing',
+ ['ブロック']='Blocks', ['全体']='All items', ['トラック毎']='By track', ['終了点 → 開始点の間隔']='End-to-start gap', ['開始点 → 開始点の間隔']='Start-to-start spacing',
  ['整列後にウィンドウを閉じる']='Close after align', ['最後に使ったモードを記憶']='Remember mode', ['整列を実行']='Align items',
  ['Interval | エラー']='Interval | Error', ['カスタムタイトルバーを初期化できません。']='Cannot initialize the app bar.',
 }
@@ -291,7 +291,7 @@ local Layout={
   popup={width=286,rowHeight=29,headerHeight=34,visiblePresets=7,hoverDelay=1},
   controls={
     gap={30,150,198,44},start={240,150,198,44},
-    scope_all={30,206,128,30},scope_group={170,206,128,30},scope_track={310,206,128,30},input={30,266,408,82},
+    scope_all={30,206,128,30},scope_block={170,206,128,30},scope_track={310,206,128,30},input={30,266,408,82},
     unit_sec={76,358,154,32},unit_grid={238,358,154,32},
     close_after={30,408,202,28},remember_mode={238,408,200,28},apply={64,438,340,50},
   },
@@ -394,26 +394,79 @@ function Core.collect(project)
   return items
 end
 
-function Core.grid_qn(project)
-  local _, division = R.GetSetProjectGrid(project, false)
-  if not division or division <= 0 or division ~= division or division == math.huge then
-    return nil, "現在のグリッド設定を取得できません。"
-  end
-  -- GetSetProjectGrid uses whole-note units (0.25 = quarter note).
-  -- TimeMap2_* uses quarter-note units, so multiply by four.
-  return division * 4.0
+local function finite_grid(n)
+ return type(n)=='number' and n==n and n~=math.huge and n~=-math.huge
 end
 
-local function advance_interval(project, reference, amount, unit, grid_qn)
-  if unit == "grid" then
-    local qn = R.TimeMap2_timeToQN(project, reference)
-    if not qn or qn ~= qn or qn == math.huge then return nil end
-    return R.TimeMap2_QNToTime(project, qn + amount * grid_qn)
-  end
-  return reference + amount
+function Core.read_grid(project)
+ local _,division,mode,swing=R.GetSetProjectGrid(project,false)
+ mode=mode or 0
+ if mode==3 then return {mode='measure'} end
+ if not finite_grid(division) or division<=0 or not finite_grid(division*4) then
+  return nil,"現在のグリッド設定を取得できません。"
+ end
+ if mode==1 and (not finite_grid(swing) or swing < -1 or swing > 1) then
+  return nil,"現在のグリッド設定を取得できません。"
+ end
+ return {mode=mode==1 and 'swing' or 'straight',qn=division*4,swing=mode==1 and swing or 0}
 end
 
-local function plan_sequence(project, items, interval, mode, unit, grid_qn, changes)
+local function measure_at(project,qn)
+ local index,first,last=R.TimeMap_QNToMeasures(project,qn)
+ if not finite_grid(index) or not finite_grid(first) or not finite_grid(last) or last<=first then return nil end
+ return index,first,last
+end
+
+-- Piecewise grid coordinates retain the reference's position between grid lines.
+local function swing_map(project,qn,grid,inverse)
+ local _,first,last=measure_at(project,qn)
+ if not first then return nil end
+ local step=grid.qn
+ local function knot(i)
+  local straight=math.min(last,first+i*step)
+  if straight>=last then return last end
+  return math.min(last,straight+(i%2)*step*grid.swing*.5)
+ end
+ local index=math.max(0,math.floor((qn-first)/step))
+ if inverse then
+  if knot(index)>qn then index=math.max(0,index-1)
+  elseif knot(index+1)<=qn then index=index+1 end
+  local lo,hi=knot(index),knot(index+1)
+  if hi<=lo then return nil end
+  local a,b=math.min(last,first+index*step),math.min(last,first+(index+1)*step)
+  return a+(qn-lo)/(hi-lo)*(b-a)
+ end
+ local a,b=first+index*step,math.min(last,first+(index+1)*step)
+ if b<=a then return nil end
+ return knot(index)+(qn-a)/(b-a)*(knot(index+1)-knot(index))
+end
+
+local function advance_interval(project,reference,amount,unit,grid)
+ if amount==0 then return reference end
+ if unit~='grid' then return reference+amount end
+ local qn=R.TimeMap2_timeToQN(project,reference)
+ if not finite_grid(qn) then return nil end
+ local target
+ if grid.mode=='measure' then
+  local index,first,last=measure_at(project,qn)
+  if not index then return nil end
+  local coordinate=index+(qn-first)/(last-first)+amount
+  local next_index=math.floor(coordinate)
+  local _,a,b=R.TimeMap_GetMeasureInfo(project,next_index)
+  if not finite_grid(a) or not finite_grid(b) or b<=a then return nil end
+  target=a+(coordinate-next_index)*(b-a)
+ elseif grid.mode=='swing' and grid.swing~=0 then
+  local straight=swing_map(project,qn,grid,true)
+  if not straight then return nil end
+  target=swing_map(project,straight+amount*grid.qn,grid,false)
+ else
+  target=qn+amount*grid.qn
+ end
+ if not finite_grid(target) then return nil end
+ return R.TimeMap2_QNToTime(project,target)
+end
+
+local function plan_sequence(project, items, interval, mode, unit, grid, changes)
   if #items < 2 then return true end
 
   local anchor = items[1].position
@@ -428,9 +481,9 @@ local function plan_sequence(project, items, interval, mode, unit, grid_qn, chan
       end
       -- Use the preceding item's NEW end, not its original timeline position.
       reference = previous + length
-      target = advance_interval(project, reference, interval, unit, grid_qn)
+      target = advance_interval(project, reference, interval, unit, grid)
     else
-      target = advance_interval(project, anchor, (i - 1) * interval, unit, grid_qn)
+      target = advance_interval(project, anchor, (i - 1) * interval, unit, grid)
     end
     if not target or target ~= target or target == math.huge or target < reference then
       return false, "間隔が大きすぎるか、小さすぎます。"
@@ -444,17 +497,17 @@ local function plan_sequence(project, items, interval, mode, unit, grid_qn, chan
   return true
 end
 
--- Shared overlap grouping: positive overlap, transitive across all tracks.
-function Core.overlap_groups(ranges)
+-- Shared overlap block formation: positive overlap, transitive across all tracks.
+function Core.overlap_blocks(ranges)
  local sorted={};for i,r in ipairs(ranges) do sorted[i]=r end
  table.sort(sorted,function(a,b) return a.start==b.start and a.finish<b.finish or a.start<b.start end)
- local groups={}
+ local blocks={}
  for _,r in ipairs(sorted) do
-  local g=groups[#groups]
-  if not g or r.start>=g.finish then g={start=r.start,finish=r.finish,members={}};groups[#groups+1]=g end
+  local g=blocks[#blocks]
+  if not g or r.start>=g.finish then g={start=r.start,finish=r.finish,members={}};blocks[#blocks+1]=g end
   g.finish=math.max(g.finish,r.finish);g.members[#g.members+1]=r
  end
- return groups
+ return blocks
 end
 
 function Core.plan(project, items, interval, mode, unit, scope)
@@ -463,50 +516,50 @@ function Core.plan(project, items, interval, mode, unit, scope)
   scope = scope or "all"
   if mode ~= "start" and mode ~= "gap" then return nil, "間隔のモードが無効です。" end
   if unit ~= "sec" and unit ~= "grid" then return nil, "間隔の単位が無効です。" end
-  if scope ~= "all" and scope ~= "track" and scope ~= "group" then return nil, "整列範囲のモードが無効です。" end
+  if scope ~= "all" and scope ~= "track" and scope ~= "block" then return nil, "整列範囲のモードが無効です。" end
   if not interval or interval < 0 or interval ~= interval or interval == math.huge then
     return nil, unit == "grid" and "0以上のグリッド数を入力してください。" or "0以上の秒数を入力してください。"
   end
   if #items < 2 then return nil, "アイテムを2つ以上選択してください。" end
 
-  local grid_qn = nil
+  local grid = nil
   if unit == "grid" then
     local err
-    grid_qn, err = Core.grid_qn(project)
-    if not grid_qn then return nil, err end
+    grid, err = Core.read_grid(project)
+    if not grid then return nil, err end
   end
 
   local changes = {}
-  if scope == "group" then
+  if scope == "block" then
     local ranges={};for _,item in ipairs(items) do ranges[#ranges+1]={start=item.position,finish=item.position+item.length,value=item} end
-    local groups=Core.overlap_groups(ranges);local sequence={}
-    for _,g in ipairs(groups) do
+    local blocks=Core.overlap_blocks(ranges);local sequence={}
+    for _,g in ipairs(blocks) do
       local locked=false;for _,r in ipairs(g.members) do locked=locked or r.value.locked end
       sequence[#sequence+1]={item=g,position=g.start,length=g.finish-g.start,locked=locked}
     end
-    local shifts={};local ok,err=plan_sequence(project,sequence,interval,mode,unit,grid_qn,shifts)
+    local shifts={};local ok,err=plan_sequence(project,sequence,interval,mode,unit,grid,shifts)
     if not ok then return nil,err end
     for _,change in ipairs(shifts) do
       local delta=change.after-change.before
       for _,r in ipairs(change.item.members) do local v=r.value;changes[#changes+1]={item=v.item,before=v.position,after=v.position+delta} end
     end
   elseif scope == "track" then
-    local groups, order = {}, {}
+    local blocks, order = {}, {}
     for _, item in ipairs(items) do
       local key = item.track
-      if not groups[key] then
-        groups[key] = {}
+      if not blocks[key] then
+        blocks[key] = {}
         order[#order + 1] = key
       end
-      groups[key][#groups[key] + 1] = item
+      blocks[key][#blocks[key] + 1] = item
     end
 
     local eligible_tracks = 0
     for _, key in ipairs(order) do
-      local group = groups[key]
-      if #group >= 2 then
+      local block = blocks[key]
+      if #block >= 2 then
         eligible_tracks = eligible_tracks + 1
-        local ok, err = plan_sequence(project, group, interval, mode, unit, grid_qn, changes)
+        local ok, err = plan_sequence(project, block, interval, mode, unit, grid, changes)
         if not ok then return nil, err end
       end
     end
@@ -514,7 +567,7 @@ function Core.plan(project, items, interval, mode, unit, scope)
       return nil, "トラック毎の整列には、同一トラック上でアイテムを2つ以上選択してください。"
     end
   else
-    local ok, err = plan_sequence(project, items, interval, mode, unit, grid_qn, changes)
+    local ok, err = plan_sequence(project, items, interval, mode, unit, grid, changes)
     if not ok then return nil, err end
   end
 
@@ -563,7 +616,7 @@ function Core.apply(project, interval, mode, unit, scope)
   R.PreventUIRefresh(-1)
   R.UpdateArrange()
   local unit_name = unit == "grid" and "grid" or "seconds"
-  local scope_name = scope == "track" and "by track" or scope == "group" and "overlap groups" or "all items"
+  local scope_name = scope == "track" and "by track" or scope == "block" and "overlap blocks" or "all items"
   local undo_name = mode == "gap" and ("Interval: space selected items by end-to-start gap (" .. unit_name .. ", " .. scope_name .. ")")
     or ("Interval: align selected item starts (" .. unit_name .. ", " .. scope_name .. ")")
   R.Undo_EndBlock2(project, ok and undo_name or "Interval: failed alignment", 4)
@@ -597,7 +650,7 @@ local saved_unit = R.GetExtState(SECTION, "last_unit")
 local saved_scope = R.GetExtState(SECTION, "last_scope")
 local mode = remember_mode and (saved_mode == "start" and "start" or "gap") or "gap"
 local unit = remember_mode and (saved_unit == "grid" and "grid" or "sec") or "sec"
-local scope = remember_mode and (saved_scope == "track" and "track" or saved_scope == "group" and "group" or "all") or "all"
+local scope = remember_mode and (saved_scope == "track" and "track" or saved_scope == "block" and "block" or "all") or "all"
 local value = unit == "grid" and grid_value or seconds_value
 local close_after = R.GetExtState(SECTION, "close_after") == "1"
 
@@ -608,7 +661,7 @@ if rawget(_G,"BLT_INTERVAL_INVOCATION")=="process_last" then
   local process_unit=R.GetExtState(SECTION,"process_unit")
   if process_unit~="sec" and process_unit~="grid" then process_unit=unit end
   local process_scope=R.GetExtState(SECTION,"process_scope")
-  if process_scope~="all" and process_scope~="track" and process_scope~="group" then process_scope=scope end
+  if process_scope~="all" and process_scope~="track" and process_scope~="block" then process_scope=scope end
   local process_seconds=R.GetExtState(SECTION,"process_seconds")
   if not Core.parse(process_seconds,"sec") then process_seconds=seconds_value end
   local process_grid=R.GetExtState(SECTION,"process_grid_value")
@@ -770,9 +823,9 @@ local fit_cache,fit_cache_count={},0
 local function font_spec(size,kind,bold)
   kind=kind or 1
   local px=math.max(8,math.floor((size or 10)*scale+0.5));local weight=bold and 98 or 0
-  local group=kind*2+(bold and 1 or 0)
-  local sizes=font_specs[group]
-  if not sizes then sizes={};font_specs[group]=sizes end
+  local block=kind*2+(bold and 1 or 0)
+  local sizes=font_specs[block]
+  if not sizes then sizes={};font_specs[block]=sizes end
   local record=sizes[px]
   if not record then record={kind,px,weight,kind..":"..px..":"..weight};sizes[px]=record end
   return record[1],record[2],record[3],record[4]
@@ -988,7 +1041,7 @@ function Presets.decode(s)
   s=s:gsub("\r\n","\n")
   local a={}; for line in (s.."\n"):gmatch("(.-)\n") do a[#a+1]=line end
   if #a~=9 or a[1]~=Presets.header or not Presets.name(a[2]) then return nil end
-  if (a[3]~="gap" and a[3]~="start") or (a[4]~="all" and a[4]~="track" and a[4]~="group") or (a[5]~="sec" and a[5]~="grid") then return nil end
+  if (a[3]~="gap" and a[3]~="start") or (a[4]~="all" and a[4]~="track" and a[4]~="block") or (a[5]~="sec" and a[5]~="grid") then return nil end
   local sec,sc=Core.normalize(a[6],"sec"); local grid,gc=Core.normalize(a[7],"grid")
   if not sec or sc or not grid or gc or (a[8]~="0" and a[8]~="1") or (a[9]~="0" and a[9]~="1") then return nil end
   return {name=Presets.name(a[2]),mode=a[3],scope=a[4],unit=a[5],seconds=Core.format(sec,"sec"),grid=Core.format(grid,"grid"),close=a[8]=="1",remember=a[9]=="1"}
@@ -1374,7 +1427,7 @@ local CHROME_DEFAULT={
 }
 -- CHAMELEON THEME ADAPTER
 --
--- Porting contract for other BLT scripts:
+-- Theme adapter interface:
 --   Required palette tables : C, C_DEFAULT
 --   Optional chrome colors   : Chrome, CHROME_DEFAULT
 --   Persistence              : SECTION / ExtState key "chameleon"
@@ -1382,8 +1435,6 @@ local CHROME_DEFAULT={
 --   UI integration           : Chameleon.enabled / Chameleon.set(...)
 --   Main-loop integration    : Chameleon.tick(now)
 --
--- Keep this block intact when porting; normally only the title-bar button
--- placement and the host hooks need adapting in another BLT script.
 Chameleon.keys={
   -- Main/surface colors
   "col_main_bg2","col_main_bg","col_arrangebg","col_tracklistbg","col_mixerbg",
@@ -2322,8 +2373,6 @@ local function custom_titlebar(blocked)
   end
   local rcx,rcy=resetX+resetW*.5,Chrome.titleH*.5
   local rcol=hoverReset and Chrome.mint or C.muted
-
-  -- Reference-style outlined window; arrow explicitly points LOWER LEFT.
   gfx.set(rcol[1],rcol[2],rcol[3],hoverReset and .98 or .82)
   gfx.roundrect(rcx-6,rcy-6,12,12,1,1)
   gfx.line(rcx+3,rcy-3,rcx-3,rcy+3,1)
@@ -2455,7 +2504,7 @@ local function draw(window_active)
     if inside(table.unpack(Layout.controls.gap)) then hit="gap" end
     if inside(table.unpack(Layout.controls.start)) then hit="start" end
     if inside(table.unpack(Layout.controls.scope_all)) then hit="scope_all" end
-    if inside(table.unpack(Layout.controls.scope_group)) then hit="scope_group" end
+    if inside(table.unpack(Layout.controls.scope_block)) then hit="scope_block" end
     if inside(table.unpack(Layout.controls.scope_track)) then hit="scope_track" end
     if inside(table.unpack(Layout.controls.input)) then hit="input" end
     if inside(table.unpack(Layout.controls.unit_sec)) then hit="unit_sec" end
@@ -2497,8 +2546,8 @@ local function draw(window_active)
         mode=hit; status_until=0
         if remember_mode then State.set("last_mode",mode,true) end
         persist_process_settings()
-      elseif hit=="scope_all" or hit=="scope_track" or hit=="scope_group" then
-        scope=hit=="scope_all" and "all" or hit=="scope_group" and "group" or "track";status_until=0
+      elseif hit=="scope_all" or hit=="scope_track" or hit=="scope_block" then
+        scope=hit=="scope_all" and "all" or hit=="scope_block" and "block" or "track";status_until=0
         if remember_mode then State.set("last_scope",scope,true) end
         persist_process_settings()
       elseif hit=="unit_sec" then select_unit("sec")
@@ -2544,7 +2593,7 @@ local function draw(window_active)
   draw_mode_card("start",240,150,198,"開始点 → 開始点","START / START",mode=="start",hit=="start")
 
   draw_scope_segment(30,206,128,"全体",scope=="all",hit=="scope_all",true)
-  draw_scope_segment(170,206,128,"グループ",scope=="group",hit=="scope_group",true,"scope_group")
+  draw_scope_segment(170,206,128,"ブロック",scope=="block",hit=="scope_block",true,"scope_block")
   draw_scope_segment(310,206,128,"トラック毎",scope=="track",hit=="scope_track",false)
   line(228,210,228,232,C.edge2,0.18)
 
@@ -2677,8 +2726,9 @@ R.atexit(close_window)
 
 -- EVENT LOOP: input transitions wake drawing immediately; idle visuals coast to rest.
 local function loop()
+ local ok,err=xpcall(function()
   local k=gfx.getchar()
-  if k<0 then return end
+  if k<0 then close_window();return end
   if k==27 then
     if Presets.open then Presets.dismiss();k=0 else close_window();return end
   end
@@ -2691,7 +2741,7 @@ local function loop()
     key_activity=true
     if Presets.open then Presets.key(k) else keypress(k) end
     count=count+1;k=gfx.getchar()
-    if k<0 then return end
+    if k<0 then close_window();return end
     if k==27 then
       if Presets.open then Presets.dismiss();k=0 else close_window();return end
     end
@@ -2768,6 +2818,28 @@ local function loop()
   if pointer_activity or key_activity or dragging then redraw_dirty=true end
   if closing then close_window(); return end
   update_window_position(false)
-  R.defer(loop)
+ end,debug.traceback)
+ if not ok then
+  gfx.dest=-1;gfx.mode=0;gfx.a=1
+  field_drag=nil;focused=nil;Presets.open=false;Presets.swallow=false;Presets.pressed=nil
+  Chrome.drag=nil;Chrome.resize=nil;pcall(set_resize_cursor,nil)
+  local painted=pcall(custom_titlebar,false)
+  if not painted then
+   local down=((gfx.mouse_cap or 0)&1)~=0
+   local hit=gfx.mouse_y>=0 and gfx.mouse_y<26 and gfx.mouse_x>=gfx.w-38 and gfx.mouse_x<gfx.w
+   if down and not UI.emergencyDown then UI.emergencyClose=hit end
+   if not down and UI.emergencyDown then
+    if UI.emergencyClose and hit then Chrome.requestClose=true end
+    UI.emergencyClose=nil
+   end
+   UI.emergencyDown=down
+  else UI.emergencyDown=nil;UI.emergencyClose=nil end
+  pcall(gfx.update);pcall(notice,public_error(err),false);pcall(wake_visuals)
+  if UI.lastError~=err then UI.lastError=err;if R.ShowConsoleMsg then pcall(R.ShowConsoleMsg,tostring(err)..'\n') end end
+  if Chrome.requestReset then Chrome.requestReset=false;pcall(reset_window_size) end
+  if Chrome.requestClose then closing=true end
+ end
+ if closing then close_window();return end
+ if not window_finalized then R.defer(loop) end
 end
 loop()
