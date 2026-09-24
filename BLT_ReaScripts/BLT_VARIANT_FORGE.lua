@@ -1,5 +1,5 @@
 -- @description VARIANT FORGE
--- @version 0.5.30
+-- @version 0.5.31
 -- @author Balrulu
 -- @provides
 --   . > ../
@@ -1675,7 +1675,7 @@ end
 return B
 end)()
 
-local Core={VERSION='0.5.30',SOURCE_SR=48000,SOURCE_HOP=48,SOURCE_BLOCK=12000,SOURCE_PREVIEW_BINS=1400,SOURCE_MAX_REGIONS=16384,
+local Core={VERSION='0.5.31',SOURCE_SR=48000,SOURCE_HOP=48,SOURCE_BLOCK=12000,SOURCE_PREVIEW_BINS=1400,SOURCE_MAX_REGIONS=16384,
  GENERATED_TAG='P_EXT:BLT_VARIANT_FORGE',TEMP_TAG='P_EXT:BLT_VARIANT_FORGE_TEMP',SECTION='BLT_VARIANT_FORGE',EQ_FIXED_CACHE={}}
 Core.STALE_TEMP_PROJECTS={};Core.RUN_ID='';Core.TEMP_HEARTBEAT_TTL=8;Core.TEMP_HEARTBEAT_KEY='temp_live_registry_v1';Core.temp_heartbeat_at=0
 local abs,min,max,floor,ceil=math.abs,math.min,math.max,math.floor,math.ceil
@@ -2926,7 +2926,7 @@ function Core.plan(list,s,a,blocks)
   for _,v in ipairs(list) do
    local ia=(a.items or {})[v.guid] or {};local jitter=0
    if Core.item_feature(a,v,'timing') then jitter=a.lock.timing and shared.timing or rng(s.timing_lo,s.timing_hi)/1000 end
-   local row={info=v,rel=v.pos-first+jitter,offset=v.offset,pitch=v.pitch,playrate=v.rate,ppitch=v.ppitch,len=v.len,voice_limit=v.is_midi and 0 or max(0,floor(tonumber(ia.voice_limit) or 0))}
+   local row={info=v,rel=v.pos-first,timing=jitter,offset=v.offset,pitch=v.pitch,playrate=v.rate,ppitch=v.ppitch,len=v.len,voice_limit=v.is_midi and 0 or max(0,floor(tonumber(ia.voice_limit) or 0))}
    if Core.item_feature(a,v,'pitch_global') then
     local pd=a.lock.pitch_global and shared.pitch or rng(s.pitch_lo,s.pitch_hi)
     if v.is_midi then
@@ -2970,9 +2970,14 @@ function Core.plan(list,s,a,blocks)
    if not head_first then local first_anchor=Core.avoid_blocks(first+s.interval-low,low,high,blocks,0);head_first=first_anchor+low end
    anchor=head_first+(n-1)*s.interval-low
   end
-  g.first=anchor+low;g.last=anchor+high;g.anchor=anchor
-  for _,row in ipairs(g.rows) do row.pos=anchor+row.rel end
-  prev_high=g.last;groups[#groups+1]=g
+  -- Keep the placement grid independent of per-item timing changes.
+  prev_high=anchor+high;g.anchor=anchor;g.first=math.huge;g.last=-math.huge
+  for _,row in ipairs(g.rows) do
+   row.pos=max(0,anchor+row.rel+row.timing)
+   if row.timing~=0 then row.pos=Core.avoid_blocks(row.pos,0,row.len,blocks,s.interval_mode==1 and s.interval or 0) end
+   g.first=min(g.first,row.pos);g.last=max(g.last,row.pos+row.len)
+  end
+  groups[#groups+1]=g
  end
  Core.apply_voice_policy(groups,s)
  return groups
