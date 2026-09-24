@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<index version="1" name="BLT ReaScripts" commit="eaf8627a99f3ed6f853e4da93347bbdcac789d03">
+<index version="1" name="BLT ReaScripts" commit="bbf7d13f7880bb7b8ad135a192ce50411bfe6c4d">
   <category name="BLT">
     <reapack name="BLT_SPATIAL_FIELD.jsfx" type="effect" desc="BLT SPATIAL FIELD">
       <version name="0.5.0" author="Balrulu" time="2026-09-22T19:24:46Z">
@@ -229,6 +229,10 @@
       <version name="0.5.18" author="Balrulu" time="2026-09-23T22:15:08Z">
         <changelog><![CDATA[BLT SERIES Beta TEST UPLOAD]]></changelog>
         <source main="main" file="../BLT_LOUDNESS_TRACE.lua">https://github.com/balrulu/reaper/raw/b7345ec365df7a36b1d6d152b9ecd42931eb30b4/BLT_ReaScripts/BLT_LOUDNESS_TRACE.lua</source>
+      </version>
+      <version name="0.6.0" author="Balrulu" time="2026-09-24T04:28:34Z">
+        <changelog><![CDATA[BLT SERIES Beta TEST UPLOAD]]></changelog>
+        <source main="main" file="../BLT_LOUDNESS_TRACE.lua">https://github.com/balrulu/reaper/raw/bbf7d13f7880bb7b8ad135a192ce50411bfe6c4d/BLT_ReaScripts/BLT_LOUDNESS_TRACE.lua</source>
       </version>
     </reapack>
     <reapack name="BLT_MARKER_REGION_DESK.lua" type="script" desc="MARKER REGION DESK">
