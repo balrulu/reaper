@@ -383,7 +383,8 @@ ReaPack
 {\pard \ql \f0 \sa180 \li360 \fi-360 5.\tx360\tab Select the packages you want, choose {\b Install}, then click {\b Apply}.\sa180\par}
 {\pard \ql \f0 \sa180 \li0 \fi0 \outlinelevel1 \b \fs32 Requirements\par}
 {\pard \ql \f0 \sa180 \li360 \fi-360 \bullet \tx360\tab REAPER v7.62 \u20197 ?\u19978 ?\u65288 ?\u19968 ?\u37096 ?\u12398 ?\u12473 ?\u12463 ?\u12522 ?\u12503 ?\u12488 ?\u12391 ?\u24517 ?\u38920 ?\u65289 ?\par}
-{\pard \ql \f0 \sa180 \li360 \fi-360 \bullet \tx360\tab ReaPack \u12539 ?SWS\par}
+{\pard \ql \f0 \sa180 \li360 \fi-360 \bullet \tx360\tab ReaPack\par}
+{\pard \ql \f0 \sa180 \li360 \fi0 \u12539 ?SWS\par}
 {\pard \ql \f0 \sa180 \li360 \fi0 \u12539 ?js_ReaScript API\par}
 {\pard \ql \f0 \sa180 \li360 \fi0 \u12539 ?ReaImGui\sa180\par}
 {\pard \ql \f0 \sa180 \li0 \fi0 \outlinelevel1 \b \fs32 Updates\par}
