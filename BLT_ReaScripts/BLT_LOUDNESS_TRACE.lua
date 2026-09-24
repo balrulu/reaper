@@ -1,5 +1,5 @@
 -- @description LOUDNESS TRACE
--- @version 0.5.18
+-- @version 0.6.0
 -- @author Balrulu
 -- @provides
 --   . > ../
@@ -123,7 +123,7 @@ end
 local WindowGeometry=create_window_geometry(reaper,gfx)
 
 -- Application / analysis
-local VERSION="0.5.18"
+local VERSION="0.6.0"
 local MAX_HISTORY_ROWS=126000
 local MAX_SAVE_BYTES=12*1024*1024
 local Core = {}
@@ -202,6 +202,21 @@ function Core.integrate(rows,tick)
   return nrows>0 and rows[nrows].i or Core.SILENCE
 end
 
+Core.layouts={
+ {id='mono',name='MONO · ch 1',order='M',channels=1,render=2,weights={1}},
+ {id='stereo',name='STEREO · ch 1/2',order='L R',channels=2,render=2,weights={1,1}},
+ {id='5.1',name='5.1 · L R C LFE Ls Rs',order='L R C LFE Ls Rs',channels=6,render=6,weights={1,1,1,0,1.41,1.41}},
+ {id='7.1',name='7.1 · L R C LFE Lss Rss Lrs Rrs',order='L R C LFE Lss Rss Lrs Rrs',channels=8,render=8,weights={1,1,1,0,1.41,1.41,1,1}},
+ {id='7.1-rear',name='7.1 · L R C LFE Lrs Rrs Lss Rss',order='L R C LFE Lrs Rrs Lss Rss',channels=8,render=8,weights={1,1,1,0,1,1,1.41,1.41}}
+}
+function Core.layout(id)
+ for _,layout in ipairs(Core.layouts) do if layout.id==id then return layout end end
+ error('測定レイアウトが不正です。',0)
+end
+function Core.check_channels(api,project,layout)
+ local master=api.GetMasterTrack(project)
+ assert(master and api.GetMediaTrackInfo_Value(master,'I_NCHAN')>=layout.channels,'マスターのチャンネル数が測定レイアウトより少ないため測定できません。')
+end
 function Core.wav(file)
   local size=assert(file:seek('end')); file:seek('set',0)
   local h=assert(file:read(12),'WAVヘッダーがありません。')
@@ -224,13 +239,15 @@ function Core.wav(file)
     assert(pos+n+n%2<=size,'WAVが途中で終了しています。')
     file:seek('set',pos+n+n%2)
   end
-  assert(format==3 and channels==2 and rate==48000 and align==8 and bits==32,'解析には48 kHz / stereo / float32 WAVが必要です。')
-  assert(offset and bytes and bytes>0 and bytes%8==0 and offset+bytes<=size,'レンダーが未完了、またはWAVが破損しています。')
+  assert(format==3 and (channels==1 or channels==2 or channels==6 or channels==8) and rate==48000 and align==channels*4 and bits==32,'解析には48 kHz / 1・2・6・8 ch / float32 WAVが必要です。')
+  assert(offset and bytes and bytes>0 and bytes%align==0 and offset+bytes<=size,'レンダーが未完了、またはWAVが破損しています。')
   file:seek('set',offset)
-  return bytes//8,rate
+  return bytes//align,rate,channels
 end
-function Core.analyze(file,expected,tick)
-  local frames,sr=Core.wav(file)
+function Core.analyze(file,expected,tick,layout)
+  local frames,sr,channels=Core.wav(file)
+  layout=layout or Core.layout(channels==1 and 'mono' or channels==2 and 'stereo' or channels==6 and '5.1' or '7.1')
+  assert(channels==layout.channels or (layout.id=='mono' and channels==2),'レンダーのチャンネル数が測定レイアウトと一致しません。')
   if expected then
 
     local expectedFrames=floor(expected*sr+.5)
@@ -243,27 +260,28 @@ function Core.analyze(file,expected,tick)
 
   local unpack,abs,finite,lufs,db=string.unpack,math.abs,Core.finite,Core.lufs,Core.db
   local rows,kbins,rbins={}, {}, {}
-  local z1,z2,z3,z4,z5,z6,z7,z8=0,0,0,0,0,0,0,0
+  local z={};for c=1,layout.channels do z[c]={0,0,0,0} end
   local ks,raw,peak,n,processed=0,0,0,0,0
   local km,ks3,rm=0,0,0
   local rowCount=0
   while processed<frames do
-    local count=min(16384,frames-processed)
-    local data=assert(file:read(count*8),'音声を読み取れません。')
-    assert(#data==count*8,'音声が途中で終了しています。')
+    local count=min(1024,frames-processed)
+    local data=assert(file:read(count*channels*4),'音声を読み取れません。')
+    assert(#data==count*channels*4,'音声が途中で終了しています。')
     local pos=1
     for _=1,count do
-      local l,r; l,r,pos=unpack('<ff',data,pos)
-      assert(finite(l) and finite(r),'音声にNaNまたは無限大が含まれています。')
-      peak=max(peak,abs(l),abs(r)); raw=raw+(l*l+r*r)*.5
-      -- Two biquads per channel, direct form II transposed, 48 kHz coefficients.
-      local yl=1.53512485958697*l+z1
-      z1=-2.69169618940638*l+1.69065929318241*yl+z2; z2=1.19839281085285*l-.73248077421585*yl
-      local kl=yl+z3; z3=-2*yl+1.99004745483398*kl+z4; z4=yl-.99007225036621*kl
-      local yr=1.53512485958697*r+z5
-      z5=-2.69169618940638*r+1.69065929318241*yr+z6; z6=1.19839281085285*r-.73248077421585*yr
-      local kr=yr+z7; z7=-2*yr+1.99004745483398*kr+z8; z8=yr-.99007225036621*kr
-      ks=ks+kl*kl+kr*kr; n=n+1
+      for c=1,channels do
+        local value;value,pos=unpack('<f',data,pos)
+        assert(finite(value),'音声にNaNまたは無限大が含まれています。')
+        if c<=layout.channels then
+          peak=max(peak,abs(value));raw=raw+value*value/layout.channels
+          local state=z[c];local y=1.53512485958697*value+state[1]
+          state[1]=-2.69169618940638*value+1.69065929318241*y+state[2];state[2]=1.19839281085285*value-.73248077421585*y
+          local k=y+state[3];state[3]=-2*y+1.99004745483398*k+state[4];state[4]=y-.99007225036621*k
+          ks=ks+k*k*layout.weights[c]
+        end
+      end
+      n=n+1
       if n==4800 then
         rowCount=rowCount+1
         local i=rowCount; local e=ks/n; local re=raw/n
@@ -521,10 +539,12 @@ function Core.history_summary(previous,first,targets)
   return H
 end
 
-function Core.render(R,project,first,last,directory,basename)
+function Core.render(R,project,first,last,directory,basename,layout)
   basename=basename or 'trace'
+  layout=layout or Core.layout('stereo')
+  Core.check_channels(R,project,layout)
 
-  local nums={RENDER_SETTINGS=0,RENDER_BOUNDSFLAG=2,RENDER_CHANNELS=2,RENDER_SRATE=48000,
+  local nums={RENDER_SETTINGS=0,RENDER_BOUNDSFLAG=2,RENDER_CHANNELS=layout.render,RENDER_SRATE=48000,
     RENDER_STARTPOS=first,RENDER_ENDPOS=last,RENDER_TAILFLAG=0,RENDER_TAILMS=0,RENDER_ADDTOPROJ=0,
     RENDER_DITHER=16,RENDER_NORMALIZE=4<<16}
   local strs={RENDER_FILE=directory,RENDER_PATTERN=basename,RENDER_FORMAT='ZXZhdyADAA==',RENDER_FORMAT2=''}
@@ -646,7 +666,7 @@ function Core.recompute(data,tick)
   assert(#all>0 and #all<=MAX_HISTORY_ROWS,'保存できる共通履歴は最大3.5時間です。古い履歴を整理してから再試行してください。')
   Core.integrate(all,tick);local cumulative
   for _,r in ipairs(all) do if r.i then cumulative=r.i else r.i=cumulative end end
-  data.live=nil;data.source='master';data.name='MASTER MIX · stereo 1/2';data.rows=all;data.segments=segments
+  data.live=nil;data.source='master';data.name=data.name or 'MASTER MIX';data.rows=all;data.segments=segments
   data.integrated=cumulative or Core.SILENCE;data.lra=Core.tree_lra(range)
   data.first=segments[1].first;data.last=segments[#segments].last;data.liveCount=#all
   for _,seg in ipairs(segments) do build_lod(seg,tick) end
@@ -873,6 +893,13 @@ local function create_language(api,section,catalog)
 end
 
 local LanguageCatalog={en={
+ ['測定レイアウトが不正です。']='Invalid measurement layout.',
+ ['マスターのチャンネル数が測定レイアウトより少ないため測定できません。']='The master has fewer channels than the measurement layout.',
+ ['解析には48 kHz / 1・2・6・8 ch / float32 WAVが必要です。']='Analysis requires 48 kHz / 1, 2, 6 or 8 channel / float32 WAV.',
+ ['レンダーのチャンネル数が測定レイアウトと一致しません。']='Rendered channel count does not match the measurement layout.',
+ ['ハードウェア出力の経路を確認できません。']='Cannot verify the hardware output routing.',
+ ['LIVE測定には各測定チャンネルをゲイン0 dB・PAN中央で、混合せずハードウェアへ出力する経路が必要です。']='LIVE requires an isolated unity-gain, centered-pan hardware route for every measurement channel.',
+
  ["WAVヘッダーがありません。"]="Missing WAV header.",
  ["WAV形式を確認できません。"]="Cannot identify WAV format.",
  ["不正なRF64ヘッダーです。"]="Invalid RF64 header.",
@@ -1888,7 +1915,6 @@ end)()
 local SECTION="LOUDNESS_TRACE"
 local TAG="P_EXT:"..SECTION
 local TEMP_WARNING_SECONDS=25*60
-local TEMP_BYTES_PER_SECOND=48000*2*4
 local W,H=646,616
 local COLLAPSED_W,COLLAPSED_H=350,58
 local COMPACT_MEASURE_X,COMPACT_MEASURE_Y,COMPACT_MEASURE_W,COMPACT_MEASURE_H=256,12,78,34
@@ -1901,13 +1927,29 @@ local S={lo=-60,hi=0,visible=true,height=280,
   targets={s={-23,3},m={-23,3},i={-23,1}},source="master",
   alertUpper=false,alertLower=false,alertPeak=false}
 -- LIVE meter / embedded JSFX
-local Live={enabled=false,protocol=1,memory='BLT_LOUDNESS_TRACE_RT_V1',fx_relative='BLT/BLT_Loudness_Trace_Live.jsfx'}
+local Live={enabled=false,protocol=2,memory='BLT_LOUDNESS_TRACE_RT_V2',fx_relative='BLT/BLT_Loudness_Trace_Live.jsfx'}
 Live.jsfx=[==[
 desc:BLT Loudness Trace Live
-// BLT managed LIVE meter; source revision 1.1.0.
+// BLT managed LIVE meter; source revision 2.0.0.
 // Measurement only: all audio and MIDI pass through unchanged.
 // Private, bounded 100 ms energy queue shared with BLT_LOUDNESS_TRACE.lua.
-options:gmem=BLT_LOUDNESS_TRACE_RT_V1
+options:gmem=BLT_LOUDNESS_TRACE_RT_V2
+in_pin:Meter 1
+in_pin:Meter 2
+in_pin:Meter 3
+in_pin:Meter 4
+in_pin:Meter 5
+in_pin:Meter 6
+in_pin:Meter 7
+in_pin:Meter 8
+out_pin:Pass 1
+out_pin:Pass 2
+out_pin:Pass 3
+out_pin:Pass 4
+out_pin:Pass 5
+out_pin:Pass 6
+out_pin:Pass 7
+out_pin:Pass 8
 slider1:0<0,15,1>-BLT memory slot
 slider2:0<0,16777215,1>-BLT owner token
 
@@ -1924,10 +1966,11 @@ epoch=0;
 base=floor(slider1)*8192;
 owned=slider2>0 && gmem[base]===slider2;
 owned ? (
+  channels=floor(gmem[base+10]);
   owner_changed=last_owner!==slider2;
   owner_changed ? (seq=0; epoch=0; was_running=0; last_owner=slider2;);
   placement=get_host_placement(chain_position,host_flags);
-  active=placement==-2 && chain_position==0 && !(host_flags&4) && gmem[base+2]>0 && gmem[base+7]==0 && (play_state==1 || play_state==5);
+  active=placement==-2 && chain_position==0 && !(host_flags&4) && gmem[base+2]>0 && gmem[base+7]==0 && channels>=1 && channels<=8 && (play_state==1 || play_state==5);
   reset=owner_changed || last_reset!==gmem[base+4] || last_sr!==srate;
   last_reset=gmem[base+4];
   last_sr!==srate ? (
@@ -1953,7 +1996,7 @@ owned ? (
   );
   active && (!was_running || abs(play_position-expected)>max(4/srate,.00005)) ? reset=1;
   reset ? (
-    z1=0;z2=0;z3=0;z4=0;z5=0;z6=0;z7=0;z8=0;
+    memset(0,0,32);
     energy=0;raw=0;pk=0;n=0;
     epoch+=1;
     last_reset=gmem[base+4];
@@ -1967,25 +2010,26 @@ owned ? (
   was_running=active;
   gmem[base+5]=epoch;
   gmem[base+6]=srate;
-  gmem[base+9]=1; // Protocol acknowledgment; only the current slot owner may publish.
+  gmem[base+9]=2; // Protocol acknowledgment; only the current slot owner may publish.
   gmem[base+8]+=1;
 ) : (active=0;was_running=0;);
 
 @sample
 (active && gmem[base]===slider2) ? (
-  ll=spl0;rr=spl1;
-  !(ll===ll) || !(rr===rr) || abs(ll)>1000000000 || abs(rr)>1000000000 ? (
-    gmem[base+7]=1;active=0;
-  ) : (
-    yl=b0*ll+z1;
-    z1=b1*ll-a1*yl+z2;z2=b2*ll-a2*yl;
-    kl=yl+z3;z3=-2*yl-h1*kl+z4;z4=yl-h2*kl;
-    yr=b0*rr+z5;
-    z5=b1*rr-a1*yr+z6;z6=b2*rr-a2*yr;
-    kr=yr+z7;z7=-2*yr-h1*kr+z8;z8=yr-h2*kr;
-    energy+=kl*kl+kr*kr;
-    raw+=(ll*ll+rr*rr)*.5;
-    pk=max(pk,max(abs(ll),abs(rr)));
+  ch=0;
+  loop(channels,
+    vv=spl(ch);
+    !(vv===vv) || abs(vv)>1000000000 ? (gmem[base+7]=1;active=0;) : (
+      zz=ch*4;
+      yy=b0*vv+zz[0];
+      zz[0]=b1*vv-a1*yy+zz[1];zz[1]=b2*vv-a2*yy;
+      kk=yy+zz[2];zz[2]=-2*yy-h1*kk+zz[3];zz[3]=yy-h2*kk;
+      energy+=kk*kk*gmem[base+16+ch];
+      raw+=vv*vv/channels;pk=max(pk,abs(vv));
+    );
+    ch+=1;
+  );
+  active ? (
     n+=1;
     n>=hop ? (
       seq+=1;
@@ -2134,6 +2178,8 @@ local function load_settings()
   S.show={s=true,m=true,i=true,rms=false,peak=false}
   S.targets={s={-23,3},m={-23,3},i={-23,1}}
   S.alertUpper=false;S.alertLower=false;S.alertPeak=false
+  local _,layout=R.GetProjExtState(A.project,SECTION,'measurement_layout')
+  A.layout='stereo';for _,v in ipairs(Core.layouts) do if v.id==layout then A.layout=layout end end
   local _,raw=R.GetProjExtState(A.project,SECTION,'settings')
   local f={};for v in raw:gmatch('[^;]+') do f[#f+1]=v end
   if #f~=18 or f[1]~='master' then return end
@@ -2159,6 +2205,12 @@ end
 -- Current graph storage
 local History={key='result@master',backup='result_backup@master',recovery='result_recovery@master',failed='result_failed@master',failedBackup='result_failed_backup@master'}
 History.references={History.key,History.backup,History.recovery,History.failed,History.failedBackup}
+function History.select_layout(id)
+ local suffix=id=='stereo' and '@master' or '@master:'..id
+ History.key='result'..suffix;History.backup='result_backup'..suffix;History.recovery='result_recovery'..suffix
+ History.failed='result_failed'..suffix;History.failedBackup='result_failed_backup'..suffix
+ History.references={History.key,History.backup,History.recovery,History.failed,History.failedBackup}
+end
 function History.manifest(raw)
   assert(type(raw)=='string' and #raw<=512,'保存情報が不正です。')
   local f={};for v in (raw..';'):gmatch('(.-);') do f[#f+1]=v end
@@ -2217,7 +2269,7 @@ function History.read(raw,recover,verifyOnly)
 
   if verifyOnly and not recover then return true end
   local data,info=Core.unpack(chunks,recover)
-  data.source='master';data.name='MASTER MIX · stereo 1/2'
+  data.source='master';data.name='MASTER MIX · '..Core.layout(A.layout).name
   if not verifyOnly then Core.recompute(data) end
   return data,info
 end
@@ -2291,7 +2343,7 @@ local function clear_measurement()
   A.baseline=R.GetProjectStateChangeCount(A.project)
 end
 
-local function source_name() return 'MASTER MIX · stereo 1/2' end
+local function source_name() return 'MASTER MIX · '..Core.layout(A.layout or 'stereo').name end
 
 local function ensure_track()
   A.track=find_track()
@@ -2337,7 +2389,7 @@ local function adopt_project(create)
   Live.project=nil;Live.run=nil;Live.previous=nil;Live.dirty=false;Live.notice=nil;Live.noticeBad=false
   unlink(); A.edit=nil; A.project=R.EnumProjects(-1,""); A.track=find_track()
   -- Validate stored history before displaying it; invalid history is cleared.
-  load_settings();load_data()
+  load_settings();History.select_layout(A.layout);load_data()
   if create then ensure_track() end
 
   if valid_track() then S.visible=graph_track_is_visible() end
@@ -2562,70 +2614,72 @@ function Live.hardware_envelopes_unused(project,track,index)
 end
 
 -- Monitoring FX receive hardware-output audio, not an unconditional master tap.
--- Accept only an unmixed unity stereo post-fader route from master channels 1/2.
+-- Accept only isolated unity post-fader routes for every measurement channel.
 -- Never alter the user's sends, hardware levels, master fader, pan, or monitor FX.
 function Live.route_for_master(project)
   local master=R.GetMasterTrack(project)
   if not master or not R.ValidatePtr2(project,master,'MediaTrack*') then return nil,'マスタートラックを取得できません。' end
+  local layout=Core.layout(A.layout or 'stereo')
+  if R.GetMediaTrackInfo_Value(master,'I_NCHAN')<layout.channels then return nil,'マスターのチャンネル数が測定レイアウトより少ないため測定できません。' end
   if (R.GetMasterMuteSoloFlags()&7)~=0 then return nil,'マスターのミュート／ソロ／モノ設定を解除するとLIVE測定できます。' end
   if R.SNM_GetIntConfigVar('hwoutfx_bypass',0)~=0 then return nil,'モニターFXがバイパス中のためLIVE測定を待機しています。' end
-  for i=0,1023 do
-    local p=R.EnumProjects(i,'');if not p then break end
+  for i=0,1023 do local p=R.EnumProjects(i,'');if not p then break end
     if p~=project and (R.GetPlayStateEx(p)&1)~=0 then return nil,'別プロジェクトを停止するとLIVE測定できます。' end
   end
-  local function value(track,i,key) return R.GetTrackSendInfo_Value(track,1,i,key) end
-  local function unity_panlaw(index)
-    local law=value(master,index,'D_PANLAW')
-    if law==-1 then
-      if type(R.get_config_var_string)=='function' then
-        local ok,raw=R.get_config_var_string('panlaw');law=ok and tonumber(raw) or nil
-      elseif type(R.SNM_GetDoubleConfigVar)=='function' then law=R.SNM_GetDoubleConfigVar('panlaw',-1) end
-    end
-    return Core.finite(law) and math.abs(law-1)<1e-12
-  end
-  local function overlap(track,i,channel)
-    if value(track,i,'B_MUTE')~=0 then return false end
-    local src,dst=value(track,i,'I_SRCCHAN'),value(track,i,'I_DSTCHAN')
-    if not Core.finite(src) or not Core.finite(dst) then return true end
-    src,dst=floor(src),floor(dst)
-    if src<0 then return false end
-    local start=dst&1023;local mode=src>>10
-    local count=(dst&1024)~=0 and 1 or mode==0 and 2 or mode==1 and 1 or mode*2
-    return start<channel+2 and start+count>channel
-  end
-  local count=R.GetTrackNumSends(master,1)
-  local outputs=R.GetNumAudioOutputs();local envelopeProblem
-  for index=0,count-1 do
-    local dst=value(master,index,'I_DSTCHAN')
-    if Core.finite(dst) and dst%1==0 and dst>=0 and dst<=62 and dst+2<=outputs
-      and value(master,index,'I_SRCCHAN')==0 and value(master,index,'I_SENDMODE')==0
-      and value(master,index,'B_MUTE')==0 and value(master,index,'B_PHASE')==0 and value(master,index,'B_MONO')==0
-      and math.abs(value(master,index,'D_VOL')-1)<1e-12 and math.abs(value(master,index,'D_PAN'))<1e-12
-      and unity_panlaw(index) then
-      local unused,why=Live.hardware_envelopes_unused(project,master,index)
-      if not unused then envelopeProblem=envelopeProblem or why end
-      local isolated=unused
-      if isolated then
-        for i=0,count-1 do if i~=index and overlap(master,i,dst) then isolated=false;break end end
-      end
-      if isolated then
-        for ti=0,R.CountTracks(project)-1 do
-          local tr=R.GetTrack(project,ti)
-          for si=0,R.GetTrackNumSends(tr,1)-1 do if overlap(tr,si,dst) then isolated=false;break end end
-          if not isolated then break end
+  local outputs=math.min(64,R.GetNumAudioOutputs());local occupied,candidates={},{}
+  local function inspect(track,isMaster)
+    for index=0,R.GetTrackNumSends(track,1)-1 do
+      local function value(key)return R.GetTrackSendInfo_Value(track,1,index,key) end
+      if value('B_MUTE')==0 then
+        local src,dst=value('I_SRCCHAN'),value('I_DSTCHAN')
+        if not Core.finite(src) or not Core.finite(dst) or src%1~=0 or dst%1~=0 or dst<0 then return false end
+        if src>=0 then
+          local first=src&1023;local mode=src>>10;local width=mode==0 and 2 or mode==1 and 1 or mode*2
+          local start=dst&1023;local mono=(dst&1024)~=0;local count=mono and 1 or width
+          for ch=start,math.min(outputs-1,start+count-1) do occupied[ch]=(occupied[ch] or 0)+1 end
+          if isMaster and start+count<=outputs and (not mono or width==1) and (width>1 or mono)
+            and value('I_SENDMODE')==0 and value('B_PHASE')==0 and (value('B_MONO')==0 or width==1)
+            and math.abs(value('D_VOL')-1)<1e-12 and math.abs(value('D_PAN'))<1e-12 then
+            local law=value('D_PANLAW')
+            if law==-1 then
+              if type(R.get_config_var_string)=='function' then local ok,raw=R.get_config_var_string('panlaw');law=ok and tonumber(raw) or nil
+              elseif type(R.SNM_GetDoubleConfigVar)=='function' then law=R.SNM_GetDoubleConfigVar('panlaw',-1) end
+            end
+            if Core.finite(law) and math.abs(law-1)<1e-12 and Live.hardware_envelopes_unused(project,track,index) then
+              candidates[#candidates+1]={first=first,width=width,start=start,index=index}
+            end
+          end
         end
       end
-      if isolated then return {index=index,channel=dst,master=master} end
     end
+    return true
   end
-  return nil,envelopeProblem or 'LIVE測定には、マスター1/2を音量・パンロー0 dB、PAN中央のステレオで単独出力する経路が必要です。'
+  if not inspect(master,true) then return nil,'ハードウェア出力の経路を確認できません。' end
+  for i=0,R.CountTracks(project)-1 do if not inspect(R.GetTrack(project,i),false) then return nil,'ハードウェア出力の経路を確認できません。' end end
+  local map,signature={},{}
+  for channel=0,layout.channels-1 do
+    for _,candidate in ipairs(candidates) do
+      if channel>=candidate.first and channel<candidate.first+candidate.width then
+        local hardware=candidate.start+channel-candidate.first
+        if occupied[hardware]==1 then
+          map[channel+1]=hardware;signature[channel+1]=candidate.index..':'..hardware;break
+        end
+      end
+    end
+    if not map[channel+1] then return nil,'LIVE測定には各測定チャンネルをゲイン0 dB・PAN中央で、混合せずハードウェアへ出力する経路が必要です。' end
+  end
+  return {master=master,map=map,layout=layout,signature=layout.id..'|'..table.concat(signature,'|')}
+end
+function Live.same_route(a,b)
+ return a and b and a.master==b.master and a.signature==b.signature
 end
 function Live.pin_mask(channel)
   return channel<32 and (1<<channel) or 0,channel>=32 and (1<<(channel-32)) or 0
 end
-function Live.map_meter(host,index,channel)
-  for output=0,1 do for pin=0,1 do
-    local lo,hi=Live.pin_mask(channel+pin)
+function Live.map_meter(host,index,route)
+  for output=0,1 do for pin=0,7 do
+    local channel=route.map[pin+1];local lo,hi=0,0
+    if channel then lo,hi=Live.pin_mask(channel) end
     assert(R.TrackFX_SetPinMappings(host,index,output,pin,lo,hi),'測定用JSFXのチャンネルを設定できません。')
     local a,b=R.TrackFX_GetPinMappings(host,index,output,pin)
     assert((a&0xffffffff)==lo and (b&0xffffffff)==hi,'測定用JSFXのチャンネルを確認できません。')
@@ -2684,13 +2738,15 @@ end
 function Live.connect()
   local project=A.project
   assert(project==R.EnumProjects(-1,''),'プロジェクトが切り替わりました。')
-  Live.project=project;Live.source='master';Live.host=R.GetMasterTrack(project)
+  Live.project=project;Live.source='master';Live.layout=A.layout;Live.host=R.GetMasterTrack(project)
   local route,why=Live.route_for_master(project);assert(route,why)
   Live.route=route;Live.routeAt=0;Live.routeRevision=nil;Live.checkedRoute=nil
   Live.recover_orphans(project);Live.meter_file();Live.reserve_slot()
   local idx=Live.add_meter_quiet(Live.host)
   assert(Live.is_meter(Live.host,idx),'リアルタイム測定JSFXを確認できません。')
-  Live.map_meter(Live.host,idx,route.channel)
+  Live.map_meter(Live.host,idx,route)
+  R.gmem_write(Live.base+10,route.layout.channels)
+  for i,w in ipairs(route.layout.weights) do R.gmem_write(Live.base+15+i,w) end
   assert(R.TrackFX_SetParam(Live.host,idx,0,Live.slot)~=false and R.TrackFX_SetParam(Live.host,idx,1,Live.token)~=false,'測定用JSFXの設定に失敗しました。')
   assert(R.TrackFX_GetParam(Live.host,idx,0)==Live.slot and R.TrackFX_GetParam(Live.host,idx,1)==Live.token,'測定用JSFXの設定に失敗しました。')
   R.TrackFX_SetNamedConfigParm(Live.host,idx,'renamed_name','BLT LOUDNESS TRACE [LIVE]')
@@ -2766,7 +2822,7 @@ function Live.stop(message)
     Live.select_memory();if R.gmem_read(Live.base)==Live.token then R.gmem_write(Live.base+2,0) end
     if Live.project==R.EnumProjects(-1,'') then
       local route=Live.route_for_master(Live.project)
-      if route and Live.route and route.index==Live.route.index and route.channel==Live.route.channel then
+      if Live.same_route(route,Live.route) then
         local ok,err=pcall(Live.pull,Live.lastPos,true);if not ok then BLT.logError(err) end
       end
     end
@@ -2806,8 +2862,10 @@ function Live.check_connection()
   assert(idx==0x1000000,'モニターFXの順序が変更されたため、測定をOFFにしました。')
   assert(R.TrackFX_GetEnabled(host,idx) and not R.TrackFX_GetOffline(host,idx),'リアルタイム測定用FXが無効です。')
   assert(R.TrackFX_GetParam(host,idx,0)==Live.slot and R.TrackFX_GetParam(host,idx,1)==Live.token,'測定用JSFXの設定に失敗しました。')
-  for output=0,1 do for pin=0,1 do
-    local lo,hi=Live.pin_mask(Live.route.channel+pin);local a,b=R.TrackFX_GetPinMappings(host,idx,output,pin)
+  for output=0,1 do for pin=0,7 do
+    local channel=Live.route.map[pin+1];local lo,hi=0,0
+    if channel then lo,hi=Live.pin_mask(channel) end
+    local a,b=R.TrackFX_GetPinMappings(host,idx,output,pin)
     assert((a&0xffffffff)==lo and (b&0xffffffff)==hi,'測定用JSFXのチャンネルが変更されたため、測定をOFFにしました。')
   end end
 end
@@ -2815,7 +2873,7 @@ end
 function Live.tick(now)
   if not Live.enabled then return end
   local ok,err=xpcall(function()
-    assert(A.project==Live.project and S.source==Live.source,'測定先が変更されたため、リアルタイム測定をOFFにしました。')
+    assert(A.project==Live.project and S.source==Live.source and A.layout==Live.layout,'測定先が変更されたため、リアルタイム測定をOFFにしました。')
     Live.select_memory();assert(R.gmem_read(Live.base)==Live.token,'リアルタイム測定の接続が失われました。')
     R.gmem_write(Live.base+1,now)
     if now>=(Live.checkAt or 0) then Live.check_connection();Live.checkAt=now+.5 end
@@ -2831,9 +2889,9 @@ function Live.tick(now)
     local route,routeWhy
     if revision~=Live.routeRevision or now>=(Live.routeAt or 0) then
       route,routeWhy=Live.route_for_master(A.project)
-      Live.routeRevision=revision;Live.routeAt=now+.1;Live.checkedRoute=route;Live.checkedRouteProblem=routeWhy
+      Live.routeRevision=revision;Live.routeAt=now+.5;Live.checkedRoute=route;Live.checkedRouteProblem=routeWhy
     else route,routeWhy=Live.checkedRoute,Live.checkedRouteProblem end
-    local routeOK=route and route.channel==Live.route.channel and route.index==Live.route.index
+    local routeOK=Live.same_route(route,Live.route)
     if not routeOK then
       R.gmem_write(Live.base+2,0)
       Live.readSeq=R.gmem_read(Live.base+3)
@@ -3809,6 +3867,19 @@ local function button(id,label,x,y,w,h,fn,primary,selected,eyebrow,tone)
   widgets[#widgets+1]={id=id,x=x,y=y-shift,w=w,h=h,fn=fn}
 end
 
+function Live.select_layout()
+ if A.job then return end
+ local entries={}
+ for _,v in ipairs(Core.layouts) do entries[#entries+1]=(A.layout==v.id and '!' or '')..v.name end
+ gfx.x,gfx.y=gfx.mouse_x,gfx.mouse_y
+ local chosen=gfx.showmenu(table.concat(entries,'|'));local layout=Core.layouts[chosen]
+ if not layout or layout.id==A.layout then return end
+ if not Live.prepare_offline() then return end
+ A.layout=layout.id;R.SetProjExtState(A.project,SECTION,'measurement_layout',A.layout)
+ History.select_layout(A.layout);load_data();Live.latest=nil;Live.warningCache=nil
+ A.cache='';A.hover=nil;A.revision=A.revision+1;A.baseline=R.GetProjectStateChangeCount(A.project)
+ wake_visuals()
+end
 local function source_display(name,x,y,w,h)
   local a=.32
   gradient(x,y,w,h,C.deep,C.field,.56+.10*a,.98)
@@ -3822,7 +3893,8 @@ local function source_display(name,x,y,w,h)
   line(x+24,cy,x+34,cy,C.ice,.48)
   line(x+31,cy-4,x+35,cy,C.ice,.48);line(x+31,cy+4,x+35,cy,C.ice,.48)
   text('解析ソース',x+45,y+(h-15)/2-1,15,C.ice,92,1,true)
-  text(name,x+140,y+(h-16)/2-1,16,C.text,w-156,1,true,true)
+  text(name..'  ▾',x+140,y+(h-16)/2-1,12,C.text,w-150,1,true,true)
+  if not A.job then widgets[#widgets+1]={id='layout',x=x,y=y,w=w,h=h,fn=Live.select_layout} end
 end
 
 local function temp_file_exists(path)
@@ -3945,12 +4017,12 @@ local function measure()
   local name=source_name()
   local duration=last-first
   if duration>TEMP_WARNING_SECONDS then
-    local estimate=duration*TEMP_BYTES_PER_SECOND
+    local estimate=duration*48000*Core.layout(A.layout).render*4
     local message=string.format('長い範囲を解析するため、一時WAVを約 %s 作成します。\n解析中は同程度の空き容量が必要です。続行しますか？\n\n範囲：%.1f分',human_bytes(estimate),duration/60)
     if Language.mb(message,'LOUDNESS TRACE | 長尺解析',1)~=1 then return end
   end
   set_graph_track_visible(true)
-  local job={project=A.project,first=first,last=last,source=S.source,name=name,progress=0,phase='prepare',resumeLive=Live.enabled}
+  local job={project=A.project,first=first,last=last,source=S.source,name=name,progress=0,phase='prepare',resumeLive=Live.enabled,layout=Core.layout(A.layout)}
   A.job=job
   local prepared,ready=xpcall(Live.prepare_offline,debug.traceback)
   if not prepared or not ready then
@@ -3968,7 +4040,7 @@ local function measure()
     job.dir=base:gsub('[/\\]+$','')
     job.prefix='LoudnessTrace_'..R.genGuid():gsub('[^%w]','')
     job.phase='render'
-    job.path=Core.render(R,job.project,first,last,job.dir,job.prefix)
+    job.path=Core.render(R,job.project,first,last,job.dir,job.prefix,job.layout)
     job.renderState=R.GetProjectStateChangeCount(job.project)
     job.file=assert(io.open(job.path,'rb'),'レンダーがキャンセルされたか、一時音声を開けません。')
     job.phase='analyze'
@@ -3977,7 +4049,7 @@ local function measure()
       job.progress=p
       if R.time_precise()>=deadline then coroutine.yield(); deadline=R.time_precise()+.008 end
     end
-    local data=Core.analyze(job.file,last-first,tick)
+    local data=Core.analyze(job.file,last-first,tick,job.layout)
     data.first,data.last,data.source,data.name=first,last,job.source,name
     job.file:close(); job.file=nil
 
