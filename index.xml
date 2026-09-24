@@ -369,8 +369,8 @@ Save texture references losslessly with a compact shared frequency grid.]]></cha
 {\colortbl;\red255\green0\blue0;\red0\green0\blue255;}
 \widowctrl\hyphauto
 
-{\pard \ql \f0 \sa180 \li0 \fi0 \outlinelevel0 \b \fs36 BLT ReaScripts\par}
-{\pard \ql \f0 \sa180 \li0 \fi0 BLT ReaScripts is a collection of workflow tools for REAPER. \u12486 ?\u12473 ?\u12488 ?\u20013 ?\par}
+{\pard \ql \f0 \sa180 \li0 \fi0 \outlinelevel0 \b \fs36 BLT ReaScripts & JSFX\par}
+{\pard \ql \f0 \sa180 \li0 \fi0 BLT ReaScripts is a collection of workflow tools for REAPER. \u8251 ?\u946 ? version\par}
 {\pard \ql \f0 \sa180 \li0 \fi0 \outlinelevel1 \b \fs32 Installation\par}
 {\pard \ql \f0 \sa180 \li360 \fi-360 1.\tx360\tab Install {\field{\*\fldinst{HYPERLINK "https://reapack.com/"}}{\fldrslt{\ul
 ReaPack
@@ -380,17 +380,18 @@ ReaPack
 {\pard \ql \f0 \sa180 \li360 \fi-360 3.\tx360\tab Paste the following repository URL:\par}
 {\pard \ql \f0 \sa180 \li360 \fi0 \f1 https://github.com/balrulu/reaper/raw/main/index.xml\par}
 {\pard \ql \f0 \sa180 \li360 \fi-360 4.\tx360\tab Synchronize ReaPack, open {\b Browse packages...}, and search for {\f1 BLT}.\par}
-{\pard \ql \f0 \sa180 \li360 \fi-360 5.\tx360\tab Select the packages you want, choose {\b Install}, then click {\b Apply}.\par}
-{\pard \ql \f0 \sa180 \li360 \fi0 \u8251 ?\u12486 ?\u12473 ?\u12488 ?\u20013 ?\sa180\par}
+{\pard \ql \f0 \sa180 \li360 \fi-360 5.\tx360\tab Select the packages you want, choose {\b Install}, then click {\b Apply}.\sa180\par}
 {\pard \ql \f0 \sa180 \li0 \fi0 \outlinelevel1 \b \fs32 Requirements\par}
 {\pard \ql \f0 \sa180 \li360 \fi-360 \bullet \tx360\tab REAPER v7.62 \u20197 ?\u19978 ?\u65288 ?\u19968 ?\u37096 ?\u12398 ?\u12473 ?\u12463 ?\u12522 ?\u12503 ?\u12488 ?\u12391 ?\u24517 ?\u38920 ?\u65289 ?\par}
-{\pard \ql \f0 \sa180 \li360 \fi-360 \bullet \tx360\tab SWS\par}
-{\pard \ql \f0 \sa180 \li360 \fi-360 \bullet \tx360\tab ReaPack\par}
+{\pard \ql \f0 \sa180 \li360 \fi-360 \bullet \tx360\tab ReaPack \u12539 ?SWS\par}
 {\pard \ql \f0 \sa180 \li360 \fi0 \u12539 ?js_ReaScript API\par}
-{\pard \ql \f0 \sa180 \li360 \fi0 \u12539 ?ReaImGui\par}
-{\pard \ql \f0 \sa180 \li360 \fi0 \u8251 ?\u12486 ?\u12473 ?\u12488 ?\u20013 ?\sa180\par}
+{\pard \ql \f0 \sa180 \li360 \fi0 \u12539 ?ReaImGui\sa180\par}
 {\pard \ql \f0 \sa180 \li0 \fi0 \outlinelevel1 \b \fs32 Updates\par}
-{\pard \ql \f0 \sa180 \li0 \fi0 Use {\b Extensions > ReaPack > Synchronize packages} to check for new versions. \u8251 ?\u12486 ?\u12473 ?\u12488 ?\u20013 ?\par}
+{\pard \ql \f0 \sa180 \li0 \fi0 Use {\b Extensions > ReaPack > Synchronize packages} to check for new versions.\par}
+{\pard \ql \f0 \sa180 \li0 \fi0 \outlinelevel1 \b \fs32 Reaper Script & FX BLT SERIES \u20351 ?\u29992 ?\u35377 ?\u35582 ?\u12394 ?\u12393 ?\par}
+{\pard \ql \f0 \sa180 \li0 \fi0 Reaper Script & FX BLT SERIES\u65288 ?\u20197 ?\u19979 ?\u12300 ?\u26412 ?\u12477 ?\u12501 ?\u12488 ?\u12454 ?\u12455 ?\u12450 ?\u12301 ?\u65289 ?\u12399 ?\u12289 ?\u20491 ?\u20154 ?\u21033 ?\u29992 ?\u12539 ?\u21830 ?\u29992 ?\u21033 ?\u29992 ?\u12434 ?\u21839 ?\u12431 ?\u12378 ?\u12289 ?\u28961 ?\u26009 ?\u12391 ?\u21033 ?\u29992 ?\u12391 ?\u12365 ?\u12427 ?\u12501 ?\u12522 ?\u12540 ?\u12477 ?\u12501 ?\u12488 ?\u12454 ?\u12455 ?\u12450 ?\u65288 ?REAPER\u19978 ?\u12391 ?\u12398 ?\u21205 ?\u20316 ?\u12434 ?\u21069 ?\u25552 ?\u65289 ?\u12391 ?\u12377 ?\u12290 ?\par}
+{\pard \ql \f0 \sa180 \li0 \fi0 \u26412 ?\u12477 ?\u12501 ?\u12488 ?\u12454 ?\u12455 ?\u12450 ?\u12399 ?\u29694 ?\u29366 ?\u12398 ?\u12414 ?\u12414 ?\u25552 ?\u20379 ?\u12373 ?\u12428 ?\u12289 ?\u12381 ?\u12398 ?\u21205 ?\u20316 ?\u12420 ?\u29305 ?\u23450 ?\u12398 ?\u30446 ?\u30340 ?\u12408 ?\u12398 ?\u36969 ?\u21512 ?\u24615 ?\u12434 ?\u20445 ?\u35388 ?\u12377 ?\u12427 ?\u12418 ?\u12398 ?\u12391 ?\u12399 ?\u12354 ?\u12426 ?\u12414 ?\u12379 ?\u12435 ?\u12290 ? \u12354 ?\u12367 ?\u12414 ?\u12391 ?\u12289 ?Codex\u12398 ?\u25163 ?\u12434 ?\u20511 ?\u12426 ?\u12388 ?\u12388 ?\u20491 ?\u20154 ?\u29992 ?\u36884 ?\u12391 ?\u21046 ?\u20316 ?\u12375 ?\u12383 ?\u12418 ?\u12398 ?\u12392 ?\u12394 ?\u12426 ?\u12289 ?\u19981 ?\u20855 ?\u21512 ?\u22577 ?\u21578 ?\u12420 ?\u12372 ?\u24847 ?\u35211 ?\u12399 ?\u21442 ?\u32771 ?\u12395 ?\u12373 ?\u12379 ?\u12390 ?\u12356 ?\u12383 ?\u12384 ?\u12369 ?\u12428 ?\u12400 ?\u12392 ?\u12399 ?\u24605 ?\u12356 ?\u12414 ?\u12377 ?\u12364 ?\u12289 ?\u20491 ?\u21029 ?\u12398 ?\u12469 ?\u12509 ?\u12540 ?\u12488 ?\u12420 ?\u21205 ?\u20316 ?\u20445 ?\u35388 ?\u12399 ?\u34892 ?\u12387 ?\u12390 ?\u12362 ?\u12426 ?\u12414 ?\u12379 ?\u12435 ?\u12398 ?\u12391 ?\u12372 ?\u20102 ?\u25215 ?\u12367 ?\u12384 ?\u12373 ?\u12356 ?\u12290 ?\par}
+{\pard \ql \f0 \sa180 \li0 \fi0 \u26412 ?\u12477 ?\u12501 ?\u12488 ?\u12454 ?\u12455 ?\u12450 ?\u12398 ?\u20351 ?\u29992 ?\u12395 ?\u12424 ?\u12387 ?\u12390 ?\u29983 ?\u12376 ?\u12383 ?\u12487 ?\u12540 ?\u12479 ?\u12398 ?\u25613 ?\u22833 ?\u12289 ?\u21205 ?\u20316 ?\u19981 ?\u33391 ?\u12289 ?\u12381 ?\u12398 ?\u20182 ?\u12398 ?\u25613 ?\u23475 ?\u12395 ?\u12388 ?\u12356 ?\u12390 ?\u12289 ?\u20316 ?\u32773 ?\u65288 ?\u12400 ?\u12523 ?\u12427 ?\u12427 ?\u65289 ?\u12399 ?\u27861 ?\u20196 ?\u19978 ?\u35469 ?\u12417 ?\u12425 ?\u12428 ?\u12427 ?\u31684 ?\u22258 ?\u12391 ?\u36012 ?\u20219 ?\u12434 ?\u36000 ?\u12356 ?\u12414 ?\u12379 ?\u12435 ?\u12290 ?\u37325 ?\u35201 ?\u12394 ?\u12503 ?\u12525 ?\u12472 ?\u12455 ?\u12463 ?\u12488 ?\u12420 ?\u12487 ?\u12540 ?\u12479 ?\u12395 ?\u12388 ?\u12356 ?\u12390 ?\u12399 ?\u12289 ?\u24517 ?\u35201 ?\u12395 ?\u24540 ?\u12376 ?\u12390 ?\u12496 ?\u12483 ?\u12463 ?\u12450 ?\u12483 ?\u12503 ?\u12434 ?\u21462 ?\u12387 ?\u12383 ?\u12358 ?\u12360 ?\u12391 ?\u12372 ?\u21033 ?\u29992 ?\u12367 ?\u12384 ?\u12373 ?\u12356 ?\u12290 ?\par}
 }
 ]]></description>
   </metadata>
