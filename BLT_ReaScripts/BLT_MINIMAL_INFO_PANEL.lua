@@ -1,5 +1,5 @@
 -- @description BLT MINIMAL INFO PANEL
--- @version 0.1.30
+-- @version 0.1.31
 -- @author Balrulu
 -- @provides
 --   . > ../
@@ -1206,7 +1206,7 @@ function Core.row(project,item)
   track=R.GetMediaTrackInfo_Value(R.GetMediaItemTrack(item),'IP_TRACKNUMBER'),index=R.GetMediaItemInfo_Value(item,'IP_ITEMNUMBER'),
   length=R.GetMediaItemInfo_Value(item,'D_LENGTH'),gain=R.GetMediaItemInfo_Value(item,'D_VOL'),
   mute=R.GetMediaItemInfo_Value(item,'B_MUTE_ACTUAL')~=0,lockBits=floor(R.GetMediaItemInfo_Value(item,'C_LOCK') or 0)}
- v.volume=v.gain>0 and 20*math.log(v.gain,10) or -150
+ v.volume=v.gain>0 and max(Core.specs.volume.lo,20*math.log(v.gain,10)) or Core.specs.volume.lo
  v.lock=(v.lockBits&1)~=0
  if take then
   v.midi=R.TakeIsMIDI(take)
@@ -1310,7 +1310,6 @@ function Core.plan(s,key,value,absolute)
   local target=value
   if spec then
    target=Core.precision(key,clamp(absolute and value or current+value-first,spec.lo,spec.hi))
-   if key=='volume' and not absolute and v.gain==0 then target=-150 end
   end
   if key=='rate' then
    local newLength=v.length*v.rate/target
