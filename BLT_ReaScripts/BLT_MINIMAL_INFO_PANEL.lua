@@ -1,5 +1,5 @@
 -- @description BLT MINIMAL INFO PANEL
--- @version 0.1.32
+-- @version 0.1.35
 -- @author Balrulu
 -- @provides
 --   . > ../
@@ -2331,10 +2331,10 @@ local function open_edit(f)
  local value=first[f.key]
  if Core.specs[f.key] then value=Core.control_value(f.key,value) end
  if f.key=='length' then value=length_text(value,first.pos) end
- E={key=f.key,text=tostring(value),snapshot=snapshot,bounds={x=f.x+3,y=((Dock.state&1)~=0 and 14 or 42),w=f.w-6,h=25},absolute=false}
+ E={key=f.key,text=tostring(value),snapshot=snapshot,bounds={x=f.x+7,y=((Dock.state&1)~=0 and 15 or 43),w=f.w-14,h=23},absolute=false}
  local ok,err=pcall(function()
   local I=IME.api;IME.ctx=I.CreateContext('BLT MINIMAL INFO PANEL input');IME.font=I.CreateFont(fonts[f.key=='name' and 1 or 3]);I.Attach(IME.ctx,IME.font)
-  IME.active=true;IME.frames=0
+  IME.active=true;IME.frames=0;IME.metrics=nil
  end)
  if not ok then finish_edit(true);fail(f.key,tostring(err)) end
  wake_visuals()
@@ -2351,13 +2351,28 @@ local function ime_frame()
  if focus then I.SetNextWindowFocus(ctx) end
  I.PushStyleVar(ctx,I.StyleVar_WindowPadding,0,0);I.PushStyleVar(ctx,I.StyleVar_WindowMinSize,1,1)
  I.PushStyleVar(ctx,I.StyleVar_WindowRounding,0);I.PushStyleVar(ctx,I.StyleVar_WindowBorderSize,0)
- I.PushStyleVar(ctx,I.StyleVar_FramePadding,4,1)
+ I.PushStyleVar(ctx,I.StyleVar_FramePadding,0,0)
  I.PushStyleColor(ctx,I.Col_WindowBg,rgba(C.field));I.PushStyleColor(ctx,I.Col_FrameBg,rgba(C.field));I.PushStyleColor(ctx,I.Col_Text,rgba((A.count or 0)>1 and C.warn or C.text))
- I.PushFont(ctx,IME.font,16)
+ local unit=w/b.w
+ I.PushFont(ctx,IME.font,16*unit)
  local flags=I.WindowFlags_NoDecoration|I.WindowFlags_NoMove|I.WindowFlags_NoSavedSettings|I.WindowFlags_NoDocking
  local shown=I.Begin(ctx,'##item_strip_'..E.key,nil,flags)
  local done,cancel,focused=false,false,true
  if shown then
+  local kind=E.key=='name'and 1 or 3
+  local dpi=I.GetWindowDpiScale(ctx)
+  local metrics=IME.metrics
+  if not metrics or metrics.unit~=unit or metrics.dpi~=dpi then
+   local sample=kind==1 and 'あいうえお漢字ABC012345' or '0123456789.-'
+   font(16,kind,false)
+   local targetWidth,targetHeight=gfx.measurestr(sample)
+   local measured=I.CalcTextSize(ctx,sample)
+   local size=measured>0 and clamp(16*unit*targetWidth*unit/measured*1.04,1,96)or 16*unit*1.04
+   metrics={unit=unit,dpi=dpi,size=size,height=targetHeight*unit};IME.metrics=metrics
+  end
+  I.PopFont(ctx);I.PushFont(ctx,IME.font,metrics.size)
+  local textHeight=I.GetTextLineHeight(ctx)
+  I.SetCursorPos(ctx,0,max(0,(metrics.height-textHeight)/2))
   I.SetNextItemWidth(ctx,w);if focus then I.SetKeyboardFocusHere(ctx) end
   local _,text=I.InputText(ctx,'##value',E.text,I.InputTextFlags_AutoSelectAll)
   E.text=text -- Preserve edits before deactivation (including paste then outside click).
