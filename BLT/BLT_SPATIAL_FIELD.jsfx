@@ -1,6 +1,6 @@
 desc:BLT SPATIAL FIELD
 author:Balrulu
-version:0.5.0
+version:0.5.1
 changelog:BLT SERIES Beta TEST UPLOAD
 provides:
   [script main=main] BLT_SPATIAL_FIELD_THEME_BRIDGE.lua > BLT ReaScripts/BLT_SPATIAL_FIELD_THEME_BRIDGE.lua
