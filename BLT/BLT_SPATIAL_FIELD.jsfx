@@ -4,7 +4,7 @@ version:0.5.1
 changelog:BLT SERIES Beta TEST UPLOAD
 provides:
   [script main=main] BLT_SPATIAL_FIELD_THEME_BRIDGE.lua > BLT ReaScripts/BLT_SPATIAL_FIELD_THEME_BRIDGE.lua
-// v0.5.0 — horizontal binaural position and distance processor.
+// v0.5.1 — horizontal binaural position and distance processor.
 // SADIE II v2-1 D1 / KU100: Copyright 2018, University of York.
 // Cal Armstrong, Lewis Thresh, Gavin Kearney. Apache-2.0 (see About).
 // Source: https://doi.org/10.5281/zenodo.10886409
@@ -376,7 +376,7 @@ file_var(0,ui_lang);
 
 @gfx 700 614
 !about_text_ready ? (
-90000[0]="BLT SPATIAL FIELD v0.5.0 - Third-party notices";
+90000[0]="BLT SPATIAL FIELD v0.5.1 - Third-party notices";
 90000[1]="";
 90000[2]="SADIE II Database v2-1, D1 / Neumann KU100.";
 90000[3]="Copyright 2018, University of York.";
@@ -390,7 +390,7 @@ file_var(0,ui_lang);
 90000[11]="A Case Study of the SADIE II Database\", Applied Sciences 8(11), 2029.";
 90000[12]="https://doi.org/10.3390/app8112029";
 90000[13]="";
-90000[14]="Modifications in BLT v0.5.0:";
+90000[14]="Modifications in BLT v0.5.1:";
 90000[15]="48kHz SOFA horizontal data selected at approximately 5-degree intervals;";
 90000[16]="azimuth converted to clockwise-positive; each ear normalized to front;";
 90000[17]="regularized log magnitudes limited to -24/+12dB and sampled at 256 knots;";
@@ -906,8 +906,8 @@ hit(449,228,239,42) ? strcpy(#hint,tr("後方強調：0%で無加工 / 背後の
 hit(449,369,239,29) ? strcpy(#hint,tr("伝搬モードを選択 / 初期値は相対分散","Select propagation mode / Default: relative dispersion"));
 editing ? strcpy(#hint,tr("入力中：Enterで確定 / Escで取消 / Ctrl+Aで全選択","EDITING: Enter to apply / Esc to cancel / Ctrl+A to select all"));
 // Share one footer row; reserve the measured credits width before fitting help.
-right_label(688,577,"BLT / SADIE II - KU100 / v0.5.0",9,.40,.57,.71);
-gfx_measurestr("BLT / SADIE II - KU100 / v0.5.0",footer_credit_w,footer_credit_h);
+right_label(688,577,"BLT / SADIE II - KU100 / v0.5.1",9,.40,.57,.71);
+gfx_measurestr("BLT / SADIE II - KU100 / v0.5.1",footer_credit_w,footer_credit_h);
 footer_help_w=max(0,660*scale-footer_credit_w);
 gfx_setfont(1,ui_lang ? latinfont : jpfont,max(8,floor(10*scale+.5)),0);
 strcpy(#footer_help,#hint);strcpy(#footer_display,#hint);
