@@ -1,5 +1,5 @@
 -- @description MARKER REGION DESK
--- @version 0.5.6
+-- @version 0.5.9
 -- @author Balrulu
 -- @provides
 --   . > ../
@@ -1650,7 +1650,8 @@ local function guarded(fn)
   if not ok then report_error(err); BLT.recoverInput(A,err) end
 end
 
-local BASE_W,H=540,962
+local BASE_W,BASE_H=540,962
+local H=BASE_H
 local W=BASE_W
 local C={
   bg={0.018,0.030,0.055}, bg2={0.030,0.090,0.180},
@@ -1852,7 +1853,7 @@ local Chameleon={
 }
 local Chrome={window=nil,mouseDown=false,drag=nil,resize=nil,mouseActive=false,requestClose=false,requestReset=false,
   chameleonPressed=false,resizeCursors={},resizeCursorMode=nil,titleH=26,windowTitle=APP_NAME,titleText='M A R K E R   R E G I O N   D E S K',
-  minW=486,minH=917,mint={0.38,0.88,0.72},ice={0.65,0.895,1.0},red={1.0,0.27,0.34},
+  minW=486,minH=500,mint={0.38,0.88,0.72},ice={0.65,0.895,1.0},red={1.0,0.27,0.34},
   isWindows=R.GetOS():match("Win")~=nil,resizeEdge=6,resizeCornerBand=8,resizeCornerSpan=24,resizeTopLeftGuard=30,resizeTopRightGuard=110,
   tooltipHover=nil,tooltipSince=0,tooltipVisible=false,tooltipDelay=.70,
   cursorId={we=32644,ns=32645,nwse=32642,nesw=32643,arrow=32512}}
@@ -2292,10 +2293,10 @@ local function reset_window_size()
   local hwnd=gfx_window_handle()
   if not hwnd then return end
   local ok,l,t=WindowGeometry.JS_Window_GetRect(hwnd)
-  if ok then BLT.position(hwnd,l,t,BASE_W,H+Chrome.titleH,"","") end
+  if ok then BLT.position(hwnd,l,t,BASE_W,BASE_H+Chrome.titleH,"","") end
   BLT.store(SECTION,"window_w",tostring(BASE_W),true)
-  BLT.store(SECTION,"window_h",tostring(H+Chrome.titleH),true)
-  last_window_w,last_window_h=BASE_W,H+Chrome.titleH
+  BLT.store(SECTION,"window_h",tostring(BASE_H+Chrome.titleH),true)
+  last_window_w,last_window_h=BASE_W,BASE_H+Chrome.titleH
 
 end
 
@@ -2853,9 +2854,12 @@ end
 
 local function draw()
   local contentH=max(1,gfx.h-Chrome.titleH)
-  scale=max(.30,min(gfx.w/BASE_W,contentH/H))
+  scale=max(.30,min(gfx.w/BASE_W,1))
+  H=contentH/scale
+  T.h=max(T.header+T.row,H-258)
+  LIST_ROWS=visible();A.offset=clamp(A.offset,0,max_offset())
   W=gfx.w/scale;T.w=W-48
-  ox,oy=0,Chrome.titleH+(contentH-H*scale)/2-22*scale
+  ox,oy=0,Chrome.titleH-22*scale
  BLT.viewport(scale,gfx.ext_retina or 1);  mx,my=(gfx.mouse_x-ox)/scale,(gfx.mouse_y-oy)/scale
   widgets={};gfx.clear=-1;gfx.set(C.bg[1],C.bg[2],C.bg[3],1);gfx.rect(0,0,gfx.w,gfx.h,1)
   local now=R.time_precise();particle_dt=max(0,min(.10,now-frame_clock));frame_clock=now
@@ -2879,15 +2883,15 @@ local function draw()
   end,true,true)
   draw_table()
 
-  slide_switch("seek","シーク再生",24,890,138,S.seek,function() S.seek=not S.seek;persist() end)
-  slide_switch("move","選択位置へ移動",172,890,176,S.move,function() S.move=not S.move;persist() end)
-  scroll_button("top","↑ 先頭",W-180,890,72,function() A.offset=0 end,#A.rows>0)
-  scroll_button("bottom","↓ 末尾",W-96,890,72,function() A.offset=max_offset() end,#A.rows>0)
-  small_button("copy_names","全名前をコピー",24,930,142,30,function() copy_information(true) end,#A.items>0,true)
-  small_button("copy_info","全情報をコピー",178,930,142,30,function() copy_information(false) end,#A.items>0,true)
-  small_button("paste_all","名前を貼付（先頭から）",332,930,W-356,30,function() paste_names(false) end,#A.items>0,true)
+  slide_switch("seek","シーク再生",24,H-72,138,S.seek,function() S.seek=not S.seek;persist() end)
+  slide_switch("move","選択位置へ移動",172,H-72,176,S.move,function() S.move=not S.move;persist() end)
+  scroll_button("top","↑ 先頭",W-180,H-72,72,function() A.offset=0 end,#A.rows>0)
+  scroll_button("bottom","↓ 末尾",W-96,H-72,72,function() A.offset=max_offset() end,#A.rows>0)
+  small_button("copy_names","全名前をコピー",24,H-32,142,30,function() copy_information(true) end,#A.items>0,true)
+  small_button("copy_info","全情報をコピー",178,H-32,142,30,function() copy_information(false) end,#A.items>0,true)
+  small_button("paste_all","名前を貼付（先頭から）",332,H-32,W-356,30,function() paste_names(false) end,#A.items>0,true)
 
-  BLT.footer(A.blt_status or (#A.items==0 and 'マーカー／リージョンがありません。' or string.format('%d件  選択 %d件',#A.items,A.selected_count)),A.blt_bad,W,H+22,'0.5.6')
+  BLT.footer(A.blt_status or (#A.items==0 and 'マーカー／リージョンがありません。' or string.format('%d件  選択 %d件',#A.items,A.selected_count)),A.blt_bad,W,H+22,'0.5.9')
   custom_titlebar()
   drawn_layout={w=gfx.w,h=gfx.h,generation=A.generation,offset=A.offset}
 end
@@ -2943,7 +2947,7 @@ local function keypress(k)
  k=BLT.key(k);if k==0 then return end
 
   if IME.active then return end
-  if k==27 then A.closing=true
+  if k==27 then A.manualClose=true;A.closing=true
   elseif k==1 then select_all_rows()
   elseif k==6579564 then delete_selected()
   elseif k==3 then copy_information(true,true)
@@ -2955,6 +2959,88 @@ local function keypress(k)
   elseif k==1885824110 then scroll(visible())
   elseif k==30064 then scroll(-1)
   elseif k==1685026670 then scroll(1) end
+end
+
+-- Shared BLT app restoration protocol. Each app owns one registry ID.
+local BLTRestore={section='BLT_APP_RESTORE',id='BLT_MARKER_REGION_DESK'}
+local BLTRestoreLauncher=[=[
+local r=reaper
+local section='BLT_APP_RESTORE'
+if r.GetExtState(section,'startup_done')=='1'then return end
+r.SetExtState(section,'startup_done','1',false)
+r.defer(function()
+ local count=math.min(128,tonumber(r.GetExtState(section,'count'))or 0)
+ for i=1,count do
+  local id=r.GetExtState(section,'app_'..i)
+  if id~=''and r.GetExtState(section,id..'_open')=='1'and r.GetExtState(section,id..'_running')~='1'then
+   local ok,err=pcall(function()
+    local path=r.GetExtState(section,id..'_path')
+    local f=io.open(path,'rb');if not f then return end;f:close()
+    local command=r.NamedCommandLookup(r.GetExtState(section,id..'_command'))
+    if command==0 then command=r.AddRemoveReaScript(true,0,path,true)end
+    if command and command>0 then r.Main_OnCommand(command,0)end
+   end)
+   if not ok then r.ShowConsoleMsg('BLT restore: '..id..': '..tostring(err)..'\n')end
+  end
+ end
+end)
+]=]
+local function restore_read(path)
+ local f=io.open(path,'rb');if not f then return nil end
+ local data=f:read('*a');f:close();return data
+end
+local function restore_write_bytes(path,data)
+ local f,err=io.open(path,'wb');assert(f,err)
+ local ok,why=f:write(data);local closed,closeError=f:close()
+ assert(ok and closed,why or closeError or'BLT startup write failed')
+ assert(restore_read(path)==data,'BLT startup verification failed: '..path)
+end
+local function restore_write(path,data)
+ local previous=restore_read(path)
+ if previous==data then return end
+ if previous then
+  local backup=path..'.blt-backup';local suffix=0
+  while restore_read(backup)and restore_read(backup)~=previous do suffix=suffix+1;backup=path..'.blt-backup-'..suffix end
+  if not restore_read(backup)then restore_write_bytes(backup,previous)end
+ end
+ local ok,err=pcall(restore_write_bytes,path,data)
+ if not ok then
+  if previous then
+   local restored,why=pcall(restore_write_bytes,path,previous)
+   if not restored then error(tostring(err)..'\nBLT startup restoration failed: '..tostring(why))end
+  end
+  error(err)
+ end
+ if os.remove then os.remove(path..'.blt-tmp')end
+end
+function BLTRestore.start(api)
+ local section,id=BLTRestore.section,BLTRestore.id
+ local _,path,actionSection,command=api.get_action_context()
+ assert(actionSection==0 and path~='','BLT restore requires a Main action')
+ local root=api.GetResourcePath()..'/Scripts'
+ api.RecursiveCreateDirectory(root..'/BLT',0)
+ restore_write(root..'/BLT/BLT_Restore_Open_Apps.lua',BLTRestoreLauncher)
+ local startup=root..'/__startup.lua';local original=restore_read(startup)or''
+ local marker='-- BLT_APP_RESTORE_STARTUP'
+ if not original:find(marker,1,true)then
+  local block=marker..'\ndo\n local path=reaper.GetResourcePath().."/Scripts/BLT/BLT_Restore_Open_Apps.lua"\n local fn=loadfile(path)\n if fn then local ok,err=pcall(fn);if not ok then reaper.ShowConsoleMsg(tostring(err).."\\n")end end\nend\n'
+  restore_write(startup,block..original:gsub('^\239\187\191',''))
+ end
+ local count=math.min(128,tonumber(api.GetExtState(section,'count'))or 0);local found=false
+ for i=1,count do if api.GetExtState(section,'app_'..i)==id then found=true;break end end
+ if not found then assert(count<128,'BLT restore registry is full');api.SetExtState(section,'app_'..(count+1),id,true);api.SetExtState(section,'count',tostring(count+1),true)end
+ api.SetExtState(section,id..'_path',path,true)
+ local named=api.ReverseNamedCommandLookup(command)or''
+ api.SetExtState(section,id..'_command',named~=''and'_'..named:gsub('^_','')or'',true)
+ api.SetExtState(section,id..'_open','1',true)
+ api.SetExtState(section,id..'_running','1',false)
+ BLTRestore.started=true
+end
+function BLTRestore.finish(api,manual)
+ if not BLTRestore.started then return end
+ if manual then api.SetExtState(BLTRestore.section,BLTRestore.id..'_open','0',true)end
+ api.SetExtState(BLTRestore.section,BLTRestore.id..'_running','',false)
+ BLTRestore.started=false
 end
 
 local saved_window={}
@@ -2969,6 +3055,7 @@ local function save_window()
 end
 local function close()
  -- Teardown errors must not leave a dead graphics window on screen.
+ BLTRestore.finish(R,A.manualClose or Chrome.requestClose)
  local ok,err=xpcall(function()
   IME.active=false;IME.ctx=nil;IME.font=nil
   if A.closed then return end
@@ -3001,7 +3088,7 @@ BLT.attach({
 if ...=='blt_test' then function BLT.testDraw(now) draw(now or R.time_precise()) end end
 function BLT.drawIcon()
 
- local bs,bx,by=scale,ox,oy;ox,oy=ox+(W-102)*scale,oy+31*scale;scale=scale*.78
+ local bs,bx,by=scale,ox,oy;ox,oy=ox+(W-102)*scale,oy+(53-38*.78)*scale;scale=scale*.78
  marker_icon(0,0)
 
  scale,ox,oy=bs,bx,by
@@ -3014,7 +3101,7 @@ local chrome_ok,chrome_err=titlebar_api_ready()
 if not chrome_ok then Language.mb(BLT.publicError(chrome_err),APP_NAME,0); return end
 local x,y=tonumber(R.GetExtState(SECTION,"window_x")),tonumber(R.GetExtState(SECTION,"window_y"))
 local w,h=tonumber(R.GetExtState(SECTION,"window_w")),tonumber(R.GetExtState(SECTION,"window_h"))
-w=finite(w) and clamp(w,486,1600) or BASE_W; h=finite(h) and clamp(h,891+Chrome.titleH,1400+Chrome.titleH) or (H+Chrome.titleH)
+w=finite(w) and clamp(w,486,1600) or BASE_W; h=finite(h) and clamp(h,Chrome.minH,1400+Chrome.titleH) or (BASE_H+Chrome.titleH)
 -- Match native window/input coordinates in logical points on Mac.
 gfx.ext_retina=BLT_MAC and 0 or 1
 if finite(x) and finite(y) then gfx.init(Chrome.windowTitle,w,h,0,x,y)
@@ -3022,6 +3109,9 @@ else gfx.init(Chrome.windowTitle,w,h,0) end
 if not apply_custom_window_style(w,h) then gfx.quit(); Language.mb("カスタムタイトルバーを初期化できません。",APP_NAME,0); return end
 if Chameleon.enabled then Chameleon.refresh(true) end
 R.atexit(close)
+if R.set_action_options then R.set_action_options(2)end
+local restoreOK,restoreError=pcall(BLTRestore.start,R)
+if not restoreOK then Language.mb('自動復元の登録に失敗しました。\n'..tostring(restoreError),APP_NAME,0)end
 guarded(refresh)
 local function loop()
   guarded(function()
@@ -3095,7 +3185,7 @@ local function loop()
       next_draw_time=frame_interval and now+frame_interval or math.huge
 
       if Chrome.requestReset then Chrome.requestReset=false; reset_window_size(); wake_visuals(now) end
-      if Chrome.requestClose then Chrome.requestClose=false; A.closing=true end
+      if Chrome.requestClose then Chrome.requestClose=false; A.manualClose=true;A.closing=true end
     end
     if not frame_due and (pointer_activity or key_activity or dragging) then redraw_dirty=true end
     -- Native timeline redraws may be expensive in a large project. Present our

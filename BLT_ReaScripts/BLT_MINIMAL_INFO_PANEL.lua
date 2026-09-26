@@ -1,5 +1,5 @@
 -- @description BLT MINIMAL INFO PANEL
--- @version 0.1.31
+-- @version 0.1.32
 -- @author Balrulu
 -- @provides
 --   . > ../
@@ -2616,7 +2616,90 @@ local function toggle_dock()
  gfx.dock(Dock.state~1)
  sync_dock()
 end
+-- Shared BLT app restoration protocol. Each app owns one registry ID.
+local BLTRestore={section='BLT_APP_RESTORE',id='BLT_MINIMAL_INFO_PANEL'}
+local BLTRestoreLauncher=[=[
+local r=reaper
+local section='BLT_APP_RESTORE'
+if r.GetExtState(section,'startup_done')=='1'then return end
+r.SetExtState(section,'startup_done','1',false)
+r.defer(function()
+ local count=math.min(128,tonumber(r.GetExtState(section,'count'))or 0)
+ for i=1,count do
+  local id=r.GetExtState(section,'app_'..i)
+  if id~=''and r.GetExtState(section,id..'_open')=='1'and r.GetExtState(section,id..'_running')~='1'then
+   local ok,err=pcall(function()
+    local path=r.GetExtState(section,id..'_path')
+    local f=io.open(path,'rb');if not f then return end;f:close()
+    local command=r.NamedCommandLookup(r.GetExtState(section,id..'_command'))
+    if command==0 then command=r.AddRemoveReaScript(true,0,path,true)end
+    if command and command>0 then r.Main_OnCommand(command,0)end
+   end)
+   if not ok then r.ShowConsoleMsg('BLT restore: '..id..': '..tostring(err)..'\n')end
+  end
+ end
+end)
+]=]
+local function restore_read(path)
+ local f=io.open(path,'rb');if not f then return nil end
+ local data=f:read('*a');f:close();return data
+end
+local function restore_write_bytes(path,data)
+ local f,err=io.open(path,'wb');assert(f,err)
+ local ok,why=f:write(data);local closed,closeError=f:close()
+ assert(ok and closed,why or closeError or'BLT startup write failed')
+ assert(restore_read(path)==data,'BLT startup verification failed: '..path)
+end
+local function restore_write(path,data)
+ local previous=restore_read(path)
+ if previous==data then return end
+ if previous then
+  local backup=path..'.blt-backup';local suffix=0
+  while restore_read(backup)and restore_read(backup)~=previous do suffix=suffix+1;backup=path..'.blt-backup-'..suffix end
+  if not restore_read(backup)then restore_write_bytes(backup,previous)end
+ end
+ local ok,err=pcall(restore_write_bytes,path,data)
+ if not ok then
+  if previous then
+   local restored,why=pcall(restore_write_bytes,path,previous)
+   if not restored then error(tostring(err)..'\nBLT startup restoration failed: '..tostring(why))end
+  end
+  error(err)
+ end
+ if os.remove then os.remove(path..'.blt-tmp')end
+end
+function BLTRestore.start(api)
+ local section,id=BLTRestore.section,BLTRestore.id
+ local _,path,actionSection,command=api.get_action_context()
+ assert(actionSection==0 and path~='','BLT restore requires a Main action')
+ local root=api.GetResourcePath()..'/Scripts'
+ api.RecursiveCreateDirectory(root..'/BLT',0)
+ restore_write(root..'/BLT/BLT_Restore_Open_Apps.lua',BLTRestoreLauncher)
+ local startup=root..'/__startup.lua';local original=restore_read(startup)or''
+ local marker='-- BLT_APP_RESTORE_STARTUP'
+ if not original:find(marker,1,true)then
+  local block=marker..'\ndo\n local path=reaper.GetResourcePath().."/Scripts/BLT/BLT_Restore_Open_Apps.lua"\n local fn=loadfile(path)\n if fn then local ok,err=pcall(fn);if not ok then reaper.ShowConsoleMsg(tostring(err).."\\n")end end\nend\n'
+  restore_write(startup,block..original:gsub('^\239\187\191',''))
+ end
+ local count=math.min(128,tonumber(api.GetExtState(section,'count'))or 0);local found=false
+ for i=1,count do if api.GetExtState(section,'app_'..i)==id then found=true;break end end
+ if not found then assert(count<128,'BLT restore registry is full');api.SetExtState(section,'app_'..(count+1),id,true);api.SetExtState(section,'count',tostring(count+1),true)end
+ api.SetExtState(section,id..'_path',path,true)
+ local named=api.ReverseNamedCommandLookup(command)or''
+ api.SetExtState(section,id..'_command',named~=''and'_'..named:gsub('^_','')or'',true)
+ api.SetExtState(section,id..'_open','1',true)
+ api.SetExtState(section,id..'_running','1',false)
+ BLTRestore.started=true
+end
+function BLTRestore.finish(api,manual)
+ if not BLTRestore.started then return end
+ if manual then api.SetExtState(BLTRestore.section,BLTRestore.id..'_open','0',true)end
+ api.SetExtState(BLTRestore.section,BLTRestore.id..'_running','',false)
+ BLTRestore.started=false
+end
+
 local function close()
+ BLTRestore.finish(R,A.manualClose or Chrome.requestClose)
  WheelUndo.finish()
  if A.closed then return end
  PeakZoom.drag=nil
@@ -2671,11 +2754,11 @@ function BLT.testDraw() draw() end
 local function loop_body()
  WheelUndo.poll(R.time_precise())
  sync_dock();local now=R.time_precise();BLT.tick(now);Chameleon.tick(now)
- local k=gfx.getchar();if k<0 or A.closing then close();return false end
+ local k=gfx.getchar();if k<0 then A.manualClose=true end;if k<0 or A.closing then close();return false end
  local n=0
  while k>0 and n<32 do
   k=BLT.key(k)
-  if k==27 then if PeakZoom.drag then PeakZoom.drag=nil;downLast=(gfx.mouse_cap&1)~=0;wake_visuals() elseif Dock.barDrag then Dock.left=(Dock.barDrag.left-Dock.barDrag.origin)/Dock.barDrag.width;Dock.right=(Dock.barDrag.right-Dock.barDrag.origin)/Dock.barDrag.width;Dock.barDrag=nil;layoutWidth=nil;wake_visuals() elseif E then finish_edit(true) elseif gesture then gesture=nil;wake_visuals() else A.closing=true end end
+  if k==27 then if PeakZoom.drag then PeakZoom.drag=nil;downLast=(gfx.mouse_cap&1)~=0;wake_visuals() elseif Dock.barDrag then Dock.left=(Dock.barDrag.left-Dock.barDrag.origin)/Dock.barDrag.width;Dock.right=(Dock.barDrag.right-Dock.barDrag.origin)/Dock.barDrag.width;Dock.barDrag=nil;layoutWidth=nil;wake_visuals() elseif E then finish_edit(true) elseif gesture then gesture=nil;wake_visuals() else A.manualClose=true;A.closing=true end end
   k=gfx.getchar();n=n+1
  end
  poll(false);ime_frame();restore_menu_size()
@@ -2688,7 +2771,7 @@ local function loop_body()
   draw();interact();gfx.update()
   if Chrome.requestDock then Chrome.requestDock=false;toggle_dock();wake_visuals() end
   if Chrome.requestReset then Chrome.requestReset=false;A.menuHeight=nil;reset_window_size();wake_visuals() end
-  if Chrome.requestClose then A.closing=true end
+  if Chrome.requestClose then A.manualClose=true;A.closing=true end
  end
  last_raw_mouse_x,last_raw_mouse_y,last_raw_mouse_cap=gfx.mouse_x,gfx.mouse_y,cap
  return true
@@ -2716,4 +2799,7 @@ if not docked() and Dock.floating then local f=Dock.floating;BLT.lastRect=nil;BL
 if Chameleon.enabled then Chameleon.refresh(true) end
 poll(true)
 R.atexit(function() BLT.cleanup(close) end)
+if R.set_action_options then R.set_action_options(2)end
+local restoreOK,restoreError=pcall(BLTRestore.start,R)
+if not restoreOK then Language.mb('自動復元の登録に失敗しました。\n'..tostring(restoreError),'BLT MINIMAL INFO PANEL',0)end
 loop()
