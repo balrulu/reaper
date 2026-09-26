@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<index version="1" name="BLT ReaScripts" commit="18e2ec316efc9515303909d6a2dfc36c6fd3452a">
+<index version="1" name="BLT ReaScripts" commit="97a94dc44b4d9bcc52edd82e6d9a9511f56a7852">
   <category name="BLT">
     <reapack name="BLT_SPATIAL_FIELD.jsfx" type="effect" desc="BLT SPATIAL FIELD">
       <version name="0.5.0" author="Balrulu" time="2026-09-22T19:24:46Z">
@@ -266,6 +266,10 @@
         <changelog><![CDATA[BLT SERIES Beta TEST UPLOAD]]></changelog>
         <source main="main" file="../BLT_MARKER_REGION_DESK.lua">https://github.com/balrulu/reaper/raw/b7345ec365df7a36b1d6d152b9ecd42931eb30b4/BLT_ReaScripts/BLT_MARKER_REGION_DESK.lua</source>
       </version>
+      <version name="0.5.9" author="Balrulu" time="2026-09-26T12:00:10Z">
+        <changelog><![CDATA[BLT SERIES Beta TEST UPLOAD]]></changelog>
+        <source main="main" file="../BLT_MARKER_REGION_DESK.lua">https://github.com/balrulu/reaper/raw/97a94dc44b4d9bcc52edd82e6d9a9511f56a7852/BLT_ReaScripts/BLT_MARKER_REGION_DESK.lua</source>
+      </version>
     </reapack>
     <reapack name="BLT_MINIMAL_INFO_PANEL.lua" type="script" desc="BLT MINIMAL INFO PANEL">
       <metadata>
@@ -284,6 +288,10 @@
       <version name="0.1.31" author="Balrulu" time="2026-09-25T18:45:59Z">
         <changelog><![CDATA[BLT SERIES Beta TEST UPLOAD]]></changelog>
         <source main="main" file="../BLT_MINIMAL_INFO_PANEL.lua">https://github.com/balrulu/reaper/raw/f5fe38ab13a249704d4f0e33266421aae3febec2/BLT_ReaScripts/BLT_MINIMAL_INFO_PANEL.lua</source>
+      </version>
+      <version name="0.1.32" author="Balrulu" time="2026-09-26T12:00:10Z">
+        <changelog><![CDATA[BLT SERIES Beta TEST UPLOAD]]></changelog>
+        <source main="main" file="../BLT_MINIMAL_INFO_PANEL.lua">https://github.com/balrulu/reaper/raw/97a94dc44b4d9bcc52edd82e6d9a9511f56a7852/BLT_ReaScripts/BLT_MINIMAL_INFO_PANEL.lua</source>
       </version>
     </reapack>
     <reapack name="BLT_SIMPLE_NORMALIZER.lua" type="script" desc="SIMPLE NORMALIZER">
