@@ -1,5 +1,5 @@
--- @description MINIMAL INFO PANEL
--- @version 0.1.35
+-- @description TRACK TREE
+-- @version 0.2.10
 -- @author Balrulu
 -- @provides
 --   . > ../
@@ -8,168 +8,14 @@
 -- @about
 --   BLT SERIES Beta TEST UPLOAD
 
--- BLT preset transfer limits 1.1.0. Embedded; no runtime dependency.
 local BLTPresetLimits={bytes=16777216,stringBytes=2097152,nodes=262144,entries=8192}
 function BLTPresetLimits.show(english)
  reaper.MB(english and 'Preset capacity limit exceeded. Export presets individually instead of as a bundle.' or '容量上限オーバーです。一括ではなく個別に保存してください。','BLT PRESET',0)
 end
-
--- BLT media availability 1.0.2. Pause audio work, never the UI defer loop.
-local function create_media_gate(api,graphics)
- local M={waiting=false,epoch=0};local P=setmetatable({}, {__index=api})
- local accessors={};local next_check=0;local ready=true;local settle=0;local last_active
- local function valid(project,p,kind)
-  return p and (not api.ValidatePtr2 or api.ValidatePtr2(project,p,kind))
- end
- local function application_active()
-  if graphics and graphics.getchar then
-   local flags=graphics.getchar(65537)
-   if flags>=0 and ((flags&1)==0 or (flags&2)~=0) then return true end
-  end
-  if not (api.JS_Window_GetForeground and api.GetMainHwnd and api.JS_Window_GetParent) then return nil end
-  local foreground=api.JS_Window_GetForeground();local main=api.GetMainHwnd()
-  for _=1,32 do
-   if not foreground then return false end
-   if foreground==main then return true end
-   local parent=api.JS_Window_GetParent(foreground)
-   if parent==foreground then return nil end;foreground=parent
-  end
-  return nil
- end
- local function offline(project,take)
-  -- targets() resolves or validates each pointer in this same defer pass.
-  if not take then return false end
-  if api.TakeIsMIDI and api.TakeIsMIDI(take) then return false end
-  if not api.GetMediaItemTake_Source then return false end
-  local source=api.GetMediaItemTake_Source(take);local seen={}
-  for _=1,32 do
-   if not source or seen[source] then break end;seen[source]=true
-   local is_offline=false
-   if api.CF_GetMediaSourceOnline then
-    is_offline=not api.CF_GetMediaSourceOnline(source)
-   elseif api.GetMediaSourceSampleRate and api.GetMediaSourceNumChannels then
-    is_offline=api.GetMediaSourceSampleRate(source)<=0 or api.GetMediaSourceNumChannels(source)<=0
-   end
-   if is_offline then
-    local file=api.GetMediaSourceFileName and api.GetMediaSourceFileName(source,'') or ''
-    if file~='' and (not api.file_exists or api.file_exists(file)) then return true end
-   end
-   source=api.GetMediaSourceParent and api.GetMediaSourceParent(source) or nil
-  end
-  return false
- end
- local fields={'info','v','source','snapshot','plans','items','list','queue','entries','reader','data','p','left','right','parts','sources','source_items'}
- local function targets(project,all_items)
-  local takes,seen,items={},{},{};local invalid=false
-  local function item(p,fresh)
-   if p and items[p] then return end
-   if not p or (not fresh and not valid(project,p,'MediaItem*')) then invalid=true;return end
-   items[p]=true
-   local take=api.GetActiveTake and api.GetActiveTake(p)
-   if take then takes[take]=true end
-  end
-  local function visit(v,depth)
-   if type(v)~='table' or seen[v] or depth>12 then return end;seen[v]=true
-   if v.project and v.project~=project then invalid=true;return end
-   if v.item then item(v.item) end
-   if v.take then
-    if takes[v.take] or valid(project,v.take,'MediaItem_Take*') then takes[v.take]=true else invalid=true end
-   end
-   if v.temp_take and (takes[v.temp_take] or valid(project,v.temp_take,'MediaItem_Take*')) then takes[v.temp_take]=true end
-   for _,key in ipairs(fields) do visit(v[key],depth+1) end
-   for _,entry in ipairs(v) do if type(entry)=='table' then visit(entry,depth+1) end end
-  end
-  if api.CountSelectedMediaItems and api.GetSelectedMediaItem then
-   for i=0,api.CountSelectedMediaItems(project)-1 do item(api.GetSelectedMediaItem(project,i),true) end
-  end
-  local a=M.state
-  if a then
-   for _,key in ipairs({'job','analysis','batch','source_job','wave_job','pjob','xjob','ajob'}) do visit(a[key],0) end
-   if a.job or a.batch or a.source_job then visit(a.items,0);visit(a.queue,0) end
-  end
-  if (all_items or (M.all_items and M.state and M.state.job)) and api.CountMediaItems and api.GetMediaItem then
-   for i=0,api.CountMediaItems(project)-1 do item(api.GetMediaItem(project,i),true) end
-  end
-  return takes,invalid
- end
- function M.ready(force,all_items)
-  local now=api.time_precise()
-  if not force and now<next_check then return ready end
-  next_check=now+.10
-  local project=api.EnumProjects(-1,'')
-  local takes,invalid=targets(project,all_items);local blocked=false
-  if M.state and M.state.project and M.state.project~=project then invalid=true end
-  if not invalid then
-   if next(takes) and not api.CF_GetMediaSourceOnline and application_active()==false then blocked=true
-   else for take in pairs(takes) do if offline(project,take) then blocked=true;break end end end
-  end
-  if invalid or not next(takes) then settle=0 end
-  if blocked then settle=now+.25 end
-  local waiting=not invalid and (blocked or now<settle)
-  ready=not waiting
-  if waiting~=M.waiting then
-   M.waiting=waiting;if not waiting then M.epoch=M.epoch+1 end
-   if M.onchange then M.onchange() end
-  end
-  return ready
- end
- function M.tick()
-  local active=application_active()
-  if active~=last_active then next_check=0;last_active=active end
-  return M.ready()
- end
- function M.message(section)
-  return api.GetExtState(section,'ui_language')=='EN' and 'Waiting for media to come online…' or 'メディアのオンライン復帰を待っています…'
- end
- local function signature(take)
-  if not (api.GetMediaItemTake_Item and api.GetItemStateChunk) then return nil end
-  local item=api.GetMediaItemTake_Item(take);if not item then return nil end
-  local ok,chunk=api.GetItemStateChunk(item,'',false)
-  return ok and chunk or nil
- end
- if api.CreateTakeAudioAccessor then
-  function P.CreateTakeAudioAccessor(take)
-   local aa=api.CreateTakeAudioAccessor(take)
-   if aa then accessors[aa]={take=take,project=api.EnumProjects(-1,''),signature=signature(take),revision=api.GetProjectStateChangeCount and api.GetProjectStateChangeCount(api.EnumProjects(-1,'')),epoch=M.epoch} end
-   return aa
-  end
- end
- if api.CreateTrackAudioAccessor then
-  function P.CreateTrackAudioAccessor(track)
-   local aa=api.CreateTrackAudioAccessor(track);local project=api.EnumProjects(-1,'')
-   if aa then accessors[aa]={track=track,project=project,revision=api.GetProjectStateChangeCount(project),epoch=M.epoch} end
-   return aa
-  end
- end
- local function resume(aa)
-  local state=accessors[aa]
-  if not state or state.epoch==M.epoch or M.waiting then return end
-  state.epoch=M.epoch
-  if api.EnumProjects(-1,'')~=state.project then return end
-  local unchanged=state.take and valid(state.project,state.take,'MediaItem_Take*') and state.signature and signature(state.take)==state.signature
-  if state.take and state.revision and api.GetProjectStateChangeCount(state.project)~=state.revision then unchanged=false end
-  if state.track then unchanged=valid(state.project,state.track,'MediaTrack*') and api.GetProjectStateChangeCount(state.project)==state.revision end
-  if unchanged and api.AudioAccessorUpdate then api.AudioAccessorUpdate(aa) end
- end
- if api.AudioAccessorStateChanged then
-  function P.AudioAccessorStateChanged(aa) resume(aa);return api.AudioAccessorStateChanged(aa) end
- end
- if api.GetAudioAccessorSamples then
-  function P.GetAudioAccessorSamples(...) local aa=...;resume(aa);return api.GetAudioAccessorSamples(...) end
- end
- if api.DestroyAudioAccessor then
-  function P.DestroyAudioAccessor(aa) accessors[aa]=nil;return api.DestroyAudioAccessor(aa) end
- end
- return M,P
-end
-local Media,reaper=create_media_gate(reaper,gfx)
-
--- BLT window geometry 1.0.0. Embedded; screen coordinates only.
 local function create_window_geometry(api,graphics)
  local osname=api.GetOS() or ''
  if not osname:match('OSX') and not osname:match('macOS') then return api end
  local G=setmetatable({}, {__index=api})
- -- Internal screen Y points downward. Client coordinates remain untouched.
  function G.GetMousePosition()
   local x,y=api.GetMousePosition();return x,-y
  end
@@ -180,7 +26,6 @@ local function create_window_geometry(api,graphics)
  end
  function G.JS_Window_SetPosition(hwnd,x,y,w,h,z,flags)
   if graphics and graphics.dock and (graphics.dock(-1)&1)~=0 then return false end
-  -- SWELL SetWindowPos uses a bottom-left origin for floating macOS windows.
   return api.JS_Window_SetPosition(hwnd,x,-y-h,w,h,z,flags)
  end
  return G
@@ -188,19 +33,15 @@ end
 
 local WindowGeometry=create_window_geometry(reaper,gfx)
 local BLT_MAC=(reaper.GetOS() or ''):match('OSX')~=nil or (reaper.GetOS() or ''):match('macOS')~=nil
-
--- BLT language runtime 1.1.0. Embed with an app-specific catalog; no runtime file I/O.
 local function create_language(api,section,catalog)
  local L={code=api.GetExtState(section,'ui_language')=='EN' and 'EN' or 'JP'}
  local en=catalog.en
  local cache,count={},0
- -- Fixed labels: one lookup, no pattern scan, allocation, or cache insertion.
  function L.text(value)
   local text=type(value)=='string' and value or tostring(value or '')
   if L.code=='JP' then return text end
   return en[text] or text
  end
- -- Only status text, tooltips and dialogs need dynamic-message handling.
  function L.message(value)
   local text=type(value)=='string' and value or tostring(value or '')
   if L.code=='JP' then return text end
@@ -279,60 +120,21 @@ local LanguageCatalog={en={
  ["閉じる"]="Close",
  ["ウィンドウサイズ初期化"]="Reset window size",
  ["カメレオンモード"]="Chameleon mode",
- ["縮小／展開"]="Collapse / Expand",
  ["次のプリセット"]="Next preset",
  ["前のプリセット"]="Previous preset",
  ["プリセット（読込・保存・インポート／エクスポート）"]="Presets: load, save, import/export",
- ["解析中...%d%%"]="Analyzing...%d%%",
- ["解析中...100%"]="Analyzing...100%",
  ["CHAMELEON  REAPERテーマに擬態"]="CHAMELEON  REAPER theme",
  ["CHAMELEON  オリジナル配色"]="CHAMELEON  Original colors",
  ["カスタムタイトルバーには js_ReaScriptAPI が必要です。\nReaPack から js_ReaScriptAPI をインストールしてください。"]="The app bar requires js_ReaScriptAPI.\nInstall js_ReaScriptAPI via ReaPack.",
- ["アイテム"]="Item",
  ["現在"]="Current",
- ["解析中"]="Analyzing",
  ["表示言語を切替（JP / EN）"]="Switch language (JP / EN)",
  ["名前"]="Name",
- ["長さ"]="Length",
- ["ボリューム"]="Volume",
- ["ピッチ"]="Pitch",
- ["再生速度"]="Rate",
- ["逆再生"]="Reverse",
- ["ミュート"]="Mute",
- ["ロック"]="Lock",
- ["ピーク表示ズーム率"]="Peak zoom",
- ["ピーク表示の調整にはSWS Extensionが必要です。"]="Peak zoom requires SWS Extension.",
- ["ピーク表示の設定を取得できません。"]="Cannot read the peak display gain.",
- ["ピーク表示の設定を変更できません。"]="Cannot change the peak display gain.",
- ["プロジェクトが切り替わったため、ピーク表示の操作を終了しました。"]="Peak zoom adjustment ended because the project changed.",
- ["（名前なし）"]="(Unnamed)",
- ["アイテムを選択してください。"]="Select items.",
- ["編集中に対象が変更されました。もう一度操作してください。"]="Items changed while editing. Please try again.",
- ["選択が変更されました。もう一度操作してください。"]="Selection changed. Please try again.",
- ["対象アイテムが変更または削除されました。"]="An item was changed or deleted.",
- ["名前は改行なし・4096バイト以内で入力してください。"]="Use a single-line name, up to 4096 bytes.",
- ["数値が範囲外です。元の値を保持しました。"]="Value out of range. Original value retained.",
- ["この項目は選択アイテムでは編集できません。"]="This property is unavailable for the selected item.",
- ["選択内にこの項目を編集できないアイテムがあります。"]="Some selected items do not support this property.",
- ["ロックされたアイテムがあります。先にロックを解除してください。"]="Unlock selected items before editing.",
- ["数値が不正です。"]="Invalid number.",
- ["値が不正です。"]="Invalid value.",
- ["値を変更できませんでした。"]="Could not change the value.",
- ["変更に失敗したため、元の値へ戻しました。"]="Update failed. Original values restored.",
- ["復元できない項目があります。REAPERのUndoで確認してください。"]="Some items could not be restored. Check REAPER Undo.",
- ["音声がオンラインになるまでお待ちください。"]="Wait until media is online.",
- ["逆再生の切り替えにはSWS Extensionが必要です。"]="Reverse editing requires SWS Extension.",
- ["ウィンドウを初期化できません。"]="Could not initialize the window.",
- ["プリセットを読み込みました: ファクトリーデフォルト"]="Loaded: Factory Default",
 },prefixes={"プリセットを保存しました: ","プリセットを読み込みました: ","現在: "},patterns={
  {'^「(.*)」を上書きしますか？$','Overwrite "%s"?'},
  {'^(%d+)個インポートしました。$','Imported %d preset(s).'},
- {'^(%d+)個選択 · トラック順・時間順の先頭を表示$','%d selected · First by track/time'},
- {'^(%d+)個のアイテムを変更しました。$','%d items updated.'}
 }}
-local Language=create_language(reaper,"BLT_ITEM_STRIP",LanguageCatalog)
+local Language=create_language(reaper,"BLT_TRACK_TREE",LanguageCatalog)
 local R=reaper
--- BLT shared shell 3.2.0. Embedded at build time; no runtime module dependency.
 local BLT=(function()
 local B={fitCache={},fitCount=0,metrics={},metricCount=0,slots={},nextSlot=1,specs={}}
 local host,C,Chrome,Chameleon,scale,ox,oy
@@ -346,7 +148,6 @@ function B.copy(v)
  if type(v)~='table' then return v end
  local t={};for k,x in pairs(v) do t[k]=B.copy(x) end;return t
 end
--- Typed, length-prefixed data. Never evaluate imported Lua or JSON-like code.
 function B.pack(v)
  local t=type(v)
  if t=='boolean' then return v and 'b1' or 'b0' end
@@ -493,7 +294,6 @@ function Presets.decode(data)
  local prefix=host.section..'_PRESET_V1\n'
  if data:sub(1,#prefix)~=prefix then return nil end
  local p=B.unpack(data:sub(#prefix+1))
- if type(p)=='table' and host.upgrade then host.upgrade(p.values) end
  if type(p)~='table' or not Presets.name(p.name) or not B.shape(p.values,host.defaults) or not host.valid(p.values) then return nil end
  return p
 end
@@ -505,7 +305,6 @@ function Presets.capture(name)
 end
 function Presets.dirty()
  if not Presets.current then return false end
- -- Whitelisted views are reused; never serialize settings in the draw path.
  return not B.same(host.capture(),Presets.current.values)
 end
 function Presets.flush()
@@ -597,17 +396,17 @@ function Presets.export(all)
 end
 function UI.bar(w)
  local inline=host.docked()
- local compact=host.compactChrome and host.compactChrome() or false
+ local compact=inline
  local c=B.barCache;if c and c.width==w and c.compact==compact and c.inline==inline then return c end
  local b={width=w,closeX=w-38,resetX=w-72,themeX=w-106}
  b.foldX=host.fold and b.themeX-34 or nil;b.languageX=(b.foldX or b.themeX)-26;b.nextX=b.languageX-20;b.prevX=b.nextX-20;b.presetX=b.prevX-84
  b.compact=compact;b.inline=inline;b.titleEnd=inline and math.min(210,math.max(0,b.presetX-100)) or nil
- if compact then b.resetX=b.closeX;b.themeX=w-72;b.foldX=w-106;b.languageX=w+500;b.nextX=w+500;b.prevX=w+500;b.presetX=w+500 end
+ if compact then b.resetX=b.closeX;b.themeX=w-72;b.foldX=w-106;b.languageX=w-132;b.nextX=w+500;b.prevX=w+500;b.presetX=w+500;b.titleEnd=b.languageX-8 end
  B.barCache=b;return b
 end
 function UI.barHit(x,y)
  local b=UI.bar(gfx.w)
- return y>=0 and y<26 and x>=0 and x<gfx.w and (not b.inline or x<b.titleEnd or x>=b.presetX)
+ return y>=0 and y<26 and x>=0 and x<gfx.w and (not b.inline or x<b.titleEnd or x>=(b.compact and b.languageX or b.presetX))
 end
 local function gfx_window_handle() return host.handle() end
 local function chrome_resize_hit(x,y) if host.docked() then return nil end;if y<26 and x>=UI.bar(gfx.w).presetX then return nil end;return host.resizeHit(x,y) end
@@ -616,7 +415,6 @@ local function begin_window_resize(mode) host.beginResize(mode) end
 local function update_window_resize() host.resize() end
 local function clear_chrome_tooltip() B.popupUntil=nil;if R.TrackCtl_SetToolTip then R.TrackCtl_SetToolTip('',0,0,true) end end
 B.clearTooltip=clear_chrome_tooltip
--- Non-modal dependency hint. Uses the existing tick, with no extra defer loop.
 function B.inputNotice()
  local x,y=gfx.clienttoscreen(gfx.mouse_x,gfx.mouse_y+18)
  R.TrackCtl_SetToolTip(Language.message('ReaImGui 0.10以降が必要です。ReaPackで導入・更新してください。'),x,y,true)
@@ -737,7 +535,6 @@ function Presets.update(active)
     if inside and Presets.page=="load" then Presets.offset=math.max(0,math.min(math.max(0,#Presets.items-Layout.popup.visiblePresets),Presets.offset+(wheel>0 and -1 or 1)));Presets.selected=nil end
     gfx.mouse_wheel=0
   end
-  -- Hover only opens the preset list, never applies a preset automatically.
   if Presets.page=="main" and hit==2 and #Presets.items>0 and not down then
     Presets.hoverSince=Presets.hoverSince or R.time_precise()
     if R.time_precise()-Presets.hoverSince>=Layout.popup.hoverDelay then Presets.activate(2);Presets.down=down;return end
@@ -847,7 +644,6 @@ local function custom_titlebar(blocked)
   local hoverFold=foldX and not (host.transition and host.transition()) and inBar and mx>=foldX and mx<chamX and not resizeMode and not resizing
   local hoverLanguage=inBar and mx>=languageX and mx<(foldX or chamX) and not resizeMode and not resizing
   local down=not blocked and (gfx.mouse_cap&1)~=0
-  -- A content modal disables chrome; it does not give chrome ownership of its input.
   Chrome.mouseActive=(Presets.open or Presets.swallow) or inBar or Chrome.drag~=nil or Chrome.resize~=nil or cursorMode~=nil
     or Chrome.languagePressed or Chrome.closePressed or Chrome.resetPressed or Chrome.chameleonPressed or Chrome.presetPressed or Chrome.presetPrevPressed or Chrome.presetNextPressed
 
@@ -858,10 +654,9 @@ local function custom_titlebar(blocked)
   gfx.set(C.edge[1],C.edge[2],C.edge[3],.42); gfx.line(x,Chrome.titleH-1,x+width,Chrome.titleH-1,1)
 
   end
-  if b.inline then background(0,b.titleEnd);background(presetX,w-presetX) else background(0,w) end
+  background(0,w)
 
   if not Chrome.textFontsReady or Chrome.fontDPI~=(gfx.ext_retina or 1) then Chrome.fontDPI=gfx.ext_retina or 1;B.chromeFont(); Chrome.textFontsReady=true else B.chromeFont() end; B.fontKey="chrome"
-  -- Center the unadorned title within the bar using the actual font height.
   local _,titleHeight=UI.textMetrics(Chrome.titleText)
   local ty=math.floor((Chrome.titleH-titleHeight)*.5)
   gfx.set(Chrome.mint[1],Chrome.mint[2],Chrome.mint[3],.88); gfx.x=14; gfx.y=ty; gfx.drawstr(UI.fit(Chrome.titleText,math.max(0,(b.titleEnd or (b.compact and b.foldX or presetX))-22)))
@@ -896,12 +691,12 @@ local function custom_titlebar(blocked)
     gfx.line(cx+direction*2,cy,cx-direction*2,cy+4,1)
   end
 
+  end
   local lc=hoverLanguage and Chrome.mint or C.text
   gfx.set(lc[1],lc[2],lc[3],hoverLanguage and 1 or .95)
   B.font(13,2,true,1,host.faces)
   local lw,lh=UI.textMetrics(Language.code)
   gfx.x=languageX+(26-lw)/2;gfx.y=(Chrome.titleH-lh)/2;gfx.drawstr(Language.code)
-  end -- full-size preset and language controls
   if foldX then
     gfx.set(C.accent2[1],C.accent2[2],C.accent2[3],hoverFold and .98 or .8)
     local cx,cy=foldX+17,13
@@ -917,10 +712,6 @@ local function custom_titlebar(blocked)
   end
   local chx,chy=chamX+chamW*.5,Chrome.titleH*.5
   local active_a=hoverCham and 1 or (Chameleon.enabled and .96 or .85)
-
-  -- Theme / mimicry icon:
-  -- three overlapping color fields, visually reading as "take on / blend into
-  -- surrounding colors" rather than as a literal animal.
   local c1,c2,c3=Chameleon.icon_colors()
 
   gfx.set(c1[1],c1[2],c1[3],active_a)
@@ -945,7 +736,7 @@ local function custom_titlebar(blocked)
   gfx.line(rcx-3,rcy+3,rcx-3,rcy-1,1)
   gfx.line(rcx-3,rcy+3,rcx+1,rcy+3,1)
 
-  end -- full-size reset control
+  end
   if hoverClose then
     gfx.set(Chrome.red[1],Chrome.red[2],Chrome.red[3],.10); gfx.rect(closeX,0,closeW,Chrome.titleH,1)
     gfx.set(Chrome.red[1],Chrome.red[2],Chrome.red[3],.56); gfx.line(closeX,Chrome.titleH-1,w,Chrome.titleH-1,1)
@@ -1036,7 +827,6 @@ end
 function B.blocked()
  return Presets.open or Presets.swallow or UI.barHit(gfx.mouse_x,gfx.mouse_y)
 end
--- Shared project Undo shortcut. Embedded; no runtime file dependency.
 local function create_project_undo(api,context)
  local function message(jp,en,ok)
   if context.notice then context.notice(context.language()=='EN' and en or jp,ok) end
@@ -1044,7 +834,6 @@ local function create_project_undo(api,context)
  return function(key,modifiers)
   modifiers=modifiers or 0
   if (modifiers&24)~=0 or not (key==26 or ((modifiers&4)~=0 and (key==90 or key==122))) then return false end
-  -- Native text editors own their own Undo; never send their shortcut to REAPER.
   if context.editing() then return true end
   if context.busy() then message('処理中は元に戻せません。','Cannot undo during processing.',false);return true end
   local project=api.EnumProjects(-1,'')
@@ -1083,7 +872,6 @@ function B.key(k)
  return k
 end
 function B.tick(now)
- Media.tick()
  if not host then return end
  if B.windowW~=gfx.w or B.windowH~=gfx.h then B.windowW,B.windowH=gfx.w,gfx.h;B.lastRect=nil;wake_visuals() end
  B.viewport(host.geometry(),gfx.ext_retina or 1)
@@ -1122,8 +910,6 @@ function B.bar()
  custom_titlebar(blocked)
  Presets.draw()
 end
-
--- Preserve title-bar button edges across repeated application failures.
 function B.logError(err)
  local message=B.publicError(err)
  if message~=B.lastLoggedError then
@@ -1131,419 +917,309 @@ function B.logError(err)
   if R.ShowConsoleMsg then pcall(R.ShowConsoleMsg,tostring(err)..'\n') end
  end
 end
-function B.cleanup(fn,...)
- local ok,result=pcall(fn,...)
- if not ok then B.logError(result) end
- return ok,result
-end
-function B.recoverInput(state,err)
- gfx.dest=-1;gfx.mode=0;gfx.a=1
- for _,key in ipairs({'drag','number_drag','pointer_capture','field_drag','fieldDrag','scrollDrag','source_wave_drag','curve_drag','scroll_drag','seam_drag','seam_hold','pressed','popup','name_dialog','duplicate_modal'}) do state[key]=nil end
- if host.cancelEdit then B.cleanup(host.cancelEdit) end
- Presets.open=false;Presets.swallow=false;Presets.pressed=nil;Presets.hoverSince=nil
- Chrome.drag=nil;Chrome.resize=nil
- if host.cursor then B.cleanup(host.cursor,nil) end
- B.recoveryMode=true
- local ok,why=pcall(B.bar)
- B.recoveryMode=nil
- if not ok then
-  B.logError(why)
-  -- A failed font, preset or theme draw must still allow closing the window.
-  local down=((gfx.mouse_cap or 0)&1)~=0
-  local hit=gfx.mouse_y>=0 and gfx.mouse_y<26 and gfx.mouse_x>=gfx.w-38 and gfx.mouse_x<gfx.w
-  if down and not B.emergencyDown then B.emergencyClose=hit end
-  if not down and B.emergencyDown then
-   if B.emergencyClose and hit then Chrome.requestClose=true end
-   B.emergencyClose=nil
-  end
-  B.emergencyDown=down
- else B.emergencyDown=nil;B.emergencyClose=nil end
- pcall(gfx.update)
- if Chrome.requestClose then state.closing=true end
- state.content_dirty=true
- B.cleanup(host.wake)
- B.logError(err)
-end
 
 return B
 end)()
 
-local SECTION='BLT_ITEM_STRIP'
+local SECTION='BLT_TRACK_TREE'
 local min,max,abs,floor=math.min,math.max,math.abs,math.floor
-local function clamp(v,a,b) return max(a,min(b,v)) end
-local function finite(v) return type(v)=='number' and v==v and abs(v)<math.huge end
+local function clamp(v,a,b)return max(a,min(b,v))end
+local function finite(v)return type(v)=='number'and v==v and abs(v)<math.huge end
 local Core={}
-function Core.precision(key,value)
- if key~='volume' and key~='pitch' then return value end
- local n=math.floor(math.abs(value)*100+1e-9)/100
- return n==0 and 0 or (value<0 and -n or n)
+function Core.snapshot(api)
+ local project=api.EnumProjects(-1,'');local rows,roots,stack,by={},{},{},{}
+ for i=0,api.CountTracks(project)-1 do
+  local ptr=api.GetTrack(project,i);local _,name=api.GetTrackName(ptr)
+  local delta=api.GetMediaTrackInfo_Value(ptr,'I_FOLDERDEPTH')
+  local row={ptr=ptr,id=api.GetTrackGUID(ptr),name=name,index=i,depth=#stack,children={},parent=stack[#stack],delta=delta,
+   selected=api.IsTrackSelected(ptr),shown=api.GetMediaTrackInfo_Value(ptr,'B_SHOWINTCP')~=0,
+   mixer=api.GetMediaTrackInfo_Value(ptr,'B_SHOWINMIXER')~=0,color=api.GetTrackColor(ptr),pinned=api.GetMediaTrackInfo_Value(ptr,'B_TCPPIN')~=0}
+  rows[#rows+1]=row;by[row.id]=row
+  local list=row.parent and row.parent.children or roots;list[#list+1]=row
+  if delta>0 then stack[#stack+1]=row elseif delta<0 then for _=1,-delta do stack[#stack]=nil end end
+ end
+ local signature={};for _,r in ipairs(rows)do signature[#signature+1]=r.id..':'..r.delta end
+ local ptr=api.GetMasterTrack(project);local flags=api.GetMasterTrackVisibility()
+ local master={ptr=ptr,id='__MASTER__',name='MASTER',index=-1,depth=0,children={},delta=0,master=true,pinned=api.GetMediaTrackInfo_Value(ptr,'B_TCPPIN')~=0,
+  selected=api.IsTrackSelected(ptr),shown=(flags&1)~=0,mixer=(flags&2)==0,color=api.GetTrackColor(ptr)}
+ by[master.id]=master
+ return {project=project,rows=rows,roots=roots,by=by,master=master,signature=table.concat(signature,'|')}
 end
--- Host values can be just below a hundredth after state restoration or gain/dB
--- conversion. Round only the control/display value; retain raw snapshot values
--- for rollback and native Undo. Explicit typed input keeps Core.precision.
-function Core.control_value(key,value)
- if key~='volume' and key~='pitch' then return value end
- local n=math.floor(math.abs(value)*100+.5+1e-9)/100
- return n==0 and 0 or (value<0 and -n or n)
+function Core.visible(tree,closed,query,match,related)
+ local q=query:lower():match('^%s*(.-)%s*$')
+ local function matches(row)
+  if match then return match(row,q)end
+  return row.name:lower():find(q,1,true)~=nil or row.master and ('マスター'):find(q,1,true)~=nil
+ end
+ local out={}
+ if q==''or matches(tree.master)then out[1]=tree.master end
+ if q~=''and not related then
+  for _,row in ipairs(tree.rows)do if matches(row)then out[#out+1]=row end end
+  return out
+ end
+ local included={}
+ local function mark(row,above)
+  local hit=above or matches(row);local child=false
+  for _,v in ipairs(row.children)do if mark(v,hit)then child=true end end
+  included[row.id]=hit or child;return included[row.id]
+ end
+ if q~=''then for _,row in ipairs(tree.roots)do mark(row,false)end end
+ local function visit(row)
+  if q~=''and not included[row.id]then return end
+  out[#out+1]=row
+  if q~=''or not closed[row.id]then for _,v in ipairs(row.children)do visit(v)end end
+ end
+ for _,row in ipairs(tree.roots)do visit(row)end
+ return out
 end
-function Core.step(key,value,fine)
- local n=value*(fine and .1 or 1)
- if key=='volume' or key=='pitch' then return max(.01,Core.precision(key,n)) end
- return n
-end
-Core.specs={length={label='長さ',lo=.000001,hi=10000000},volume={label='ボリューム',lo=-150,hi=24},pitch={label='ピッチ',lo=-120,hi=120},rate={label='再生速度',lo=.001,hi=100},pan={label='PAN',lo=-100,hi=100}}
-Core.defaults={lengthMode=-1}
-function Core.valid_length_mode(v) return v==-1 or v==0 or v==2 or v==3 or v==4 or v==5 or v==6 end
-function Core.valid_settings(v)
- if type(v)~='table' or not Core.valid_length_mode(v.lengthMode) then return false end
- for k in pairs(v) do if k~='lengthMode' then return false end end
- return true
-end
-function Core.valid(project,p,kind) return p and R.ValidatePtr2(project,p,kind) end
-function Core.row(project,item)
- local take=R.GetActiveTake(item)
- local v={item=item,take=take,project=project,pos=R.GetMediaItemInfo_Value(item,'D_POSITION'),
-  track=R.GetMediaTrackInfo_Value(R.GetMediaItemTrack(item),'IP_TRACKNUMBER'),index=R.GetMediaItemInfo_Value(item,'IP_ITEMNUMBER'),
-  length=R.GetMediaItemInfo_Value(item,'D_LENGTH'),gain=R.GetMediaItemInfo_Value(item,'D_VOL'),
-  mute=R.GetMediaItemInfo_Value(item,'B_MUTE_ACTUAL')~=0,lockBits=floor(R.GetMediaItemInfo_Value(item,'C_LOCK') or 0)}
- v.volume=v.gain>0 and max(Core.specs.volume.lo,20*math.log(v.gain,10)) or Core.specs.volume.lo
- v.lock=(v.lockBits&1)~=0
- if take then
-  v.midi=R.TakeIsMIDI(take)
-  v.name=R.GetTakeName(take) or '';v.pitch=R.GetMediaItemTakeInfo_Value(take,'D_PITCH');v.pan=R.GetMediaItemTakeInfo_Value(take,'D_PAN')*100
-  local rate=R.GetMediaItemTakeInfo_Value(take,'D_PLAYRATE');if finite(rate) and rate>0 then v.rate=rate end
-  if not v.midi and R.BR_GetMediaSourceProperties then
-   local ok,section,start,len,fade,reverse=R.BR_GetMediaSourceProperties(take)
-   if ok then v.reverse=reverse;v.sourceProps={section,start,len,fade,reverse} end
+function Core.searchdata(api,row,items,fx)
+ local data={items={},fx={}}
+ if items and not row.master then
+  for i=0,api.CountTrackMediaItems(row.ptr)-1 do
+   local item=api.GetTrackMediaItem(row.ptr,i)
+   for t=0,api.CountTakes(item)-1 do local take=api.GetTake(item,t);if take then data.items[#data.items+1]=(api.GetTakeName(take)or''):lower()end end
   end
  end
- return v
-end
-function Core.collect(project)
- local rows={}
- for i=0,R.CountSelectedMediaItems(project)-1 do
-  local item=R.GetSelectedMediaItem(project,i)
-  if Core.valid(project,item,'MediaItem*') then rows[#rows+1]=Core.row(project,item) end
+ if fx then
+  local seen={}
+  local function visit(index)
+   if seen[index]then return end;seen[index]=true
+   local ok,name=api.TrackFX_GetFXName(row.ptr,index,'');if ok then data.fx[#data.fx+1]=name:lower()end
+   local yes,original=api.TrackFX_GetNamedConfigParm(row.ptr,index,'fx_name');if yes then data.fx[#data.fx+1]=original:lower()end
+   local has,count=api.TrackFX_GetNamedConfigParm(row.ptr,index,'container_count')
+   if has then for child=0,(tonumber(count)or 0)-1 do
+    local found,address=api.TrackFX_GetNamedConfigParm(row.ptr,index,'container_item.'..child)
+    if found and tonumber(address)then visit(tonumber(address))end
+   end end
+  end
+  for i=0,api.TrackFX_GetCount(row.ptr)-1 do visit(i)end
  end
- table.sort(rows,function(a,b)
-  if a.track~=b.track then return a.track<b.track end
-  if a.pos~=b.pos then return a.pos<b.pos end
-  return a.index<b.index
- end)
+ return data
+end
+function Core.linkview(api,tree,rows,saved)
+ if api.EnumProjects(-1,'')~=tree.project then return end
+ for _,row in ipairs(tree.rows)do if not api.ValidatePtr2(tree.project,row.ptr,'MediaTrack*')then return end end
+ if saved then
+  for _,row in ipairs(tree.rows)do if not saved.tracks[row.id]then
+   saved.tracks[row.id]={shown=row.shown,compact=api.GetMediaTrackInfo_Value(row.ptr,'I_FOLDERCOMPACT')}
+  end end
+ end
+ local shown,expanded={},{};for _,row in ipairs(rows)do shown[row.id]=true;local parent=row.parent;while parent do expanded[parent.id]=true;parent=parent.parent end end
+ local changes={}
+ for _,row in ipairs(tree.rows)do
+  local visible=shown[row.id]==true
+  if row.shown~=visible then changes[#changes+1]={row=row,key='B_SHOWINTCP',value=visible and 1 or 0}end
+  if (visible or expanded[row.id])and #row.children>0 and api.GetMediaTrackInfo_Value(row.ptr,'I_FOLDERCOMPACT')~=0 then changes[#changes+1]={row=row,key='I_FOLDERCOMPACT',value=0}end
+ end
+ local master=shown[tree.master.id]==true
+ if #changes==0 and master==tree.master.shown then return end
+ api.PreventUIRefresh(1)
+ local ok,err=xpcall(function()
+  for _,change in ipairs(changes)do
+   assert(api.SetMediaTrackInfo_Value(change.row.ptr,change.key,change.value))
+   if change.key=='B_SHOWINTCP'then change.row.shown=change.value==1 end
+  end
+  if master~=tree.master.shown then
+   local flags=api.GetMasterTrackVisibility();api.SetMasterTrackVisibility((flags&~1)|(master and 1 or 0));tree.master.shown=master
+  end
+ end,tostring)
+ api.PreventUIRefresh(-1);api.TrackList_AdjustWindows(false);api.UpdateArrange();assert(ok,err)
+end
+function Core.restoreview(api,saved)
+ if not saved then return end
+ local active=api.EnumProjects(-1,'');local available=active==saved.project
+ if not available then local i=0;while true do local p=api.EnumProjects(i,'');if not p then break end;if p==saved.project then available=true;break end;i=i+1 end end
+ if not available then return end
+ api.PreventUIRefresh(1)
+ local ok,err=xpcall(function()
+  for i=0,api.CountTracks(saved.project)-1 do
+   local track=api.GetTrack(saved.project,i);local before=saved.tracks[api.GetTrackGUID(track)]
+   if before then
+    local visible=before.shown and 1 or 0
+    if api.GetMediaTrackInfo_Value(track,'B_SHOWINTCP')~=visible then assert(api.SetMediaTrackInfo_Value(track,'B_SHOWINTCP',visible))end
+    if api.GetMediaTrackInfo_Value(track,'I_FOLDERDEPTH')>0 and api.GetMediaTrackInfo_Value(track,'I_FOLDERCOMPACT')~=before.compact then
+     assert(api.SetMediaTrackInfo_Value(track,'I_FOLDERCOMPACT',before.compact))
+    end
+   end
+  end
+  if active==saved.project then
+   local flags=api.GetMasterTrackVisibility();local restored=(flags&~1)|(saved.master and 1 or 0)
+   if flags~=restored then api.SetMasterTrackVisibility(restored)end
+  end
+ end,tostring)
+ api.PreventUIRefresh(-1);api.TrackList_AdjustWindows(false);api.UpdateArrange();assert(ok,err)
+end
+function Core.plan(tree,selected,targetId,mode)
+ local roots={};local moving={}
+ for _,r in ipairs(tree.rows)do
+  if selected[r.id]then
+   local p=r.parent;local covered=false;while p do if selected[p.id]then covered=true;break end;p=p.parent end
+   if not covered then roots[#roots+1]=r end
+  end
+ end
+ assert(#roots>0,'移動するトラックがありません。')
+ local function mark(r)moving[r.id]=true;for _,v in ipairs(r.children)do mark(v)end end
+ for _,r in ipairs(roots)do mark(r)end
+ local target=targetId and tree.by[targetId]
+ assert(not targetId or target,'移動先のトラックがありません。')
+ assert(not target or not target.master,'マスターは並べ替えできません。')
+ assert(not target or not moving[target.id],'選択トラック自身や、その子には移動できません。')
+ assert(mode=='before'or mode=='after'or mode=='inside'or mode=='end','移動先が無効です。')
+ assert(mode~='inside'or(target and #target.children>0),'フォルダを移動先に指定してください。')
+ local lists={};local ROOT={};local function key(r)return r and r.id or ROOT end
+ lists[ROOT]={};for _,r in ipairs(tree.rows)do lists[r.id]={}end
+ for _,r in ipairs(tree.rows)do if not moving[r.id]or(r.parent and moving[r.parent.id])then
+  local list=lists[key(r.parent)];list[#list+1]=r
+ end end
+ local parent=mode=='inside'and target or(mode~='end'and target and target.parent or nil)
+ local dest=lists[key(parent)];local at=#dest+1
+ if target and mode~='inside'then for i,r in ipairs(dest)do if r.id==target.id then at=i+(mode=='after'and 1 or 0);break end end end
+ for i,r in ipairs(roots)do table.insert(dest,at+i-1,r)end
+ local result={};local function visit(r,depth)
+  result[#result+1]={ptr=r.ptr,id=r.id,depth=depth};for _,child in ipairs(lists[r.id])do visit(child,depth+1)end
+ end
+ for _,r in ipairs(lists[ROOT])do visit(r,0)end
+ assert(#result==#tree.rows,'トラック構造を確認できません。')
+ for i,r in ipairs(result)do r.delta=(result[i+1]and result[i+1].depth or 0)-r.depth end
+ return result
+end
+local function transaction(api,project,title,fn)
+ assert(api.EnumProjects(-1,'')==project,'プロジェクトが切り替わりました。')
+ api.Undo_BeginBlock2(project);api.PreventUIRefresh(1)
+ local ok,err=xpcall(fn,tostring)
+ api.PreventUIRefresh(-1);api.Undo_EndBlock2(project,title,-1)
+ if not ok then api.Undo_DoUndo2(project)end
+ api.TrackList_AdjustWindows(false);api.UpdateArrange()
+ assert(ok,err)
+end
+function Core.clipboardnames(text)
+ assert(type(text)=='string'and #text<=16*1024*1024,'クリップボードのテキストが大きすぎます。')
+ assert(utf8.len(text),'クリップボードの文字コードを読み取れません。')
+ text=text:gsub('^\239\187\191',''):gsub('\r\n','\n'):gsub('\r','\n')
+ if text==''then return {}end
+ local rows,field={},{};local column=1;local quoted=false;local start=true;local i=1
+ local function finishrow()
+  local name=table.concat(field):gsub('[%z\1-\31\127]',' ')
+  assert(#name<=4096,'トラック名は4096バイト以内にしてください。')
+  rows[#rows+1]=name;field={};column=1;start=true
+ end
+ while i<=#text do
+  local c=text:sub(i,i)
+  if quoted then
+   if c=='"'then
+    if text:sub(i+1,i+1)=='"'then if column==1 then field[#field+1]='"'end;i=i+1
+    else quoted=false end
+   elseif column==1 then field[#field+1]=c end
+  elseif c=='"'and start then quoted=true;start=false
+  elseif c=='\t'then column=column+1;start=true
+  elseif c=='\n' then finishrow()
+  else if column==1 then field[#field+1]=c end;start=false end
+  i=i+1
+ end
+ assert(not quoted,'クリップボードの引用符が閉じられていません。')
+ if text:sub(-1)~='\n'or #field>0 or column>1 then finishrow()end
  return rows
 end
-function Core.snapshot()
- local project=R.EnumProjects(-1,'')
- return {project=project,revision=R.GetProjectStateChangeCount(project),rows=Core.collect(project)}
-end
-function Core.display(project,selection)
- local first,track,pos,index
- local mixed,seen,baseline,flags={},{},{},{}
- local hasMidi=false
- local count=selection and #selection or R.CountSelectedMediaItems(project)
- for i=0,count-1 do
-  local item=selection and selection[i+1] or R.GetSelectedMediaItem(project,i)
-  if Core.valid(project,item,'MediaItem*') then
-   flags.mute=R.GetMediaItemInfo_Value(item,'B_MUTE_ACTUAL')~=0
-   flags.lock=(floor(R.GetMediaItemInfo_Value(item,'C_LOCK') or 0)&1)~=0;flags.reverse=nil
-   local take=R.GetActiveTake(item)
-   if take and R.TakeIsMIDI(take) then hasMidi=true end
-   if not hasMidi and not mixed.reverse and R.BR_GetMediaSourceProperties then
-    if take then local ok,_,_,_,_,rev=R.BR_GetMediaSourceProperties(take);if ok then flags.reverse=rev end end
-   end
-   for k,v in pairs(flags) do if seen[k] and baseline[k]~=v then mixed[k]=true end;seen[k]=true;baseline[k]=v end
-   local t=R.GetMediaTrackInfo_Value(R.GetMediaItemTrack(item),'IP_TRACKNUMBER')
-   local p=R.GetMediaItemInfo_Value(item,'D_POSITION');local n=R.GetMediaItemInfo_Value(item,'IP_ITEMNUMBER')
-   if not first or t<track or (t==track and (p<pos or (p==pos and n<index))) then first,track,pos,index=item,t,p,n end
-  end
+function Core.copynames(api,ids)
+ local tree=Core.snapshot(api);local names={}
+ local function add(row)
+  if not(ids and ids[row.id]or not ids and row.selected)then return end
+  local name=row.name
+  if name:find('["\t\r\n]')then name='"'..name:gsub('"','""')..'"'end
+  names[#names+1]=name
  end
- return first and {Core.row(project,first)} or {},count,mixed,hasMidi
+ add(tree.master);for _,row in ipairs(tree.rows)do add(row)end
+ return table.concat(names,'\r\n'),#names
 end
-function Core.check(s)
- if R.EnumProjects(-1,'')~=s.project or R.GetProjectStateChangeCount(s.project)~=s.revision then return false,'編集中に対象が変更されました。もう一度操作してください。' end
- if R.CountSelectedMediaItems(s.project)~=#s.rows then return false,'選択が変更されました。もう一度操作してください。' end
- for _,v in ipairs(s.rows) do
-  if not Core.valid(s.project,v.item,'MediaItem*') or not R.IsMediaItemSelected(v.item)
-   or R.GetActiveTake(v.item)~=v.take or (v.take and not Core.valid(s.project,v.take,'MediaItem_Take*')) then return false,'対象アイテムが変更または削除されました。' end
- end
- return true
-end
-function Core.parse(key,text)
- if key=='name' then
-  if type(text)~='string' or not utf8.len(text) or text:find('[%z\r\n]') or #text>4096 then return nil,'名前は改行なし・4096バイト以内で入力してください。' end
-  return text
- end
- local s=tostring(text):match('^%s*(.-)%s*$')
- if key=='pan' then
-  if s:upper()=='C' then return 0 end
-  local side,n=s:upper():match('^([LR])%s*(%d+%.?%d*)%%?$')
-  if side then s=tostring(tonumber(n)*(side=='L' and -1 or 1)) end
- end
- local n=tonumber(s);local spec=Core.specs[key]
- if not finite(n) or not spec or n<spec.lo or n>spec.hi then return nil,'数値が範囲外です。元の値を保持しました。' end
- return Core.precision(key,n)
-end
-function Core.format(key,v)
- if v==nil then return '—' end
- if key=='name' then return v~='' and v or '（名前なし）' end
- if key=='length' then return string.format('%.3f s',v) end
- if key=='volume' then v=Core.control_value(key,v);return v<=-150 and '−∞ dB' or v==0 and '0.00 dB' or string.format('%+.2f dB',v) end
- if key=='pitch' then v=Core.control_value(key,v);return v==0 and '0.00 st' or string.format('%+.2f st',v) end
- if key=='rate' then
-  local st=Core.control_value('pitch',12*math.log(v,2))
-  return string.format('%.3f (%s st)',v,st==0 and '0.00' or string.format('%+.2f',st))
- end
- if key=='pan' then return abs(v)<.0001 and 'C' or string.format('%s %.1f%%',v<0 and 'L' or 'R',abs(v)) end
- return v and 'ON' or 'OFF'
-end
-function Core.plan(s,key,value,absolute)
- if #s.rows==0 then return nil,'アイテムを選択してください。' end
- local spec=Core.specs[key];local changes={};local first=s.rows[1][key]
- if first==nil then return nil,'この項目は選択アイテムでは編集できません。' end
- if spec and not finite(value) then return nil,'数値が不正です。' end
- if spec then value=Core.precision(key,value);first=Core.control_value(key,first) end
- if not spec and key~='name' and type(value)~='boolean' then return nil,'値が不正です。' end
- for _,v in ipairs(s.rows) do
-  if v[key]==nil then return nil,'選択内にこの項目を編集できないアイテムがあります。' end
-  if key~='lock' and v.lock then return nil,'ロックされたアイテムがあります。先にロックを解除してください。' end
-  local current=spec and Core.control_value(key,v[key]) or v[key]
-  local target=value
-  if spec then
-   target=Core.precision(key,clamp(absolute and value or current+value-first,spec.lo,spec.hi))
-  end
-  if key=='rate' then
-   local newLength=v.length*v.rate/target
-   if not finite(newLength) or newLength<=0 then return nil,'数値が範囲外です。元の値を保持しました。' end
-  end
-  -- Committing the displayed value must not rewrite hidden precision or create
-  -- an Undo step. Explicit -infinity still silences a nonzero gain.
-  local changed=target~=current or (key=='volume' and absolute and target<=-150 and v.gain~=0)
-  if changed then changes[#changes+1]={row=v,before=v[key],after=target} end
- end
- return changes
-end
-function Core.set(v,key,value,restore)
- if key=='name' then return R.GetSetMediaItemTakeInfo_String(v.take,'P_NAME',value,true)
- elseif key=='length' then return R.SetMediaItemInfo_Value(v.item,'D_LENGTH',value)
- elseif key=='volume' then return R.SetMediaItemInfo_Value(v.item,'D_VOL',restore and v.gain or (value<=-150 and 0 or 10^(value/20)))
- elseif key=='pitch' then return R.SetMediaItemTakeInfo_Value(v.take,'D_PITCH',value)
- elseif key=='rate' then
-  local length=restore and v.length or v.length*v.rate/value
-  local rateOK=R.SetMediaItemTakeInfo_Value(v.take,'D_PLAYRATE',value)
-  if not rateOK and not restore then return false end
-  local lengthOK=R.SetMediaItemInfo_Value(v.item,'D_LENGTH',length)
-  return rateOK and lengthOK
- elseif key=='pan' then return R.SetMediaItemTakeInfo_Value(v.take,'D_PAN',value/100)
- elseif key=='mute' then return R.SetMediaItemInfo_Value(v.item,'B_MUTE_ACTUAL',value and 1 or 0)
- elseif key=='lock' then return R.SetMediaItemInfo_Value(v.item,'C_LOCK',(v.lockBits&(~1))|(value and 1 or 0))
- elseif key=='reverse' then
-  if not R.BR_SetMediaSourceProperties then return false end
-  local p=v.sourceProps
-  if not R.BR_SetMediaSourceProperties(v.take,p[1],p[2],p[3],p[4],value) then return false end
-  -- Trigger the native take-change path synchronously; restore exact pitch even if the first setter fails.
-  local pitch=v.pitch
-  if not finite(pitch) then return false end
-  local delta=pitch>=120 and -.000001 or .000001
-  local ok,touched=pcall(R.SetMediaItemTakeInfo_Value,v.take,'D_PITCH',pitch+delta)
-  local restored,result=pcall(R.SetMediaItemTakeInfo_Value,v.take,'D_PITCH',pitch)
-  if not restored or not result then return false end
-  return ok and touched
- end
- return false
-end
-function Core.refresh_item(v,key)
- if key=='reverse' or key=='rate' then
-  local ok,err=pcall(R.UpdateItemInProject,v.item)
-  if not ok then
-   BLT.logError(err)
-   local track=R.GetMediaItemTrack(v.item)
-   if track and R.MarkTrackItemsDirty then
-    local worked,why=pcall(R.MarkTrackItemsDirty,track,v.item)
-    if not worked then BLT.logError(why) end
-   end
-  end
- end
-end
-function Core.apply(s,key,value,absolute,defer_undo)
- local ok,err=Core.check(s);if not ok then return nil,err end
- local changes;changes,err=Core.plan(s,key,value,absolute);if not changes then return nil,err end
+function Core.pastenames(api,text,ids)
+ local names=Core.clipboardnames(text);if #names==0 then return 0 end
+ local tree=Core.snapshot(api);local changes={};local index=1
+ for _,row in ipairs(tree.rows)do if(ids and ids[row.id]or not ids and row.selected)and index<=#names then
+  local ok,before=api.GetSetMediaTrackInfo_String(row.ptr,'P_NAME','',false);assert(ok,'トラック名を取得できません。')
+  if before~=names[index]then changes[#changes+1]={ptr=row.ptr,name=names[index]}end
+  index=index+1
+ end end
  if #changes==0 then return 0 end
- local attempted=0
- if not defer_undo then R.Undo_BeginBlock2(s.project) end
- R.PreventUIRefresh(1)
- local success,why=xpcall(function()
-  for i,c in ipairs(changes) do attempted=i;if not Core.set(c.row,key,c.after,false) then error('値を変更できませんでした。',0) end end
- end,debug.traceback)
- local restored=true
- if not success then for i=attempted,1,-1 do local c=changes[i];local worked,result=pcall(Core.set,c.row,key,c.before,true);if not worked or not result then restored=false end end end
- for i=1,attempted do Core.refresh_item(changes[i].row,key) end
- R.PreventUIRefresh(-1);R.UpdateArrange()
- if not defer_undo then R.Undo_EndBlock2(s.project,'BLT MINIMAL INFO PANEL: '..key..(success and '' or ' (failed)'),-1) end
- if not success then return nil,restored and '変更に失敗したため、元の値へ戻しました。' or '復元できない項目があります。REAPERのUndoで確認してください。' end
+ transaction(api,tree.project,'BLT Track Tree: Paste track names',function()
+  for _,change in ipairs(changes)do assert(api.GetSetMediaTrackInfo_String(change.ptr,'P_NAME',change.name,true),'トラック名を変更できません。')end
+ end)
  return #changes
 end
-
-local S=BLT.copy(Core.defaults)
-local A={selection={},items={},project=nil,message='アイテムを選択してください。',bad=false,nextPoll=0,revision=nil,flash={},closing=false}
-local lengthMode=tonumber(R.GetExtState(SECTION,'length_mode')) or -1
-if not Core.valid_length_mode(lengthMode) then lengthMode=-1 end
-S.lengthMode=lengthMode
-local function frame_rate()
- local fps=R.TimeMap_curFrameRate(R.EnumProjects(-1,''))
- return fps
-end
-local function length_text(value,pos)
- if lengthMode==6 then return string.format('%.3f',value*frame_rate()):gsub('0+$',''):gsub('%.$','') end
- if lengthMode==3 then return string.format('%.3f',value) end
- return R.format_timestr_len(value,'',pos or 0,lengthMode)
-end
-local function effective_length_mode()
- local mode=lengthMode
- if mode==-1 and R.GetToggleCommandState then
-  if R.GetToggleCommandState(40369)==1 then return 4 end
-  if R.GetToggleCommandState(40370)==1 or R.GetToggleCommandState(41973)==1 then return 5 end
-  if R.GetToggleCommandState(40365)==1 or R.GetToggleCommandState(40368)==1 then return 3 end
-  return 2
- end
- return mode
-end
-local function length_step(fine)
- local mode=effective_length_mode()
- if mode==4 then return R.parse_timestr_len('1',0,4) end
- if mode==5 or mode==6 then return 1/frame_rate() end
- return fine and .1 or 1
-end
-function Core.adjust_value(key,first,ticks,fine,mode)
- if ticks==0 then return Core.control_value(key,first[key]) end
- local value=first[key]
- if key=='rate' then
-  local unit=fine and .1 or 1
-  local st=12*math.log(value,2)/unit
-  local nextIndex=ticks>0 and math.floor(st+1e-9)+ticks or math.ceil(st-1e-9)+ticks
-  value=2^(nextIndex*unit/12)
- elseif key=='length' and (mode or effective_length_mode())==2 then
-  local project=first.project or R.EnumProjects(-1,'')
-  local _,_,_,beats=R.TimeMap2_timeToBeats(project,first.pos+value)
-  value=R.TimeMap2_beatsToTime(project,beats+ticks*(fine and .1 or 1))-first.pos
- else
-  local step=key=='length' and length_step(fine) or Core.step(key,1,fine)
-  value=Core.control_value(key,value)+ticks*step
- end
- local spec=Core.specs[key]
- return Core.precision(key,clamp(value,spec.lo,spec.hi))
-end
--- Wheel edits are live, but only the settled result becomes an Undo point.
--- Do not leave a project-wide Undo block open across defer calls: other native
--- actions must remain free to create/restore their own history states.
-local WheelUndo={delay=.5}
-function WheelUndo.project_open(project)
- if R.EnumProjects(-1,'')==project then return true end
- local i=0
- while true do
-  local p=R.EnumProjects(i,'');if not p then return false end
-  if p==project then return true end;i=i+1
- end
-end
-function WheelUndo.history_changed(p)
- return R.Undo_CanUndo2(p.project)~=p.undo or R.Undo_CanRedo2(p.project)~=p.redo
-end
-function WheelUndo.selection_matches(p)
- if R.EnumProjects(-1,'')~=p.project or R.CountSelectedMediaItems(p.project)~=#p.before.rows then return false end
- for i=0,#p.before.rows-1 do
-  local item=R.GetSelectedMediaItem(p.project,i);local v=item and p.selected[item]
-  if not v or not Core.valid(p.project,item,'MediaItem*') or R.GetActiveTake(item)~=v.take then return false end
- end
- return true
-end
-function WheelUndo.has_changes(p,rows)
- -- Compare stored native values, not formatted decimals. This also covers the
- -- coupled item length when wheel-editing playback rate.
- for _,v in ipairs(rows or p.before.rows) do
-  if not Core.valid(p.project,v.item,'MediaItem*') then return true end
-  if p.key=='volume' then
-   if R.GetMediaItemInfo_Value(v.item,'D_VOL')~=v.gain then return true end
-  elseif p.key=='length' then
-   if R.GetMediaItemInfo_Value(v.item,'D_LENGTH')~=v.length then return true end
-  else
-   if not Core.valid(p.project,v.take,'MediaItem_Take*') then return true end
-   if p.key=='pitch' and R.GetMediaItemTakeInfo_Value(v.take,'D_PITCH')~=v.pitch then return true end
-   if p.key=='pan' and R.GetMediaItemTakeInfo_Value(v.take,'D_PAN')*100~=v.pan then return true end
-   if p.key=='rate' and (R.GetMediaItemTakeInfo_Value(v.take,'D_PLAYRATE')~=v.rate
-      or R.GetMediaItemInfo_Value(v.item,'D_LENGTH')~=v.length) then return true end
+function Core.move(api,tree,selected,target,mode)
+ local live=Core.snapshot(api)
+ assert(live.project==tree.project and live.signature==tree.signature,'トラック構造が変更されました。もう一度ドラッグしてください。')
+ local result=Core.plan(live,selected,target,mode);local changed=false
+ for i,r in ipairs(result)do if r.id~=live.rows[i].id or r.delta~=live.rows[i].delta then changed=true;break end end
+ if not changed then return end
+ transaction(api,tree.project,'BLT Track Tree: Move tracks',function()
+  for _,r in ipairs(live.rows)do assert(api.SetMediaTrackInfo_Value(r.ptr,'I_FOLDERDEPTH',0))end
+  for i,r in ipairs(result)do
+   if api.GetTrack(tree.project,i-1)~=r.ptr then
+    api.SetOnlyTrackSelected(r.ptr);assert(api.ReorderSelectedTracks(i-1,0),'トラックの移動に失敗しました。')
+   end
   end
- end
- return false
+  for i,r in ipairs(result)do
+   assert(api.GetTrack(tree.project,i-1)==r.ptr,'トラック順序を確認できません。')
+   assert(api.SetMediaTrackInfo_Value(r.ptr,'I_FOLDERDEPTH',r.delta))
+   api.SetTrackSelected(r.ptr,selected[r.id]==true)
+  end
+  api.SetTrackSelected(live.master.ptr,selected[live.master.id]==true)
+ end)
 end
-function WheelUndo.finish()
- local p=WheelUndo.pending;if not p then return false end
- if not WheelUndo.project_open(p.project) or WheelUndo.history_changed(p) then
-  -- A native action has already checkpointed/restored the live state. Never
-  -- append a stale timer point (which would invalidate native Redo).
-  WheelUndo.pending=nil;return false
+function Core.visibility(api,tree,ids,on)
+ local live=Core.snapshot(api);assert(live.project==tree.project,'プロジェクトが切り替わりました。')
+ if not ids then
+  ids={};if live.master.shown~=on or live.master.mixer~=on then ids[live.master.id]=true end
+  for _,r in ipairs(live.rows)do if r.shown~=on or r.mixer~=on then ids[r.id]=true end end
  end
- -- Older REAPER versions may expose identical Undo/Redo descriptions for
- -- adjacent entries. An unexpected change to the values we just wrote also
- -- invalidates the pending group; never checkpoint an externally restored value.
- if not p.applying and p.after and R.GetProjectStateChangeCount(p.project)~=p.revision
-    and WheelUndo.has_changes(p,p.after) then WheelUndo.pending=nil;return false end
- local changed=WheelUndo.has_changes(p)
- if changed then R.Undo_OnStateChangeEx2(p.project,'BLT MINIMAL INFO PANEL: '..p.key,4,-1) end
- WheelUndo.pending=nil
- return changed
+ if not next(ids)then return end
+ transaction(api,tree.project,'BLT Track Tree: Track visibility',function()
+  if ids[live.master.id]then
+   local flags=api.GetMasterTrackVisibility();api.SetMasterTrackVisibility((flags&~3)|(on and 1 or 2))
+  end
+  for _,r in ipairs(live.rows)do if ids[r.id]then
+   assert(api.SetMediaTrackInfo_Value(r.ptr,'B_SHOWINTCP',on and 1 or 0))
+   assert(api.SetMediaTrackInfo_Value(r.ptr,'B_SHOWINMIXER',on and 1 or 0))
+  end end
+ end)
 end
-function WheelUndo.poll(now)
- local p=WheelUndo.pending;if not p then return end
- if not WheelUndo.project_open(p.project) or WheelUndo.history_changed(p) then WheelUndo.pending=nil;return end
- local flags=gfx.getchar(65536)
- local focused=(flags&1)==0 or (flags&2)~=0
- local buttons=(gfx.mouse_cap or 0)&3
- if R.JS_Mouse_GetState then
-  local ok,state=pcall(R.JS_Mouse_GetState,3)
-  if ok and type(state)=='number' then buttons=buttons|(floor(state)&3) end
- end
- if now>=p.deadline or not WheelUndo.selection_matches(p)
-    or R.GetProjectStateChangeCount(p.project)~=p.revision
-    or focused~=p.focused or buttons~=0 then WheelUndo.finish() end
+function Core.pin(api,tree,ids,on)
+ local live=Core.snapshot(api);assert(live.project==tree.project,'プロジェクトが切り替わりました。')
+ local targets={};if ids[live.master.id]and live.master.pinned~=on then targets[1]=live.master end
+ for _,r in ipairs(live.rows)do if ids[r.id]and r.pinned~=on then targets[#targets+1]=r end end
+ if #targets==0 then return end
+ transaction(api,live.project,'BLT Track Tree: '..(on and 'Pin tracks'or'Unpin tracks'),function()
+  for _,r in ipairs(targets)do assert(api.SetMediaTrackInfo_Value(r.ptr,'B_TCPPIN',on and 1 or 0),'トラックの固定状態を変更できません。')end
+ end)
 end
-function WheelUndo.apply(key,ticks,fine,absolute)
- WheelUndo.poll(R.time_precise())
- local p=WheelUndo.pending
- if p and (p.key~=key or p.absolute~=(absolute==true)) then WheelUndo.finish();p=nil end
- local snap=Core.snapshot();local first=snap.rows[1]
- if not first or first[key]==nil then return 0 end
- local value=Core.adjust_value(key,first,ticks,fine)
- local ok,err=Core.check(snap);if not ok then WheelUndo.finish();return nil,err end
- local changes;changes,err=Core.plan(snap,key,value,absolute)
- if not changes then WheelUndo.finish();return nil,err end
- if #changes==0 then
-  if p then p.deadline=R.time_precise()+WheelUndo.delay end
-  return 0
+function Core.reveal(api,tree,id)
+ local live=Core.snapshot(api);assert(live.project==tree.project,'プロジェクトが切り替わりました。')
+ local row=live.by[id];if not row then return end
+ local changes={};local node=row
+ while node do
+  if not node.shown then changes[#changes+1]={row=node,key='B_SHOWINTCP',value=1}end
+  if node~=row and api.GetMediaTrackInfo_Value(node.ptr,'I_FOLDERCOMPACT')~=0 then
+   changes[#changes+1]={row=node,key='I_FOLDERCOMPACT',value=0}
+  end
+  node=node.parent
  end
- if not p then
-  local flags=gfx.getchar(65536)
-  p={project=snap.project,key=key,absolute=absolute==true,before=snap,selected={},
-   undo=R.Undo_CanUndo2(snap.project),redo=R.Undo_CanRedo2(snap.project),
-   focused=(flags&1)==0 or (flags&2)~=0,revision=snap.revision}
-  for _,v in ipairs(snap.rows) do p.selected[v.item]=v end
-  WheelUndo.pending=p
- end
- p.deadline=R.time_precise()+WheelUndo.delay
- p.applying=true
- local n; n,err=Core.apply(snap,key,value,absolute,true)
- if n then p.after=Core.collect(p.project) end
- p.revision=R.GetProjectStateChangeCount(p.project);p.applying=nil
- p.deadline=R.time_precise()+WheelUndo.delay
- if not n then WheelUndo.finish();return nil,err end
- return n
+ if #changes>0 then transaction(api,live.project,'BLT Track Tree: Reveal track',function()
+  for _,change in ipairs(changes)do
+   if change.row.master then api.SetMasterTrackVisibility(api.GetMasterTrackVisibility()|1)
+   else assert(api.SetMediaTrackInfo_Value(change.row.ptr,change.key,change.value))end
+  end
+ end)end
+ api.TrackList_AdjustWindows(false);api.Main_OnCommandEx(40913,0,live.project);api.UpdateArrange()
 end
+function Core.allvisibility(api,on)
+ Core.visibility(api,{project=api.EnumProjects(-1,'')},nil,on)
+end
+local A={rows={},closed={},offset=0,query='',message='',dirty=true,closing=false,down=false}
+local S={query='',tr=true,it=false,fx=false,related=false,link=false}
+local function status(text,bad)A.message=tostring(text);A.bad=bad;A.dirty=true end
+local function extnum(key,default)local v=tonumber(R.GetExtState(SECTION,key));return finite(v)and v or default end
+local W,H=400,694
 
-local IME={};local E=nil;local gesture=nil
-local function status(text,bad) A.message=tostring(text or '');A.bad=bad==true;A.content_dirty=true end
-local function save_settings()
- S.lengthMode=lengthMode;BLT.store(SECTION,'length_mode',tostring(lengthMode),true)
-end
-local function extnum(key,default) local n=tonumber(R.GetExtState(SECTION,key));return finite(n) and n or default end
-local W,H=1230,44
 local C={
   bg={0.018,0.030,0.055}, bg2={0.030,0.090,0.180}, panel={0.040,0.068,0.110}, panel2={0.055,0.125,0.205},
   field={0.018,0.040,0.080}, edge={0.145,0.285,0.445}, edge2={0.360,0.650,0.900},
@@ -1557,11 +1233,7 @@ local os_name=R.GetOS()
 if os_name:match("OSX") or os_name:match("macOS") then fonts={"Hiragino Sans","Helvetica Neue","Menlo"}
 elseif not os_name:match("Win") then fonts={"sans-serif","sans-serif","monospace"} end
 
-local scale,ox,oy,mx,my=1,0,0,-1,-1
-local downLast=false
-local redraw_dirty=true
-local last_raw_mouse_x,last_raw_mouse_y,last_raw_mouse_cap=nil,nil,nil
-local function wake_visuals() redraw_dirty=true end
+local scale,ox,oy=1,0,0
 
 local function sx(x) return ox+x*scale end
 local function sy(y) return oy+y*scale end
@@ -1601,8 +1273,8 @@ local Chameleon={
   signature=nil,poll_at=0,poll_interval=3.0,
 }
 local Chrome={window=nil,mouseDown=false,drag=nil,resize=nil,mouseActive=false,requestClose=false,requestReset=false,
-  chameleonPressed=false,resizeCursors={},resizeCursorMode=nil,titleH=26,windowTitle='BLT MINIMAL INFO PANEL',titleText='M I N I M A L   I N F O   P A N E L',
-  minW=1070,minH=70,mint={0.38,0.88,0.72},ice={0.65,0.895,1.0},red={1.0,0.27,0.34},
+  chameleonPressed=false,resizeCursors={},resizeCursorMode=nil,titleH=26,windowTitle='BLT TRACK TREE',titleText='T R A C K   T R E E',
+  minW=360,minH=300,mint={0.38,0.88,0.72},ice={0.65,0.895,1.0},red={1.0,0.27,0.34},
   isWindows=R.GetOS():match("Win")~=nil,resizeEdge=6,resizeCornerBand=8,resizeCornerSpan=24,resizeTopLeftGuard=30,resizeTopRightGuard=110,
   tooltipHover=nil,tooltipSince=0,tooltipVisible=false,tooltipDelay=.70,
   cursorId={we=32644,ns=32645,nwse=32642,nesw=32643,arrow=32512}}
@@ -1687,15 +1359,12 @@ local function dominant_surface(colors,fallback)
   return ccopy(best.c)
 end
 local function generated_text(bg)
-  -- Text polarity follows the ACTUAL palette background, not a theme text slot.
-  -- This guarantees black-ish text on light themes and white-ish text on dark themes.
   local l=clum(bg)
   if l>=0.56 then
     return {0.070,0.075,0.082},false
   elseif l<=0.44 then
     return {0.935,0.945,0.958},true
   end
-  -- Mid-grey themes: choose the side with the larger luminance separation.
   if l>=0.50 then return {0.075,0.080,0.088},false end
   return {0.935,0.945,0.958},true
 end
@@ -1704,11 +1373,9 @@ local function fit_accent_to_bg(accent,bg,text_is_light)
   local delta=math.abs(clum(out)-clum(bg))
   if delta>=0.17 then return out end
   if text_is_light then
-    -- Dark background: lift the accent without washing it toward full white.
     local target=math.min(.78,clum(bg)+.28)
     return cshift_luma(out,target)
   end
-  -- Light background: darken the accent so controls remain visible.
   local target=math.max(.16,clum(bg)-.30)
   return cshift_luma(out,target)
 end
@@ -1782,7 +1449,6 @@ end
 local function usable_theme_text(map,bg,keys,generated)
   local c=best_contrast_color(map,bg,keys,.28)
   if not c then return ccopy(generated) end
-  -- Never let a theme text slot invert into poor contrast after user transforms.
   if math.abs(clum(c)-clum(bg))<.28 then return ccopy(generated) end
   return c
 end
@@ -1805,7 +1471,6 @@ local function best_theme_accent(map,bg)
       if keys[i]=="genlist_selbg" or keys[i]=="col_seltrack" or keys[i]=="toolbararmed_color" then
         score=score+.12
       end
-      -- Ignore almost-background colors unless no better candidate exists.
       if delta<.035 and sat<.035 then score=score-.35 end
       if score>best_score then best,best_score=c,score end
     end
@@ -1823,9 +1488,6 @@ local function theme_snapshot()
   return map,table.concat(raw,":")
 end
 local function build_chameleon_palette(map)
-  -- Derive a stable BLT palette from REAPER's current theme.
-  -- Missing/unsupported keys are ignored and each semantic role has a safe
-  -- fallback, which is important for custom and older themes.
   local sampled_bg=dominant_surface({
     map.col_main_bg2,
     map.col_main_bg,
@@ -1864,9 +1526,6 @@ local function build_chameleon_palette(map)
   else
     if clum(panel)>=clum(bg)-.022 then panel=cshift_luma(panel,math.max(.06,clum(bg)-.038)) end
   end
-
-  -- Generated polarity remains the safety net; a readable theme text color can
-  -- contribute some hue/temperature without sacrificing contrast.
   local generated,text_is_light=generated_text(bg)
   local theme_text=usable_theme_text(map,bg,{
     "col_main_text2","col_main_text","genlist_fg","col_tcp_text",
@@ -1885,9 +1544,6 @@ local function build_chameleon_palette(map)
   elseif not dark and al>clum(bg)-.22 then
     accent=cshift_luma(accent,math.max(.12,clum(bg)-.28))
   end
-
-  -- Use REAPER's own highlight/shadow roles when available, but only as a
-  -- restrained contribution so an unusual theme cannot destroy readability.
   local theme_hi=theme_edge_role(map,bg,dark,true)
   local theme_sh=theme_edge_role(map,bg,dark,false)
   local edge_base=cmix(bg,textcol,dark and .20 or .18)
@@ -1916,7 +1572,6 @@ local function build_chameleon_palette(map)
   out.focus2=cmix(accent,textcol,dark and .20 or .12)
   out.ink=cmix(bg,accent,dark and .16 or .12)
   out.hover=cmix(accent,textcol,dark and .15 or .10)
-  -- Peak zoom shares the theme accent; the default green is restored when disabled.
   out.green=ccopy(out.accent2)
 
   out.warn=fit_accent_to_bg(C_DEFAULT.warn,bg,text_is_light)
@@ -1942,7 +1597,7 @@ function Chameleon.refresh(force)
   if not force and sig==Chameleon.signature then return false end
   Chameleon.signature=sig
   Chameleon.apply(build_chameleon_palette(map))
-  redraw_dirty=true
+  A.dirty=true
   return true
 end
 
@@ -1956,10 +1611,10 @@ function Chameleon.set(on)
     chameleon_notify("CHAMELEON  REAPERテーマに擬態")
   else
     Chameleon.restore()
-    redraw_dirty=true
+    A.dirty=true
     chameleon_notify("CHAMELEON  オリジナル配色")
   end
-  wake_visuals(R.time_precise())
+  A.dirty=true
 end
 
 function Chameleon.tick(now)
@@ -1967,10 +1622,6 @@ function Chameleon.tick(now)
   Chameleon.poll_at=now+Chameleon.poll_interval
   return Chameleon.refresh(false)
 end
-
--- Icon-only color separation.
--- The main UI palette remains untouched; this only keeps the three overlapping
--- Chameleon circles visually distinct even when a REAPER theme is nearly mono-hued.
 local function rgb_to_hsv(c)
   local r,g,b=c[1],c[2],c[3]
   local mx=math.max(r,g,b)
@@ -2017,11 +1668,7 @@ function Chameleon.compute_icon_colors()
   end
 
   local h,s,v=rgb_to_hsv(C.accent)
-  -- Only the icon gets a saturation floor; the actual BLT theme does not.
   s=math.max(s,.46)
-
-  -- Preserve the theme's base hue, but fan the other two colors away from it.
-  -- +/- 0.19 ~= 68 degrees: clearly different without turning into a rainbow badge.
   local c1=hsv_to_rgb(h,      s,                v)
   local c2=hsv_to_rgb(h+.19, math.max(.42,s*.90), v)
   local c3=hsv_to_rgb(h-.19, math.max(.42,s*.86), v)
@@ -2090,8 +1737,6 @@ local function chrome_resize_hit(mx,my)
   local rightSpan=mx>=w-span
   if (bottomBand and leftSpan) or (leftBand and bottomSpan) then return "lb" end
   if (bottomBand and rightSpan) or (rightBand and bottomSpan) then return "rb" end
-  -- Upper corners are reserved for ordinary title-bar use. In particular the
-  -- close/reset controls must remain clickable right up to the window edge.
   if my<Chrome.titleH then
     if mx<Chrome.resizeTopLeftGuard or mx>=w-Chrome.resizeTopRightGuard then return nil end
   end
@@ -2158,481 +1803,9 @@ end
 
 local function clear_chrome_tooltip() BLT.clearTooltip() end
 
-local fields={{key='name',label='名前'}, {key='length',label='長さ',width=130},
- {key='volume',label='ボリューム',width=93},{key='pitch',label='ピッチ',width=88},{key='rate',label='再生速度',width=180},{key='pan',label='PAN',width=93},
- {key='reverse',label='逆再生',width=36,check=true},{key='mute',label='ミュート',width=36,check=true},{key='lock',label='ロック',width=36,check=true}}
 
--- REAPER's projpeaksgain is a linear display multiplier, not item audio gain.
--- Keep this view control outside item snapshots, presets, and project Undo edits.
-local PeakZoom={key='projpeaksgain',min=0,max=36.1,width=90,gap=18,nextPoll=0}
-function PeakZoom.supported()
- return (type(R.SNM_GetDoubleConfigVarEx)=='function' or type(R.SNM_GetDoubleConfigVar)=='function')
-    and (type(R.SNM_SetDoubleConfigVarEx)=='function' or type(R.SNM_SetDoubleConfigVar)=='function')
-end
-function PeakZoom.read(project)
- if not PeakZoom.supported() then return nil,'ピーク表示の調整にはSWS Extensionが必要です。' end
- if project~=R.EnumProjects(-1,'') then return nil,'プロジェクトが切り替わったため、ピーク表示の操作を終了しました。' end
- local ok,gain
- if type(R.SNM_GetDoubleConfigVarEx)=='function' then ok,gain=pcall(R.SNM_GetDoubleConfigVarEx,project,PeakZoom.key,-1)
- else ok,gain=pcall(R.SNM_GetDoubleConfigVar,PeakZoom.key,-1) end
- if not ok or not finite(gain) or gain<=0 then return nil,'ピーク表示の設定を取得できません。' end
- return gain
-end
-function PeakZoom.write(project,gain)
- if project~=R.EnumProjects(-1,'') then return false end
- local ok,result
- if type(R.SNM_SetDoubleConfigVarEx)=='function' then ok,result=pcall(R.SNM_SetDoubleConfigVarEx,project,PeakZoom.key,gain)
- elseif type(R.SNM_SetDoubleConfigVar)=='function' then ok,result=pcall(R.SNM_SetDoubleConfigVar,PeakZoom.key,gain)
- else return false end
- return ok and result==true
-end
-function PeakZoom.poll(force)
- local now=R.time_precise();local project=R.EnumProjects(-1,'')
- local switched=project~=PeakZoom.project
- if not force and not switched and now<PeakZoom.nextPoll then return end
- PeakZoom.nextPoll=now+.15
- if switched then PeakZoom.drag=nil end
- local gain,problem=PeakZoom.read(project)
- if switched or gain~=PeakZoom.gain or problem~=PeakZoom.problem then
-  PeakZoom.project=project;PeakZoom.gain=gain;PeakZoom.problem=problem;PeakZoom.available=gain~=nil
-  PeakZoom.db=gain and 20*math.log(gain,10) or nil
-  PeakZoom.text=PeakZoom.db and string.format('%.1f dB',abs(PeakZoom.db)<.05 and 0 or PeakZoom.db) or '—'
-  wake_visuals()
- end
-end
-function PeakZoom.set(value,project)
- if not finite(value) then return nil,'数値が不正です。' end
- project=project or R.EnumProjects(-1,'')
- -- Finalize the preceding item-wheel edit before touching a different control.
- WheelUndo.finish()
- local old,err=PeakZoom.read(project);if not old then PeakZoom.poll(true);return nil,err end
- local db=floor(clamp(value,PeakZoom.min,PeakZoom.max)*10+.5)/10
- local gain=10^(db/20)
- if abs(old-gain)<=1e-12*max(1,gain) then PeakZoom.poll(true);return true end
- if not PeakZoom.write(project,gain) then PeakZoom.poll(true);return nil,'ピーク表示の設定を変更できません。' end
- local actual=PeakZoom.read(project)
- if not actual or abs(20*math.log(actual,10)-db)>1e-5 then
-  -- Restore this display preference only; never touch item/take volume or history.
-  PeakZoom.write(project,old);R.UpdateArrange();PeakZoom.poll(true)
-  return nil,'ピーク表示の設定を変更できません。'
- end
- R.UpdateArrange();PeakZoom.poll(true)
- return true
-end
-function PeakZoom.apply(value,project)
- local ok,err=PeakZoom.set(value,project)
- if not ok then PeakZoom.drag=nil;A.flash.peak_zoom=R.time_precise()+.5;status(err,true);wake_visuals() end
- return ok
-end
-function PeakZoom.at(x,y)
- return PeakZoom.x and x>=PeakZoom.x and x<PeakZoom.x+PeakZoom.w and y>=PeakZoom.y and y<=PeakZoom.y+39
-end
-function PeakZoom.fraction()
- return clamp((PeakZoom.db or 0)/PeakZoom.max,0,1)
-end
-function PeakZoom.capture(cap,down)
- local d=PeakZoom.drag;if not d then return false end
- local flags=gfx.getchar(65536);local focused=(flags&1)==0 or (flags&2)~=0
- if d.project~=R.EnumProjects(-1,'') or d.x~=PeakZoom.x or d.w~=PeakZoom.w or d.y~=PeakZoom.y
-    or not focused or BLT.presets.open or E then
-  PeakZoom.drag=nil;wake_visuals();return true
- end
- if not down then PeakZoom.drag=nil;wake_visuals();return true end
- if gfx.mouse_x~=d.mouse then
-  local factor=(cap&8)~=0 and .1 or 1
-  d.value=clamp(d.value+(gfx.mouse_x-d.mouse)*PeakZoom.max/PeakZoom.railW*factor,PeakZoom.min,PeakZoom.max)
-  d.mouse=gfx.mouse_x;PeakZoom.apply(d.value,d.project)
- end
- return true
-end
-function PeakZoom.input(cap,down,right)
- if gesture or not PeakZoom.at(gfx.mouse_x,gfx.mouse_y) then return false end
- local wheel=gfx.mouse_wheel or 0
- if (down and not downLast) or wheel~=0 then
-  WheelUndo.finish();PeakZoom.poll(true)
-  if not PeakZoom.available then status(PeakZoom.problem,true);wake_visuals();return true end
- end
- if down and not downLast then
-  if (cap&4)~=0 then PeakZoom.apply(0,PeakZoom.project)
-  elseif gfx.mouse_y>=PeakZoom.y+24 then
-   local value=clamp(PeakZoom.db,PeakZoom.min,PeakZoom.max)
-   local thumb=PeakZoom.railX+PeakZoom.fraction()*PeakZoom.railW
-   if abs(gfx.mouse_x-thumb)>7 and (cap&8)==0 then
-    value=clamp((gfx.mouse_x-PeakZoom.railX)/PeakZoom.railW,0,1)*PeakZoom.max
-    if not PeakZoom.apply(value,PeakZoom.project) then return true end
-   end
-   PeakZoom.drag={project=PeakZoom.project,mouse=gfx.mouse_x,value=value,x=PeakZoom.x,y=PeakZoom.y,w=PeakZoom.w}
-   wake_visuals()
-  end
- elseif wheel~=0 and not down then
-  if (gfx.getchar(65536)&2)==0 and R.JS_Mouse_GetState then
-   local ok,state=pcall(R.JS_Mouse_GetState,8)
-   if ok and type(state)=='number' then cap=(cap&(~8))|(floor(state)&8) end
-  end
-  local ticks=max(1,floor(abs(wheel)/120+.5))*(wheel>0 and 1 or -1)
-  PeakZoom.apply((PeakZoom.db or 0)+ticks*((cap&8)~=0 and .1 or 1),PeakZoom.project)
- end
- return true
-end
-
-local function poll(force)
- PeakZoom.poll(force)
- local now=R.time_precise();if not force and (now<A.nextPoll or E or gesture) then return end
- A.nextPoll=now+.15
- local project=R.EnumProjects(-1,'');local rev=R.GetProjectStateChangeCount(project)
- local count=R.CountSelectedMediaItems(project);local ids=A.selection
- local changed=force or project~=A.project or rev~=A.revision or count~=#ids
- for i=1,count do
-  local item=R.GetSelectedMediaItem(project,i-1)
-  if ids[i]~=item then changed=true;ids[i]=item end
- end
- for i=#ids,count+1,-1 do ids[i]=nil end
- if changed then
-  A.items,A.count,A.mixed,A.hasMidi=Core.display(project,ids);A.project=project;A.revision=rev
-  A.display={};local first=A.items[1]
-  for _,f in ipairs(fields) do A.display[f.key]=(f.key=='length' and first) and length_text(first.length,first.pos) or Core.format(f.key,first and first[f.key]) end
-  wake_visuals()
- elseif (lengthMode==-1 or lengthMode==6) and A.items[1] then
-  local first=A.items[1];local shown=length_text(first.length,first.pos)
-  if A.display.length~=shown then A.display.length=shown;wake_visuals() end
- end
-end
-local function fail(key,message)
- A.flash[key]=R.time_precise()+.5;status(message,true);wake_visuals()
-end
-local function apply_value(snapshot,key,value,absolute)
- local revision=R.GetProjectStateChangeCount(snapshot.project)
- WheelUndo.finish()
- if snapshot.revision==revision then snapshot.revision=R.GetProjectStateChangeCount(snapshot.project) end
- if key=='reverse' and not Media.ready() then fail(key,'音声がオンラインになるまでお待ちください。');return false end
- local n,err=Core.apply(snapshot,key,value,absolute)
- if not n then fail(key,err);return false end
- poll(true);wake_visuals();return true
-end
-local function finish_edit(cancel,absolute)
- if not E then return true end
- local e=E;E=nil;IME.active=false;IME.ctx=nil;IME.font=nil
- if cancel then wake_visuals();return true end
- local value,err
- if e.key=='length' then
-  if lengthMode==6 then local n=tonumber(e.text);if finite(n) then value=n/frame_rate() end
-  elseif e.text:match('^[%d%s:%.%+%-%[%]%(%)|/]+$') then value=R.parse_timestr_len(e.text,e.snapshot.rows[1].pos,lengthMode) end
-  if not finite(value) or value<Core.specs.length.lo or value>Core.specs.length.hi then value=nil;err='数値が範囲外です。元の値を保持しました。' end
- else value,err=Core.parse(e.key,e.text) end
- if value==nil then fail(e.key,err);return false end
- return apply_value(e.snapshot,e.key,value,absolute==true)
-end
-local Dock={state=0}
-local function open_edit(f)
- WheelUndo.finish()
- if not BLT.requireInput(IME) then return end
- local snapshot=Core.snapshot();local first=snapshot.rows[1]
- if not first or first[f.key]==nil then fail(f.key,'この項目は選択アイテムでは編集できません。');return end
- local value=first[f.key]
- if Core.specs[f.key] then value=Core.control_value(f.key,value) end
- if f.key=='length' then value=length_text(value,first.pos) end
- E={key=f.key,text=tostring(value),snapshot=snapshot,bounds={x=f.x+7,y=((Dock.state&1)~=0 and 15 or 43),w=f.w-14,h=23},absolute=false}
- local ok,err=pcall(function()
-  local I=IME.api;IME.ctx=I.CreateContext('BLT MINIMAL INFO PANEL input');IME.font=I.CreateFont(fonts[f.key=='name' and 1 or 3]);I.Attach(IME.ctx,IME.font)
-  IME.active=true;IME.frames=0;IME.metrics=nil
- end)
- if not ok then finish_edit(true);fail(f.key,tostring(err)) end
- wake_visuals()
-end
-local function rgba(c,a) return (floor(c[1]*255+.5)<<24)|(floor(c[2]*255+.5)<<16)|(floor(c[3]*255+.5)<<8)|floor((a or 1)*255+.5) end
-local function ime_frame()
- if not E or not IME.active then return end
- local I,ctx,b=IME.api,IME.ctx,E.bounds
- local nx,ny=gfx.clienttoscreen(b.x,b.y);local ex,ey=gfx.clienttoscreen(b.x+b.w,b.y+b.h)
- local x,y=I.PointConvertNative(ctx,nx,ny);local x2,y2=I.PointConvertNative(ctx,ex,ey)
- local w,h=abs(x2-x),abs(y2-y);x,y=min(x,x2),min(y,y2)
- local focus=IME.frames==1
- I.SetNextWindowPos(ctx,x,y,I.Cond_Always);I.SetNextWindowSize(ctx,w,h,I.Cond_Always)
- if focus then I.SetNextWindowFocus(ctx) end
- I.PushStyleVar(ctx,I.StyleVar_WindowPadding,0,0);I.PushStyleVar(ctx,I.StyleVar_WindowMinSize,1,1)
- I.PushStyleVar(ctx,I.StyleVar_WindowRounding,0);I.PushStyleVar(ctx,I.StyleVar_WindowBorderSize,0)
- I.PushStyleVar(ctx,I.StyleVar_FramePadding,0,0)
- I.PushStyleColor(ctx,I.Col_WindowBg,rgba(C.field));I.PushStyleColor(ctx,I.Col_FrameBg,rgba(C.field));I.PushStyleColor(ctx,I.Col_Text,rgba((A.count or 0)>1 and C.warn or C.text))
- local unit=w/b.w
- I.PushFont(ctx,IME.font,16*unit)
- local flags=I.WindowFlags_NoDecoration|I.WindowFlags_NoMove|I.WindowFlags_NoSavedSettings|I.WindowFlags_NoDocking
- local shown=I.Begin(ctx,'##item_strip_'..E.key,nil,flags)
- local done,cancel,focused=false,false,true
- if shown then
-  local kind=E.key=='name'and 1 or 3
-  local dpi=I.GetWindowDpiScale(ctx)
-  local metrics=IME.metrics
-  if not metrics or metrics.unit~=unit or metrics.dpi~=dpi then
-   local sample=kind==1 and 'あいうえお漢字ABC012345' or '0123456789.-'
-   font(16,kind,false)
-   local targetWidth,targetHeight=gfx.measurestr(sample)
-   local measured=I.CalcTextSize(ctx,sample)
-   local size=measured>0 and clamp(16*unit*targetWidth*unit/measured*1.04,1,96)or 16*unit*1.04
-   metrics={unit=unit,dpi=dpi,size=size,height=targetHeight*unit};IME.metrics=metrics
-  end
-  I.PopFont(ctx);I.PushFont(ctx,IME.font,metrics.size)
-  local textHeight=I.GetTextLineHeight(ctx)
-  I.SetCursorPos(ctx,0,max(0,(metrics.height-textHeight)/2))
-  I.SetNextItemWidth(ctx,w);if focus then I.SetKeyboardFocusHere(ctx) end
-  local _,text=I.InputText(ctx,'##value',E.text,I.InputTextFlags_AutoSelectAll)
-  E.text=text -- Preserve edits before deactivation (including paste then outside click).
-  local mods=I.GetKeyMods(ctx);E.absolute=(mods&I.Mod_Ctrl)~=0 or ((gfx.mouse_cap or 0)&4)~=0 or (BLT_MAC and (mods&I.Mod_Super)~=0)
-  cancel=I.IsKeyPressed(ctx,I.Key_Escape,false)
-  done=I.IsItemDeactivated(ctx) or I.IsKeyPressed(ctx,I.Key_Enter,false) or I.IsKeyPressed(ctx,I.Key_KeypadEnter,false)
-  focused=I.IsWindowFocused(ctx);I.End(ctx)
- end
- I.PopFont(ctx);I.PopStyleColor(ctx,3);I.PopStyleVar(ctx,5)
- IME.frames=IME.frames+1
- if cancel then finish_edit(true)
- elseif IME.frames>2 and (done or not focused) then local absolute=E.absolute;finish_edit(false,absolute) end
-end
-local layoutWidth=nil
-local function row_y() return (Dock.state&1)~=0 and 0 or 28 end
-local function layout()
- local isDocked=(Dock.state&1)~=0
- local signature=table.concat({gfx.w,isDocked and 1 or 0,Dock.left or 0,Dock.right or 1},':')
- if layoutWidth==signature then return end
- layoutWidth=signature
- local fixed=(#fields-1)*6+PeakZoom.width+PeakZoom.gap
- for _,f in ipairs(fields) do fixed=fixed+(f.width or 0) end
- local left,right=0,gfx.w
- if isDocked then
-  local b=BLT.ui.bar(gfx.w);local origin=b.titleEnd;local width=max(1,b.presetX-origin);local minimum=min(width,fixed+80+24)
-  Dock.areaLeft,Dock.areaWidth=origin,width
-  local l=clamp(Dock.left or 0,0,1)*width;local r=clamp(Dock.right or 1,0,1)*width
-  local span=clamp(r-l,minimum,width)
-  left=origin+clamp((l+r-span)/2,0,width-span);right=left+span
-  Dock.pixelLeft,Dock.pixelRight,Dock.minSpan=left,right,minimum
- end
- local content=max(1,right-left-24)
- local fit=min(1,content/(fixed+80))
- local x=left+12
- for _,f in ipairs(fields) do
-  f.x=x;f.w=f.width and f.width*fit or max(80*fit,content-fixed*fit)
-  x=x+f.w+6*fit
- end
- PeakZoom.x=x+(PeakZoom.gap-6)*fit;PeakZoom.w=PeakZoom.width*fit;PeakZoom.y=row_y()
- PeakZoom.separator=PeakZoom.x-PeakZoom.gap*fit/2
- local inset=min(10,PeakZoom.w*.08)
- PeakZoom.railX=PeakZoom.x+inset;PeakZoom.railW=max(1,PeakZoom.w-inset*2)
-end
-local function bar_at(x,y)
- if (Dock.state&1)==0 or y<0 or y>39 then return nil end
- layout()
- if x>=Dock.pixelLeft and x<Dock.pixelLeft+10 then return 'left' end
- if x>Dock.pixelRight-10 and x<=Dock.pixelRight then return 'right' end
-end
-local function draw_bars()
- if (Dock.state&1)==0 then return end
- local hot=bar_at(gfx.mouse_x,gfx.mouse_y)
- for _,side in ipairs({'left','right'}) do
-  local x=side=='left' and Dock.pixelLeft+3 or Dock.pixelRight-6
-  local active=hot==side or Dock.barDrag and Dock.barDrag.side==side
-  rect(x,3,3,33,active and C.accent2 or C.edge2,active and .95 or .65)
-  if active then rect(x-2,1,7,37,C.accent2,.1) end
- end
-end
-local function bar_input(down)
- if (Dock.state&1)==0 then Dock.barDrag=nil;return false end
- local hit=bar_at(gfx.mouse_x,gfx.mouse_y)
- if hit and not gesture and not PeakZoom.drag then set_resize_cursor('l') end
- if down and not downLast and hit and not gesture and not PeakZoom.drag then
-  if E and not finish_edit(false,E.absolute) then downLast=down;return true end
-  Dock.barDrag={side=hit,x=gfx.mouse_x,left=Dock.pixelLeft,right=Dock.pixelRight,width=Dock.areaWidth,origin=Dock.areaLeft}
- end
- local d=Dock.barDrag
- if not d then return false end
- local width=Dock.areaWidth
- if width~=d.width or Dock.areaLeft~=d.origin then
-  Dock.barDrag=nil;downLast=down;layoutWidth=nil;wake_visuals();return true
- end
- local l,r=d.left,d.right;local dx=gfx.mouse_x-d.x
- if d.side=='left' then l=clamp(l+dx,d.origin,r-Dock.minSpan)
- else r=clamp(r+dx,l+Dock.minSpan,d.origin+width) end
- Dock.left,Dock.right=(l-d.origin)/width,(r-d.origin)/width;layoutWidth=nil;layout();wake_visuals()
- gfx.mouse_wheel=0;downLast=down
- if not down then
-  Dock.barDrag=nil
-  BLT.store(SECTION,'dock_row_left',tostring(Dock.left),true)
-  BLT.store(SECTION,'dock_row_right',tostring(Dock.right),true)
- end
- return true
-end
-local function field_at(x,y)
- local top=row_y()
- if y<top or y>top+39 then return nil end
- for _,f in ipairs(fields) do if f.x and f.w and x>=f.x and x<f.x+f.w then return f end end
-end
-function PeakZoom.draw()
- local x,y,w=PeakZoom.x,PeakZoom.y,PeakZoom.w
- local enabled=PeakZoom.available;local hot=PeakZoom.at(gfx.mouse_x,gfx.mouse_y) and not E and not BLT.blocked() and not Chrome.mouseActive
- local active=hot or PeakZoom.drag~=nil
- local flash=(A.flash.peak_zoom or 0)>R.time_precise()
- local tint=enabled and C.green or C.faint
- line(PeakZoom.separator,y+3,PeakZoom.separator,y+36,C.edge2,.52)
- cut_panel(x,y,w,39,4,C.panel,.65,flash and C.red or tint,flash and .9 or .32)
- if active and enabled then rect(x+1,y+1,w-2,37,C.hover,.09) end
- -- Separate text rows retain the full label without widening this view control.
- local size=w>=87 and 9 or 8;local pad=min(3,w*.02);local textW=max(1,w-pad*2)
- label('ピーク表示ズーム率',x+pad,y+1,textW,12,size,tint,true,0)
- label(PeakZoom.text or '—',x+pad,y+12,textW,12,w>=80 and 10 or 9,enabled and C.text or C.faint,false,6,3,true)
- local rx,rw=PeakZoom.railX,PeakZoom.railW;local cy=y+31
- rect(rx,cy-2,rw,4,C.bg,1)
- local f=PeakZoom.fraction()
- if enabled and f>0 then rect(rx,cy-2,rw*f,4,tint,active and .90 or .68) end
- line(rx,cy+3,rx+rw,cy+3,C.edge,.40)
- for i=0,6 do local tx=rx+rw*i/6;line(tx,cy+5,tx,cy+7,C.edge2,.34) end
- local thumb=rx+rw*f
- if active and enabled then rect(thumb-5,cy-8,10,16,C.hover,.12) end
- rect(thumb-3,cy-6,6,12,enabled and (active and C.accent2 or tint) or C.faint,.95)
- line(thumb,cy-4,thumb,cy+4,C.bg,.55)
-end
-local disabledPanel={.025,.025,.025}
-local disabledInk={.24,.24,.24}
-local function draw()
- scale,ox,oy=1,0,0;mx,my=gfx.mouse_x,gfx.mouse_y;layout()
- rect(0,0,gfx.w,gfx.h,C.bg)
- local top=row_y()
- local first=A.items[1]
- for _,f in ipairs(fields) do
-  local value=first and first[f.key];local disabled=f.key=='reverse' and A.hasMidi
-  local enabled=value~=nil and not disabled
-  local hot=not disabled and mx>=f.x and mx<f.x+f.w and my>=top and my<=top+39
-  local flash=not disabled and (A.flash[f.key] or 0)>R.time_precise()
-  local on=not disabled and f.check and value==true
-  local mixed=not disabled and f.check and A.mixed and A.mixed[f.key]
-  local multi=(A.count or 0)>1
-  cut_panel(f.x,top,f.w,39,4,disabled and disabledPanel or on and C.panel2 or C.field,1,disabled and disabledInk or flash and C.red or (on and C.accent2 or C.edge2),flash and .9 or (on and .65 or hot and .45 or .2))
-  label(f.label,f.x+(f.check and 2 or 7),top+1,f.w-(f.check and 4 or 14),12,(f.check and 7 or 9),disabled and disabledInk or enabled and (multi and C.warn or C.muted) or C.faint,true)
-  if f.check then
-   local cx=f.x+(f.w-16)/2
-   rect(cx,top+18,16,16,disabled and disabledPanel or on and not mixed and C.accent2 or C.bg)
-   color(disabled and disabledInk or mixed and C.warn or (on and C.accent2 or C.edge2));gfx.rect(cx,top+18,16,16,0)
-   local icon=f.key=='reverse' and 'R' or f.key=='mute' and 'M' or 'L'
-   if mixed then rect(cx+3,top+25,10,2,C.warn)
-   elseif on then label(icon,cx,top+18,16,16,12,not enabled and C.faint or C.bg,true,5,2,true) end
-  else
-   local shown=A.display and A.display[f.key] or '—'
-   if f.key=='name' and value=='' then shown=Language.text('（名前なし）') end
-   if gesture and gesture.key==f.key and gesture.moved then shown=f.key=='length' and length_text(gesture.value,first.pos) or Core.format(f.key,gesture.value) end
-   label(shown,f.x+7,top+15,f.w-14,23,16,enabled and (multi and C.warn or C.text) or C.faint,false,0,f.key=='name' and 1 or 3,true)
-  end
- end
- PeakZoom.draw()
- draw_bars()
- BLT.bar()
-end
-local function interact()
- WheelUndo.poll(R.time_precise())
- local cap=gfx.mouse_cap or 0;local down=(cap&1)~=0;local right=(cap&2)~=0
- if PeakZoom.capture(cap,down) then downLast=down;A.rightLast=right;gfx.mouse_wheel=0;return end
- if not BLT.blocked() and not Chrome.mouseActive and bar_input(down) then A.rightLast=right;return end
- if E then downLast=down;A.rightLast=right;gfx.mouse_wheel=0;return end
- if BLT.blocked() or Chrome.mouseActive then
-  if gesture then gesture=nil;wake_visuals() end
-  downLast=down;A.rightLast=right;gfx.mouse_wheel=0;return
- end
- if PeakZoom.input(cap,down,right) then downLast=down;A.rightLast=right;gfx.mouse_wheel=0;return end
- local f=field_at(gfx.mouse_x,gfx.mouse_y)
- if right and not A.rightLast and f and Core.specs[f.key] then
-  if f.key=='length' then
-   local modes={3,0,4,5,6,2,-1};local names=Language.code=='JP' and {'秒','分秒','サンプル','時:分:秒:フレーム','フレーム','小節.拍','ルーラーと連動'} or {'Seconds','Time','Samples','Timecode (h:m:s:f)','Frames','Measures.beats','Follow ruler'}
-   for i,m in ipairs(modes) do if m==lengthMode then names[i]='!'..names[i] end end
-   gfx.x=gfx.mouse_x;gfx.y=gfx.mouse_y
-   local choice=gfx.showmenu(table.concat(names,'|'))
-   if modes[choice] then lengthMode=modes[choice];save_settings();poll(true)
-   end
-   gfx.mouse_wheel=0;A.rightLast=true;downLast=false;return
-  end
- end
- A.rightLast=right
- if down and not downLast and f and not (f.key=='reverse' and A.hasMidi) then
-  local snap=Core.snapshot();local first=snap.rows[1]
-  if first and first[f.key]~=nil then
-   gesture={key=f.key,field=f,snapshot=snap,start=first[f.key],value=first[f.key],x=gfx.mouse_x,y=gfx.mouse_y,moved=false,reset=(cap&4)~=0}
-  elseif f.key=='reverse' and not R.BR_GetMediaSourceProperties then fail(f.key,'逆再生の切り替えにはSWS Extensionが必要です。') end
- elseif down and gesture and Core.specs[gesture.key] then
-  local dy=gesture.y-gfx.mouse_y;local dx=gfx.mouse_x-gesture.x
-  if abs(dx)+abs(dy)>3 then gesture.moved=true end
-  if gesture.moved then
-   local delta=abs(dx)>abs(dy) and dx or dy
-   local ticks=(delta<0 and -1 or 1)*floor(abs(delta)/4)
-   gesture.value=Core.adjust_value(gesture.key,gesture.snapshot.rows[1],ticks,(cap&8)~=0)
-   wake_visuals()
-  end
- elseif not down and downLast and gesture then
-  local g=gesture;gesture=nil
-  if g.moved then apply_value(g.snapshot,g.key,g.value,(cap&4)~=0)
-  elseif f and f.key==g.key then
-   if (g.reset or (cap&4)~=0) and (g.key=='volume' or g.key=='pitch' or g.key=='pan' or g.key=='rate') then
-    apply_value(g.snapshot,g.key,g.key=='rate' and 1 or 0,true)
-   elseif f.check then apply_value(g.snapshot,g.key,not g.start,true) else open_edit(f) end
-  end
- end
- downLast=down
- local wheel=gfx.mouse_wheel or 0
- if wheel~=0 then
-  if (gfx.getchar(65536)&2)==0 and R.JS_Mouse_GetState then
-   local ok,state=pcall(R.JS_Mouse_GetState,8)
-   if ok and type(state)=='number' then cap=(cap&(~8))|(math.floor(state)&8) end
-  end
-  if f and Core.specs[f.key] and not gesture then
-   local ticks=max(1,floor(abs(wheel)/120+.5))*(wheel>0 and 1 or -1)
-   local n,err=WheelUndo.apply(f.key,ticks,(cap&8)~=0,(cap&4)~=0)
-   if not n then fail(f.key,err) else poll(true);wake_visuals() end
-  end
-  gfx.mouse_wheel=0
- end
-end
-local function initial_dock_state()
- local saved=extnum('dock_state',-1)
- if saved>=0 then return math.floor(clamp(saved,0,3841))&0xF01 end
- if R.DockGetPosition then
-  for index=0,15 do
-   if R.DockGetPosition(index)==2 then return index<<8 end
-  end
- end
- return 0
-end
-local function docked() return (Dock.state&1)~=0 end
-local function save_float()
- local hwnd=gfx_window_handle()
- local ok,x,y,r,b=WindowGeometry.JS_Window_GetRect(hwnd)
- if ok then
-  Dock.floating={x=x,y=y,w=r-x,h=A.menuHeight or b-y}
-  for k,v in pairs(Dock.floating) do BLT.store(SECTION,'float_'..k,tostring(v),true) end
-  local _,gx,gy,gw,gh=gfx.dock(-1,0,0,0,0)
-  for k,v in pairs({x=gx,y=gy,w=gw,h=A.menuHeight or gh}) do
-   if finite(v) then BLT.store(SECTION,'window_'..k,tostring(v),true) end
-  end
- end
-end
-local function sync_dock()
- local state=gfx.dock(-1)
- if state~=Dock.state then
-  local was=docked();Dock.state=state;Dock.barDrag=nil;PeakZoom.drag=nil;layoutWidth=nil
-  BLT.store(SECTION,'dock_state',state,true)
-  Chrome.drag=nil;Chrome.resize=nil;Chrome.window=nil;BLT.lastRect=nil
-  if was and not docked() then
-   local f=Dock.floating
-   apply_custom_window_style(f and f.w or W,f and f.h or H+26)
-   if f then BLT.lastRect=nil;BLT.position(gfx_window_handle(),f.x,f.y,f.w,f.h,'','') end
-  end
-  wake_visuals()
- end
- if Dock.w~=gfx.w or Dock.h~=gfx.h then if E then finish_edit(false,E.absolute) end;Dock.w,Dock.h=gfx.w,gfx.h;wake_visuals() end
-end
-local function toggle_dock()
- WheelUndo.finish()
- if E and not finish_edit(false,E.absolute) then return end
- gesture=nil;Dock.barDrag=nil;PeakZoom.drag=nil
- if not docked() then save_float() end
- A.menuHeight=nil;BLT.presets.dismiss();set_resize_cursor(nil)
- gfx.dock(Dock.state~1)
- sync_dock()
-end
 -- Shared BLT app restoration protocol. Each app owns one registry ID.
-local BLTRestore={section='BLT_APP_RESTORE',id='BLT_MINIMAL_INFO_PANEL'}
+local BLTRestore={section='BLT_APP_RESTORE',id='BLT_TRACK_TREE'}
 local BLTRestoreLauncher=[=[
 local r=reaper
 local section='BLT_APP_RESTORE'
@@ -2713,108 +1886,572 @@ function BLTRestore.finish(api,manual)
  BLTRestore.started=false
 end
 
-local function close()
- BLTRestore.finish(R,A.manualClose or Chrome.requestClose)
- WheelUndo.finish()
- if A.closed then return end
- PeakZoom.drag=nil
- finish_edit(true);gesture=nil;Dock.barDrag=nil;BLT.store(SECTION,'dock_row_left',tostring(Dock.left or 0),true);BLT.store(SECTION,'dock_row_right',tostring(Dock.right or 1),true);save_settings();titlebar_cleanup();clear_chrome_tooltip()
- BLT.store(SECTION,'dock_state',gfx.dock(-1),true)
- if not docked() then save_float() end
- A.closed=true;gfx.quit()
-end
-local function prepare_menu()
- WheelUndo.finish()
- if E and not finish_edit(false,E.absolute) then return false end
- if gfx.h<360 then
-  local hwnd=gfx_window_handle();local ok,l,t=WindowGeometry.JS_Window_GetRect(hwnd)
-  if ok then A.menuHeight=gfx.h;BLT.position(hwnd,l,t,gfx.w,360,'','') end
+local Dock={state=extnum('dock_state',0)}
+local IME={}
+local editor=nil
+local widgets={}
+local clipboard_action
+local TOP,ROW=136,27
+local LINK_GOLD={1,.885,.44}
+local OPTION_KEYS={'tr','it','fx','related','link'}
+local function guide(x,y,xx,yy,c,a,depth)
+ if depth%2==1 then line(x,y,xx,yy,c,a);return end
+ local vertical=x==xx;local start=vertical and y or x;local finish=vertical and yy or xx
+ if finish<start then start,finish=finish,start end
+ for pos=start,finish,6 do
+  local ending=min(pos+2,finish)
+  if vertical then line(x,pos,x,ending,c,a)else line(pos,y,ending,y,c,a)end
  end
+end
+local function docked()return(gfx.dock(-1)&1)~=0 end
+local toolbar,clearWidth,clearLanguage,clearDPI
+local function clear_geometry()
+ local dpi=gfx.ext_retina or 1
+ if not clearWidth or clearLanguage~=Language.code or clearDPI~=dpi then
+  font(11,1,false);clearWidth=math.ceil(gfx.measurestr(Language.text('クリア')))+8
+  clearLanguage,clearDPI=Language.code,dpi
+ end
+ return gfx.w-13-clearWidth,clearWidth
+end
+local function toolbar_geometry()
+ local dpi=gfx.ext_retina or 1
+ if not toolbar or toolbar.width~=gfx.w or toolbar.language~=Language.code or toolbar.dpi~=dpi then
+  font(12,1,false);local related=math.ceil(gfx.measurestr(Language.text('親・子も表示')))+40
+  font(12,1,true);local linkW=math.ceil(gfx.measurestr('VIEW LINK'))+22
+  local linkX=132+related+12;local split=linkX+linkW+16+102>gfx.w-12
+  toolbar={width=gfx.w,language=Language.code,dpi=dpi,related=related,linkX=split and 12 or linkX,
+   toolsX=gfx.w-114,toolsY=split and 105 or 75,linkY=split and 104 or 74,linkW=linkW,top=split and 136 or 106}
+ end
+ TOP=toolbar.top
+ return toolbar.related,toolbar.linkX,toolbar.toolsX,toolbar.toolsY,toolbar.linkY,toolbar.linkW
+end
+local function capacity()return max(1,floor((gfx.h-TOP-28)/ROW))end
+local function search_match(row,q)
+ if S.tr and(row.name:lower():find(q,1,true)or row.master and ('マスター'):find(q,1,true))then return true end
+ if not S.it and not S.fx then return false end
+ A.search=A.search or{}
+ local data=A.search[row.id]
+ if not data then
+  if not R.ValidatePtr2(A.tree.project,row.ptr,'MediaTrack*')then return false end
+  data=Core.searchdata(R,row,S.it,S.fx);A.search[row.id]=data
+ end
+ for _,name in ipairs(data.items)do if name:find(q,1,true)then return true end end
+ for _,name in ipairs(data.fx)do if name:find(q,1,true)then return true end end
+ return false
+end
+local function update_view(relink)
+ if not A.tree then return end
+ A.rows=Core.visible(A.tree,A.closed,A.query,search_match,S.related)
+ if relink then A.manualVisibility=nil end
+ if A.manualVisibility then
+  local saved=A.manualVisibility;local same=saved.project==A.tree.project and #saved.ids==#A.rows
+  if same then for i,row in ipairs(A.rows)do if saved.ids[i]~=row.id then same=false;break end end end
+  if not same then A.manualVisibility=nil end
+ end
+ if S.link and not A.manualVisibility then
+  if not A.linkState then A.linkState={project=A.tree.project,tracks={},master=A.tree.master.shown}end
+  Core.linkview(R,A.tree,A.rows,A.linkState);A.revision=R.GetProjectStateChangeCount(A.tree.project);A.masterVisibility=R.GetMasterTrackVisibility()end
+ A.lastChild={};for _,row in ipairs(A.rows)do if row.parent then A.lastChild[row.parent.id]=row.id end end
+ A.offset=clamp(A.offset,0,max(0,#A.rows-capacity()));A.dirty=true
+end
+local function sync_selection(project)
+ local selected=A.selectionScratch or{};for row in pairs(selected)do selected[row]=nil end
+ local changed=false;local count=R.CountSelectedTracks2(project,true)
+ for i=0,count-1 do
+  local ptr=R.GetSelectedTrack2(project,i,true);local row=A.byPointer[ptr]
+  if not row then return false end
+  selected[row]=true
+  if not row.selected then row.selected=true;changed=true end
+ end
+ for row in pairs(A.selectedRows)do if not selected[row]then row.selected=false;changed=true end end
+ A.selectionScratch=A.selectedRows;A.selectedRows=selected;A.selectionCount=count
+ if changed then A.dirty=true end
  return true
 end
-local function restore_menu_size()
- if A.menuHeight and not BLT.presets.open and not BLT.presets.swallow then
-  local h=A.menuHeight;A.menuHeight=nil
-  local hwnd=gfx_window_handle();local ok,l,t=WindowGeometry.JS_Window_GetRect(hwnd)
-  if ok then BLT.position(hwnd,l,t,gfx.w,h,'','') end
+local function refresh(force)
+ local now=R.time_precise()
+ if not force and now<(A.nextCheck or 0)then return end
+ A.nextCheck=now+.025
+ local project=R.EnumProjects(-1,'')
+ if A.linkState and A.linkState.project~=project then Core.restoreview(R,A.linkState);A.linkState=nil end
+ local revision=R.GetProjectStateChangeCount(project)
+ if not force and A.tree and A.tree.project==project and A.revision==revision
+  and R.CountTracks(project)==#A.tree.rows and R.GetMasterTrackVisibility()==A.masterVisibility then
+  if sync_selection(project)then return end
  end
-end
-local function tooltip(x,y)
- if bar_at(x,y) then return Language.code=='JP' and 'ドラッグ：項目の左右端を調整' or 'Drag to adjust the row edges' end
- if E then return nil end
- if PeakZoom.at(x,y) then return nil end
- local f=field_at(x,y);if not f then return nil end
- if f.key=='reverse' and A.hasMidi then return Language.code=='JP' and 'MIDIアイテムを含む選択では逆再生を変更できません。' or 'Reverse is unavailable when the selection includes MIDI.' end
- if f.check then return Language.code=='JP' and 'クリックで全選択を同じON / OFFに設定' or 'Click to set all selected items ON / OFF' end
- if f.key=='rate' then return Language.code=='JP' and '再生速度（半音換算） · ホイール: 次の1 st位置（Shift: 0.1 st） · Ctrl+クリック: 1.0\n半音換算は速度比の参考値です。ピッチ維持設定は保持し、アイテムの長さは速度に追従します。' or 'Playback rate · Wheel: next semitone (Shift: 0.1 st) · Ctrl (Cmd)+click: 1.0\nPitch preservation stays unchanged; item length follows the rate.' end
- if f.key=='length' then return Language.code=='JP' and '右クリック: 尺度を選択 · 入力も選択した尺度を使用' or 'Right-click: units · Input uses selected units' end
- if f.key=='name' then
-  local name=A.items[1] and A.items[1].name or ''
-  return name..'\n'..(Language.code=='JP' and 'クリックして入力 · 複数選択は同名に変更' or 'Click to type · Rename all selected takes')
+ local searchChanged=A.revision~=revision or not A.tree or A.tree.project~=project
+ if searchChanged then A.search=nil end
+ A.revision=revision
+ local tree=Core.snapshot(R)
+ if not A.tree or A.tree.project~=tree.project then A.closed={};A.offset=0;A.anchor=nil;A.drag=nil end
+ local old=A.tree;local replaced=false
+ local changed=not old or old.project~=tree.project or old.signature~=tree.signature
+ local function compare(row,previous)
+  if not previous then changed=true;return end
+  if row.ptr~=previous.ptr then replaced=true end
+  if row.name~=previous.name or row.selected~=previous.selected or row.shown~=previous.shown
+   or row.mixer~=previous.mixer or row.color~=previous.color or row.pinned~=previous.pinned then changed=true end
  end
- return Language.code=='JP' and ('入力 / ホイール / ドラッグ · Shift: 1/10 · Ctrl: 絶対値 · Ctrl+クリック: 初期値')
-  or ('Type / Wheel / Drag · Shift: 1/10 · Ctrl (Cmd): absolute · Ctrl (Cmd)+click: reset')
+ if old then
+  compare(tree.master,old.master)
+  for _,row in ipairs(tree.rows)do compare(row,old.by[row.id])end
+ end
+ if replaced or(old and old.signature~=tree.signature)then A.drag=nil;A.lastClick=nil end
+ A.tree=tree;A.byPointer={};A.selectedRows={};A.selectionScratch={};A.selectionCount=0
+ A.masterVisibility=R.GetMasterTrackVisibility()
+ local function register(row)A.byPointer[row.ptr]=row;if row.selected then A.selectedRows[row]=true;A.selectionCount=A.selectionCount+1 end end
+ register(tree.master);for _,row in ipairs(tree.rows)do register(row)end
+ if replaced then A.search=nil end
+ if force or replaced or changed or(searchChanged and(S.it or S.fx)and A.query~='')then update_view()
+ else for i,row in ipairs(A.rows)do A.rows[i]=tree.by[row.id]end end
 end
-Media.state=A;Media.onchange=function() wake_visuals() end
+local function selected_ids()
+ local ids={};for row in pairs(A.selectedRows)do ids[row.id]=true end;return ids
+end
+local function select_row(row,ctrl,shift)
+ local project=A.tree.project;local id=row.id;refresh(true)
+ if project~=A.tree.project then return end
+ row=A.tree.by[id];if not row then return end
+ local ids=ctrl and selected_ids()or{}
+ if shift and A.anchor then
+  local a,b;for i,r in ipairs(A.rows)do if r.id==A.anchor then a=i end;if r.id==row.id then b=i end end
+  if a and b then for i=min(a,b),max(a,b)do ids[A.rows[i].id]=true end else ids[row.id]=true end
+ elseif ctrl then ids[row.id]=not ids[row.id]else ids[row.id]=true end
+ for _,r in ipairs(A.tree.rows)do if r.selected~=(ids[r.id]==true)then R.SetTrackSelected(r.ptr,ids[r.id]==true)end end
+ local master=A.tree.master;if master.selected~=(ids[master.id]==true)then R.SetTrackSelected(master.ptr,ids[master.id]==true)end
+ if not shift then A.anchor=row.id end
+ R.UpdateArrange();A.revision=R.GetProjectStateChangeCount(A.tree.project);sync_selection(A.tree.project)
+end
+local function set_option(key,value)
+ if key=='related'and S.related~=value then A.relatedMotion={from=A.relatedPosition or(S.related and 1 or 0),at=R.time_precise()}end
+ if key=='link'and not value and A.linkState then Core.restoreview(R,A.linkState);A.linkState=nil end
+ S[key]=value;A.offset=0
+ if key=='it'or key=='fx'then A.search=nil end
+ R.SetExtState(SECTION,key,value and '1'or'0',true)
+ if key=='link'and not value then refresh(true)else update_view(true)end
+end
+local function all_visibility(on)
+ if S.link then
+  local ids={};for i,row in ipairs(A.rows)do ids[i]=row.id end
+  A.manualVisibility={project=A.tree.project,ids=ids}
+ end
+ Core.allvisibility(R,on);refresh(true)
+end
+local function query(value)
+ A.query=value;S.query=value;A.offset=0;update_view(true);R.SetExtState(SECTION,'query',value,true)
+end
+local function stop_edit(cancel)
+ if not editor then return end
+ if cancel then query(editor.original)end
+ editor=nil;IME.ctx=nil;IME.font=nil;A.dirty=true
+end
+local function start_edit()
+ if not BLT.requireInput(IME)then return end
+ local I=IME.api;IME.ctx=I.CreateContext('BLT Track Tree filter');IME.font=I.CreateFont(fonts[1]);I.Attach(IME.ctx,IME.font)
+ editor={original=A.query,frames=0,fontSize=nil};A.dirty=true
+end
+local function rgba(c)return(floor(c[1]*255)<<24)|(floor(c[2]*255)<<16)|(floor(c[3]*255)<<8)|255 end
+local function edit_frame()
+ if not editor then return end
+ local I,ctx=IME.api,IME.ctx
+ local clearX=clear_geometry()
+ local nx,ny=gfx.clienttoscreen(13,39);local ex,ey=gfx.clienttoscreen(clearX-2,64)
+ local x,y=I.PointConvertNative(ctx,nx,ny);local xx,yy=I.PointConvertNative(ctx,ex,ey)
+ local unit=abs(xx-x)/(clearX-15)
+ I.SetNextWindowPos(ctx,x,y,I.Cond_Always);I.SetNextWindowSize(ctx,abs(xx-x),abs(yy-y),I.Cond_Always)
+ if editor.frames==1 then I.SetNextWindowFocus(ctx)end
+ I.PushStyleVar(ctx,I.StyleVar_WindowPadding,0,0);I.PushStyleVar(ctx,I.StyleVar_WindowMinSize,1,1)
+ I.PushStyleVar(ctx,I.StyleVar_WindowBorderSize,0);I.PushStyleVar(ctx,I.StyleVar_FramePadding,6*unit,5*unit)
+ I.PushStyleColor(ctx,I.Col_WindowBg,rgba(C.field));I.PushStyleColor(ctx,I.Col_FrameBg,rgba(C.field));I.PushStyleColor(ctx,I.Col_Text,rgba(C.text))
+ I.PushFont(ctx,IME.font,14*unit)
+ local shown=I.Begin(ctx,'##filter',nil,I.WindowFlags_NoDecoration|I.WindowFlags_NoMove|I.WindowFlags_NoSavedSettings|I.WindowFlags_NoDocking)
+ local done,cancel=false,false
+ if shown then
+  if not editor.fontSize or editor.unit~=unit then
+   local sample='あいうえお漢字ABC012345';font(14,1,false)
+   local target=gfx.measurestr(sample)*unit;local measured=I.CalcTextSize(ctx,sample)
+   editor.fontSize=measured>0 and clamp(14*unit*target/measured*1.04,1,96)or 14*unit;editor.unit=unit
+  end
+  I.PopFont(ctx);I.PushFont(ctx,IME.font,editor.fontSize)
+  I.SetNextItemWidth(ctx,abs(xx-x));if editor.frames==1 then I.SetKeyboardFocusHere(ctx)end
+  local changed,text=I.InputText(ctx,'##text',A.query,I.InputTextFlags_AutoSelectAll)
+  if changed then query(text)end
+  cancel=I.IsKeyPressed(ctx,I.Key_Escape,false)
+  done=I.IsKeyPressed(ctx,I.Key_Enter,false)or(editor.frames>2 and not I.IsWindowFocused(ctx))
+  I.End(ctx)
+ end
+ I.PopFont(ctx);I.PopStyleColor(ctx,3);I.PopStyleVar(ctx,4)
+ editor.frames=editor.frames+1
+ if cancel or done then stop_edit(cancel)end
+end
+local function button(id,text,x,y,w,fn,icon)
+ local hot=gfx.mouse_x>=x and gfx.mouse_x<x+w and gfx.mouse_y>=y and gfx.mouse_y<y+22
+ local ink=hot and C.accent2 or C.muted
+ if icon then
+  local cx,cy=x+w/2,y+11
+  if icon=='show'or icon=='hide'then
+   line(cx-6,cy,cx,cy-5,ink);line(cx,cy-5,cx+6,cy,ink)
+   line(cx+6,cy,cx,cy+5,ink);line(cx,cy+5,cx-6,cy,ink)
+   color(C.accent2);gfx.circle(cx,cy,2,1,1)
+   if icon=='hide'then line(cx-6,cy+6,cx+6,cy-6,C.warn)end
+  else
+   color(ink);gfx.rect(cx-5,cy-5,10,10,0)
+   line(cx-2,cy-6,cx+6,cy-6,ink);line(cx+6,cy-6,cx+6,cy+2,ink)
+   line(cx-3,cy,cx+3,cy,C.accent2)
+   if icon=='open'then line(cx,cy-3,cx,cy+3,C.accent2)end
+  end
+ else label(text,x+4,y+4,w-8,20,12,ink,false,1)end
+ widgets[#widgets+1]={id=id,x=x,y=y,w=w,h=22,fn=fn,tip=text}
+end
+local function filter_button(key,text,x,w,tip,y)
+ y=y or 74
+ local on=S[key];local hot=gfx.mouse_x>=x and gfx.mouse_x<x+w and gfx.mouse_y>=y and gfx.mouse_y<y+24
+ local hue=key=='link'and LINK_GOLD or C.accent2
+ if key=='related'then
+  local position=on and 1 or 0
+  if A.relatedMotion then
+   local t=clamp((R.time_precise()-A.relatedMotion.at)/.16,0,1)
+   position=A.relatedMotion.from+(position-A.relatedMotion.from)*(t*t*(3-2*t))
+   if t<1 then A.dirty=true else A.relatedMotion=nil end
+  end
+  A.relatedPosition=position
+  local cx,cy=sx(x+11+12*position),sy(y+12)
+  line(x+7,y+12,x+27,y+12,C.edge2,.45)
+  color(C.faint,.8);gfx.circle(cx,cy,4.2*scale,1,1)
+  if position>.001 then
+   color(C.accent,.06*position);gfx.circle(cx,cy,7*scale,1,1)
+   color(C.accent2,.94*position);gfx.circle(cx,cy,4.2*scale,1,1)
+  end
+ elseif key=='link'then
+  cut_panel(x,y,w,24,3,on and C.panel2 or C.field,1,on and hue or C.edge,on and .8 or .6)
+  if on then
+   for i=2,1,-1 do color(hue,.045*(3-i));gfx.rect(x-i,y-i,w+2*i,24+2*i,0)end
+   rect(x+2,y+2,w-4,20,hue,.09)
+  elseif hot then rect(x+2,y+2,w-4,20,C.panel2,.7)end
+  color(on and hue or C.faint);gfx.circle(x+8,y+12,2,1,1)
+  if on then color(hue,.13);gfx.circle(x+8,y+12,5,1,1)end
+ else
+  rect(x,y,w,24,on and C.panel2 or(hot and C.panel or C.field))
+  if on then
+   rect(x+1,y+1,w-2,22,hue,.09)
+   line(x+7,y+23,x+w-7,y+23,hue,.9)
+   line(x+7,y+22,x+w-7,y+22,hue,.18)
+  end
+ end
+ font(12,1,key~='related');local tw,th=BLT.metricsFor(text)
+ color(on and hue or C.muted)
+ gfx.x=key=='related'and x+36 or key=='link'and x+15 or x+(w-tw)/2
+ gfx.y=y+(24-th)/2;gfx.drawstr(text)
+ widgets[#widgets+1]={id=key,x=x,y=y,w=w,h=24,tip=tip,fn=function()set_option(key,not S[key])end}
+end
+local function row_at(y)
+ local index=A.offset+floor((y-TOP)/ROW)+1
+ if y<TOP or y>=TOP+capacity()*ROW then return nil end
+ return A.rows[index],index
+end
+local function drop_at(y)
+ local row=row_at(y)
+ if not row then if y>=TOP and y<TOP+capacity()*ROW then return nil,'end' end;return nil,nil end
+ if row.master then return nil,nil end
+ local t=((y-TOP)%ROW)/ROW
+ return row.id,(#row.children>0 and t>.3 and t<.7)and'inside'or(t<.5 and'before'or'after')
+end
+local function draw()
+ toolbar_geometry();refresh(false);widgets={};rect(0,0,gfx.w,gfx.h,C.bg)
+ local clearX,clearW=clear_geometry()
+ cut_panel(12,38,gfx.w-24,27,4,C.field,1,C.edge2,.6)
+ if not editor then label(A.query~=''and A.query or Language.text('検索…'),19,44,clearX-24,21,14,A.query~=''and C.text or C.faint,false,0,1,true)end
+ local hot=gfx.mouse_x>=clearX and gfx.mouse_x<clearX+clearW and gfx.mouse_y>=39 and gfx.mouse_y<64
+ if hot then rect(clearX,39,clearW,25,C.panel2,.8)end
+ label('クリア',clearX+4,45,clearW-8,18,11,hot and C.text or C.muted,false,0)
+ widgets[#widgets+1]={id='clear',x=clearX,y=39,w=clearW,h=25,tip='フィルタークリア',fn=function()stop_edit(false);query('');A.closed={};update_view(true)end}
+ rect(11,73,103,26,C.edge,.6)
+ filter_button('tr','Tr',12,32,'トラック名を検索')
+ filter_button('it','It',46,32,'アイテムのテイク名を検索')
+ filter_button('fx','Fx',80,32,'トラックFX名を検索')
+ local relatedW,linkX,toolsX,toolsY,linkY,linkW=toolbar_geometry()
+ line(123,79,123,93,C.edge,.5)
+ filter_button('related',Language.text('親・子も表示'),132,relatedW,'一致したトラックの親・子も表示')
+ filter_button('link','VIEW LINK',linkX,linkW,'検索結果をアレンジの表示に連動',linkY)
+ button('open','全オープン',toolsX+52,toolsY,24,function()A.closed={};update_view(true)end,'open')
+ button('collapse','全クローズ',toolsX+78,toolsY,24,function()for _,r in ipairs(A.tree.rows)do if #r.children>0 then A.closed[r.id]=true end end;update_view(true)end,'collapse')
+ button('showAll','全トラックを表示',toolsX,toolsY,24,function()all_visibility(true)end,'show')
+ button('hideAll','全トラックを非表示',toolsX+26,toolsY,24,function()all_visibility(false)end,'hide')
+ local maxIndent=max(0,gfx.w-160)
+ local flat=A.query:match('%S')and not S.related
+ for slot=0,capacity()-1 do
+  local row=A.rows[A.offset+slot+1];if not row then break end
+  local y=TOP+slot*ROW;local selected=row.selected
+  rect(10,y,gfx.w-30,ROW,selected and C.panel2 or(slot%2==0 and C.panel or C.bg),selected and 1 or .7)
+  if selected then rect(10,y,2,ROW,C.accent2)end
+  local shown=row.shown and row.mixer
+  rect(18,y+8,11,11,shown and C.accent2 or C.bg)
+  color(C.edge2,.8);gfx.rect(18,y+8,11,11,0)
+  if row.shown~=row.mixer then line(20,y+13,27,y+13,C.warn,1)end
+  local x=40+(flat and 0 or min(row.depth*5,maxIndent))
+  local cy=y+13;local branch=row;local parent=not flat and row.parent or nil
+  while parent do
+   local rail=46+min(parent.depth*5,maxIndent)
+   local last=A.lastChild[parent.id]==branch.id
+   if branch==row then
+    guide(rail,y,rail,last and cy or y+ROW,C.edge2,.62,parent.depth)
+    guide(rail,cy,x+(#row.children>0 and 1 or 14),cy,C.edge2,.62,parent.depth)
+   elseif not last then guide(rail,y,rail,y+ROW,C.edge2,.38,parent.depth)end
+   branch=parent;parent=parent.parent
+  end
+  if #row.children>0 then
+   local expanded=A.query~=''or not A.closed[row.id]
+   if expanded and not flat and A.lastChild[row.id]then guide(x+6,cy+5,x+6,y+ROW,C.edge2,.62,row.depth)end
+   color(C.accent2)
+   if expanded then gfx.triangle(x+2,cy-3,x+10,cy-3,x+6,cy+3)
+   else gfx.triangle(x+3,cy-4,x+3,cy+4,x+9,cy)end
+  end
+  if row.color~=0 then local r,g,b=R.ColorFromNative(row.color);rect(x+17,y+6,3,15,{r/255,g/255,b/255})end
+  if row.master then label('M',x+2,y+6,15,18,11,C.muted,true,0,1,true)end
+  if row.pinned then
+   local px=gfx.w-33
+   rect(px-6,y+5,13,12,C.focus,.07);rect(px-4,y+6,9,9,C.focus,.14)
+   rect(px-2,y+13,5,9,C.focus,.12)
+   line(px-3,y+7,px+3,y+7,C.focus);line(px-2,y+8,px-2,y+12,C.focus);line(px+2,y+8,px+2,y+12,C.focus)
+   line(px-4,y+13,px+4,y+13,C.focus);line(px,y+14,px,y+20,C.focus)
+   line(px-1,y+8,px+1,y+8,C.focus2,.85)
+  end
+  label(row.name~=''and row.name or '('..(row.index+1)..')',x+25,y+5,gfx.w-x-53-((row.pinned)and 17 or 0),22,14,row.shown and C.text or C.faint,row.master,0,1,true)
+ end
+ if #A.rows==0 then
+  if A.query:match('%S')and not(S.tr or S.it or S.fx)then
+   label('最低1種、',20,TOP+20,gfx.w-40,22,13,C.warn)
+   label('検索対象を選んでください',20,TOP+42,gfx.w-40,22,13,C.warn)
+  else label('対象のトラックがありません。',20,TOP+20,gfx.w-40,30,13,C.muted)end
+ end
+ local total=#A.rows;local trackH=capacity()*ROW;local maxOff=max(0,total-capacity())
+ rect(gfx.w-14,TOP,5,trackH,C.field)
+ local thumb=max(20,trackH*min(1,capacity()/max(1,total)))
+ rect(gfx.w-14,TOP+(maxOff>0 and(A.offset/maxOff)*(trackH-thumb)or 0),5,thumb,{.40,.42,.45},.75)
+ if A.drag and A.drag.moved then
+  local id,mode=drop_at(gfx.mouse_y);local row,index=row_at(gfx.mouse_y)
+  if mode and row then
+   local yy=TOP+(index-A.offset-1)*ROW
+   if mode=='inside'then color(C.accent2);gfx.rect(36,yy,gfx.w-58,ROW,0)
+   else
+    if mode=='after'then
+     local last=index;while A.rows[last+1]and A.rows[last+1].depth>row.depth do last=last+1 end
+     yy=TOP+(last-A.offset)*ROW
+    end
+    yy=clamp(yy,TOP,TOP+capacity()*ROW)
+    line(36,yy,gfx.w-22,yy,C.accent2)
+   end
+  elseif mode=='end'then local yy=TOP+min(#A.rows-A.offset,capacity())*ROW;line(36,yy,gfx.w-22,yy,C.accent2)end
+ end
+ line(12,gfx.h-24,gfx.w-12,gfx.h-24,C.edge,.7)
+ local count=A.selectionCount
+ local message=A.message~=''and A.message or string.format(Language.text('%dトラック / 選択 %d'),#A.rows,count)
+ label(message,12,gfx.h-19,gfx.w-24,18,11,A.bad and C.red or C.muted)
+ BLT.bar();gfx.update()
+end
+local function toggle_dock()
+ stop_edit(false)
+ if not docked()then local _,x,y,w,h=gfx.dock(-1,0,0,0,0);A.floating={x,y,w,h}end
+ Dock.state=gfx.dock(-1)~1;gfx.dock(Dock.state);Chrome.window=nil;BLT.lastRect=nil
+ R.SetExtState(SECTION,'dock_state',tostring(Dock.state),true)
+ if not docked()then
+  local f=A.floating;apply_custom_window_style(f and f[3]or W,f and f[4]or H+26)
+  if f then BLT.position(gfx_window_handle(),f[1],f[2],f[3],f[4],'','')end
+ end
+ A.dirty=true
+end
+local function input()
+ refresh(false)
+ local x,y,cap=gfx.mouse_x,gfx.mouse_y,gfx.mouse_cap
+ local right=(cap&2)~=0;local rightPressed=right and not A.rightDown;A.rightDown=right
+ local down=(cap&1)~=0;local ctrl=(cap&4)~=0 or(BLT_MAC and(cap&32)~=0);local shift=(cap&8)~=0
+ local clearX,clearW=clear_geometry()
+ if editor and down and not A.down and x>=clearX and x<clearX+clearW and y>=39 and y<64 then
+  stop_edit(false);query('');A.closed={};update_view(true);A.down=down;return
+ end
+ if BLT.blocked()or editor then A.drag=nil;A.down=down;return end
+ if rightPressed and not down then
+  A.drag=nil;A.lastClick=nil;A.scrollDrag=nil;refresh(true)
+  local row=row_at(y)
+  if row and x>=10 and x<gfx.w-20 then
+   local tree=A.tree;local ids=row.selected and selected_ids()or{[row.id]=true}
+   local on=not row.pinned
+   gfx.x,gfx.y=x,y
+   local caption=Language.text(on and 'トラックを固定' or 'トラックの固定を解除')
+   local canPaste=false;for id,on in pairs(ids)do if on and id~=tree.master.id then canPaste=true;break end end
+   caption=caption..'|'..Language.text('トラック名をコピー')..'|'..(canPaste and ''or'#')..Language.text('トラック名をペースト')
+   local choice=gfx.showmenu(caption)
+   if R.EnumProjects(-1,'')==tree.project then
+    if choice==1 then Core.pin(R,tree,ids,on)
+    elseif choice==2 then clipboard_action(true,ids)
+    elseif choice==3 and canPaste then clipboard_action(false,ids)end
+   end
+   refresh(true);A.dirty=true
+  end
+ end
+ if down and not A.down then
+  refresh(true)
+  local previousClick=A.lastClick;A.lastClick=nil
+  A.message='';A.bad=false
+  if x>=12 and x<clearX and y>=38 and y<65 then start_edit()
+  elseif x>=gfx.w-20 and y>=TOP and y<TOP+capacity()*ROW then A.scrollDrag=true
+  else
+   local hit=false
+   for _,w in ipairs(widgets)do if x>=w.x and x<w.x+w.w and y>=w.y and y<w.y+w.h then w.fn();hit=true;break end end
+   if not hit then local row=row_at(y)
+    if row and x>=10 and x<gfx.w-20 then
+     if x<35 then if S.link then set_option('link',false)end;local ids=row.selected and selected_ids()or{[row.id]=true};Core.visibility(R,A.tree,ids,not(row.shown and row.mixer));refresh(true)
+     elseif #row.children>0 and x<40+((A.query:match('%S')and not S.related)and 0 or min(row.depth*5,max(0,gfx.w-160)))+18 then A.closed[row.id]=not A.closed[row.id];update_view(true)
+     else
+      local now=R.time_precise()
+      local double=not ctrl and not shift and previousClick and previousClick.id==row.id and previousClick.project==A.tree.project
+       and now-previousClick.time<=.35 and abs(x-previousClick.x)<=5 and abs(y-previousClick.y)<=5
+      if double then
+       select_row(row,false,false);Core.reveal(R,A.tree,row.id);refresh(true);A.drag=nil
+      else
+       if not ctrl and not shift then A.lastClick={id=row.id,project=A.tree.project,time=now,x=x,y=y}end
+      local was=row.selected
+      if ctrl or shift or not was then select_row(row,ctrl,shift)end
+      if row.master then
+       if was and not ctrl and not shift then select_row(row,false,false)end
+      else A.drag={id=row.id,x=x,y=y,tree=A.tree,ids=selected_ids(),collapse=was and not ctrl and not shift}end
+      end
+     end
+    end
+   end
+  end
+ end
+ if down and A.scrollDrag then A.offset=floor(clamp((y-TOP)/(capacity()*ROW),0,1)*max(0,#A.rows-capacity())+.5);A.dirty=true end
+ if down and A.drag then
+  if abs(x-A.drag.x)+abs(y-A.drag.y)>5 then A.drag.moved=true;A.lastClick=nil end
+  if A.drag.moved then
+   local now=R.time_precise()
+   if now>=(A.autoScroll or 0)then
+    local delta=y<TOP+15 and -1 or(y>TOP+capacity()*ROW-15 and 1 or 0)
+    A.offset=clamp(A.offset+delta,0,max(0,#A.rows-capacity()));A.autoScroll=now+.08
+   end
+   A.dirty=true
+  end
+ end
+ if not down and A.down then
+  A.scrollDrag=nil
+  local d=A.drag;A.drag=nil
+  if d then
+   if d.moved then
+    local target,mode=drop_at(y)
+    if mode and x>=10 and x<gfx.w-20 then Core.move(R,d.tree,d.ids,target,mode);refresh(true)end
+   elseif d.collapse then local row=A.tree.by[d.id];if row then select_row(row,false,false)end end
+  end
+ end
+ if gfx.mouse_wheel~=0 then A.offset=clamp(A.offset+(gfx.mouse_wheel>0 and -3 or 3),0,max(0,#A.rows-capacity()));gfx.mouse_wheel=0;A.dirty=true end
+ A.down=down
+end
+LanguageCatalog.en['自動復元の登録に失敗しました。']='Could not register automatic app restoration.'
+LanguageCatalog.en['親・子も表示']='Parents / Children'
+LanguageCatalog.en['一致したトラックの親・子も表示']='Include matching tracks’ parents and children'
+LanguageCatalog.en['検索…']='Search…'
+LanguageCatalog.en['トラック名を検索']='Search track names'
+LanguageCatalog.en['アイテムのテイク名を検索']='Search item take names'
+LanguageCatalog.en['トラックFX名を検索']='Search track FX names'
+LanguageCatalog.en['検索結果をアレンジの表示に連動']='Link tree results to arrange visibility'
+LanguageCatalog.en['コピー・貼り付けにはSWS Extensionが必要です。']='Copy and paste require SWS Extension.'
+LanguageCatalog.en['%dトラック名をコピーしました。']='Copied %d track names.'
+LanguageCatalog.en['%dトラック名を変更しました。']='Renamed %d tracks.'
+LanguageCatalog.en['全オープン']='Expand all';LanguageCatalog.en['全クローズ']='Collapse all'
+LanguageCatalog.en['全トラックを表示']='Show all tracks'
+LanguageCatalog.en['全トラックを非表示']='Hide all tracks'
+LanguageCatalog.en['クリア']='Clear'
+LanguageCatalog.en['アレンジ上部に固定']='Pinned to top of arrange view'
+LanguageCatalog.en['トラック名をコピー']='Copy track names'
+LanguageCatalog.en['トラック名をペースト']='Paste track names'
+LanguageCatalog.en['トラックを固定']='Pin tracks'
+LanguageCatalog.en['トラックの固定を解除']='Unpin tracks'
+LanguageCatalog.en['フィルタークリア']='Clear filter'
+LanguageCatalog.en['対象のトラックがありません。']='No matching tracks.'
+LanguageCatalog.en['最低1種、']='Select at least one'
+LanguageCatalog.en['検索対象を選んでください']='search target: Tr, It or Fx.'
+LanguageCatalog.en['%dトラック / 選択 %d']='%d tracks / %d selected'
+local function valid(s)
+ if type(s)~='table'or type(s.query)~='string'or #s.query>=4096 then return false end
+ for _,key in ipairs(OPTION_KEYS)do if type(s[key])~='boolean'then return false end end
+ return true
+end
 BLT.attach({R=R,C=C,Chrome=Chrome,Chameleon=Chameleon,section=SECTION,faces=fonts,font=font,
- docked=docked,fold=function() Chrome.requestDock=true end,geometry=function() return 1,0,0 end,active=function() local f=gfx.getchar(65536);return (f&1)==0 or (f&2)~=0 end,
- wake=function() wake_visuals();A.content_dirty=true end,defaults=Core.defaults,capture=function() return S end,
- valid=Core.valid_settings,apply=function(v) S=BLT.copy(v);lengthMode=S.lengthMode;save_settings();poll(true);wake_visuals() end,
- beforeKey=function(k) if k>0 then WheelUndo.finish() end end,
- undoBefore=function() WheelUndo.finish();finish_edit(true);gesture=nil end,undoRefresh=function() poll(true) end,
- busy=function() return gesture~=nil or PeakZoom.drag~=nil end,commit=function() WheelUndo.finish();return not E or finish_edit(false,E.absolute) end,
- cancelEdit=function() WheelUndo.finish();finish_edit(true);gesture=nil;PeakZoom.drag=nil end,editing=function() return E~=nil end,modal=function() return false end,
- handle=gfx_window_handle,resizeHit=chrome_resize_hit,cursor=set_resize_cursor,beginResize=begin_window_resize,resize=update_window_resize,prepareMenu=prepare_menu,tip=tooltip})
-function BLT.testDraw() draw() end
-local function loop_body()
- WheelUndo.poll(R.time_precise())
- sync_dock();local now=R.time_precise();BLT.tick(now);Chameleon.tick(now)
- local k=gfx.getchar();if k<0 then A.manualClose=true end;if k<0 or A.closing then close();return false end
- local n=0
- while k>0 and n<32 do
-  k=BLT.key(k)
-  if k==27 then if PeakZoom.drag then PeakZoom.drag=nil;downLast=(gfx.mouse_cap&1)~=0;wake_visuals() elseif Dock.barDrag then Dock.left=(Dock.barDrag.left-Dock.barDrag.origin)/Dock.barDrag.width;Dock.right=(Dock.barDrag.right-Dock.barDrag.origin)/Dock.barDrag.width;Dock.barDrag=nil;layoutWidth=nil;wake_visuals() elseif E then finish_edit(true) elseif gesture then gesture=nil;wake_visuals() else A.manualClose=true;A.closing=true end end
-  k=gfx.getchar();n=n+1
+ docked=docked,fold=toggle_dock,geometry=function()return 1,0,0 end,active=function()local f=gfx.getchar(65536);return(f&1)==0 or(f&2)~=0 end,
+ wake=function()A.dirty=true end,defaults={query='',tr=true,it=false,fx=false,related=false,link=false},capture=function()return S end,valid=valid,apply=function(v)
+ if S.link and not v.link and A.linkState then Core.restoreview(R,A.linkState);A.linkState=nil;S.link=false;refresh(true)end
+ for _,key in ipairs(OPTION_KEYS)do S[key]=v[key];R.SetExtState(SECTION,key,v[key]and'1'or'0',true)end
+ A.search=nil;query(v.query)end,
+ busy=function()return A.drag~=nil end,commit=function()stop_edit(false);return true end,cancelEdit=function()stop_edit(true)end,
+ editing=function()return editor~=nil end,modal=function()return false end,
+ handle=gfx_window_handle,resizeHit=chrome_resize_hit,cursor=set_resize_cursor,beginResize=begin_window_resize,resize=update_window_resize,
+ undoRefresh=function()refresh(true)end,
+ tip=function(x,y)for _,w in ipairs(widgets)do if x>=w.x and x<w.x+w.w and y>=w.y and y<w.y+w.h then return Language.text(w.tip)end end;local row=row_at(y);if row and row.pinned and x>=gfx.w-46 then return Language.text('アレンジ上部に固定')end;if y>=TOP and x<35 then return Language.code=='JP'and'アレンジ・ミキサー表示（選択中なら一括切替）'or'TCP / mixer visibility (selected tracks together)'end end})
+clipboard_action=function(copy,ids)
+ local api=copy and 'CF_SetClipboard'or'CF_GetClipboard'
+ if not R.APIExists(api)then status(Language.text('コピー・貼り付けにはSWS Extensionが必要です。'),true);return true end
+ if copy then
+  local text,count=Core.copynames(R,ids)
+  if count>0 then R.CF_SetClipboard(text);status(string.format(Language.text('%dトラック名をコピーしました。'),count))end
+ else
+  local count=Core.pastenames(R,R.CF_GetClipboard(''),ids);A.search=nil;refresh(true)
+  status(string.format(Language.text('%dトラック名を変更しました。'),count))
  end
- poll(false);ime_frame();restore_menu_size()
- local cap=gfx.mouse_cap or 0
- local changed=gfx.mouse_x~=last_raw_mouse_x or gfx.mouse_y~=last_raw_mouse_y or cap~=last_raw_mouse_cap or (gfx.mouse_wheel or 0)~=0
- if changed or gesture or PeakZoom.drag or Dock.barDrag or Chrome.drag or Chrome.resize or E or BLT.presets.open then redraw_dirty=true end
- for key,t in pairs(A.flash) do if now>=t then A.flash[key]=nil;redraw_dirty=true end end
- if redraw_dirty or A.content_dirty then
-  redraw_dirty=false;A.content_dirty=false
-  draw();interact();gfx.update()
-  if Chrome.requestDock then Chrome.requestDock=false;toggle_dock();wake_visuals() end
-  if Chrome.requestReset then Chrome.requestReset=false;A.menuHeight=nil;reset_window_size();wake_visuals() end
-  if Chrome.requestClose then A.manualClose=true;A.closing=true end
- end
- last_raw_mouse_x,last_raw_mouse_y,last_raw_mouse_cap=gfx.mouse_x,gfx.mouse_y,cap
  return true
 end
-local function loop()
- if A.closing then BLT.cleanup(close);return end
- local ok,continue=xpcall(loop_body,debug.traceback)
- if not ok then BLT.cleanup(WheelUndo.finish);BLT.cleanup(finish_edit,true);gesture=nil;PeakZoom.drag=nil;Dock.barDrag=nil;BLT.recoverInput(A,continue);status(BLT.publicError(continue),true) end
- if not A.closed and (not ok or continue) then R.defer(loop) end
+local function clipboard_shortcut(key)
+ if editor or BLT.blocked()or A.drag then return false end
+ local cap=gfx.mouse_cap or 0
+ if(cap&24)~=0 then return false end
+ local ctrl=(cap&4)~=0 or(BLT_MAC and(cap&32)~=0)
+ local copy=key==3 or ctrl and(key==67 or key==99)
+ local paste=key==22 or ctrl and(key==86 or key==118)
+ if not copy and not paste then return false end
+ return clipboard_action(copy)
 end
-Dock.left=clamp(extnum('dock_row_left',0),0,1);Dock.right=clamp(extnum('dock_row_right',1),0,1)
-if Dock.right<=Dock.left then Dock.left,Dock.right=0,1 end
-if ...=='blt_test' then return {initialDockState=initial_dock_state,layout=layout,barAt=bar_at,Dock=Dock,toggleDock=toggle_dock,syncDock=sync_dock,close=close,Core=Core,A=A,S=S,BLT=BLT,Media=Media,draw=draw,poll=poll,interact=interact,finishEdit=finish_edit,openEdit=open_edit,fields=fields,IME=IME,imeFrame=ime_frame,WheelUndo=WheelUndo,PeakZoom=PeakZoom,tooltip=tooltip,loopBody=loop_body} end
-local ok,err=titlebar_api_ready()
-if not ok then Language.mb(err,'BLT MINIMAL INFO PANEL',0);return end
-gfx.ext_retina=BLT_MAC and 0 or 1
-local ww=clamp(extnum('window_w',W),Chrome.minW,4000);local wh=H+26
-local wx,wy=extnum('window_x',0/0),extnum('window_y',0/0)
-Dock.state=initial_dock_state()
-local fx,fy=extnum('float_x',0/0),extnum('float_y',0/0)
-if finite(fx) and finite(fy) then Dock.floating={x=fx,y=fy,w=clamp(extnum('float_w',ww),Chrome.minW,4000),h=clamp(extnum('float_h',wh),Chrome.minH,2000)} end
-if finite(wx) and finite(wy) then gfx.init(Chrome.windowTitle,ww,wh,Dock.state,wx,wy) else gfx.init(Chrome.windowTitle,ww,wh,Dock.state) end
-if not docked() and not apply_custom_window_style(ww,wh) then gfx.quit();Language.mb('ウィンドウを初期化できません。','BLT MINIMAL INFO PANEL',0);return end
-if not docked() and Dock.floating then local f=Dock.floating;BLT.lastRect=nil;BLT.position(gfx_window_handle(),f.x,f.y,f.w,f.h,'','') end
-if Chameleon.enabled then Chameleon.refresh(true) end
-poll(true)
-R.atexit(function() BLT.cleanup(close) end)
+
+local function close()
+ if A.closedWindow then return end;A.closedWindow=true
+ Core.restoreview(R,A.linkState);A.linkState=nil
+ BLTRestore.finish(R,A.manualClose or Chrome.requestClose)
+ stop_edit(false)
+ local dock,x,y,w,h=gfx.dock(-1,0,0,0,0)
+ R.SetExtState(SECTION,'dock_state',tostring(dock),true)
+ if(dock&1)==0 then for k,v in pairs({window_x=x,window_y=y,window_w=w,window_h=h})do R.SetExtState(SECTION,k,tostring(v),true)end end
+ titlebar_cleanup();clear_chrome_tooltip();gfx.quit()
+end
+local ok,err=titlebar_api_ready();if not ok then R.MB(err,'BLT TRACK TREE',0);return end
 if R.set_action_options then R.set_action_options(2)end
+local ww=clamp(extnum('window_w',W),360,1600);local hh=clamp(extnum('window_h',H+26),300,2000)
+gfx.ext_retina=BLT_MAC and 0 or 1
+gfx.init(Chrome.windowTitle,ww,hh,Dock.state,extnum('window_x',100),extnum('window_y',100))
+if not docked()then apply_custom_window_style(ww,hh)end
+if Chameleon.enabled then Chameleon.refresh(true)end
+R.atexit(close)
 local restoreOK,restoreError=pcall(BLTRestore.start,R)
-if not restoreOK then Language.mb('自動復元の登録に失敗しました。\n'..tostring(restoreError),'BLT MINIMAL INFO PANEL',0)end
+if not restoreOK then R.MB(Language.text('自動復元の登録に失敗しました。')..'\n'..tostring(restoreError),'BLT TRACK TREE',0)end
+for _,key in ipairs(OPTION_KEYS)do local value=R.GetExtState(SECTION,key);if value~=''then S[key]=value=='1'end end
+A.query=R.GetExtState(SECTION,'query');S.query=A.query;refresh(true)
+local function loop()
+ local ok,why=xpcall(function()
+  local k=gfx.getchar();if k<0 then A.manualClose=true;A.closing=true;return end
+  k=BLT.key(k)
+  if clipboard_shortcut(k)then k=0 end
+  if not editor then
+   if k==27 then A.manualClose=true;A.closing=true
+   elseif k==1 then refresh(true);for _,r in ipairs(A.rows)do R.SetTrackSelected(r.ptr,true)end;refresh(true)
+   elseif k==6 then start_edit()end
+  end
+  local now=R.time_precise();BLT.tick(now);if Chameleon.tick(now)then A.dirty=true end
+  refresh(false);edit_frame()
+  if A.width~=gfx.w or A.height~=gfx.h then A.width,A.height=gfx.w,gfx.h;toolbar_geometry();A.offset=clamp(A.offset,0,max(0,#A.rows-capacity()));A.dirty=true end
+  if A.dirty or gfx.mouse_cap~=0 or gfx.mouse_wheel~=0 or A.down or A.rightDown or A.drag or A.mouseX~=gfx.mouse_x or A.mouseY~=gfx.mouse_y then
+   A.mouseX,A.mouseY=gfx.mouse_x,gfx.mouse_y;A.dirty=false;draw();input()
+  end
+  if Chrome.requestClose then A.closing=true end
+  if Chrome.requestReset then Chrome.requestReset=false;reset_window_size();A.dirty=true end
+ end,debug.traceback)
+ if not ok then A.drag=nil;A.down=false;status(BLT.publicError(why),true);BLT.logError(why)end
+ if A.closing then close()else R.defer(loop)end
+end
 loop()

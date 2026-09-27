@@ -1,4 +1,4 @@
--- @description BLT COLOR PALETTE
+-- @description COLOR PALETTE
 -- @version 0.1.12
 -- @author Balrulu
 -- @provides
