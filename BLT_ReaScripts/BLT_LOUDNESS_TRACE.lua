@@ -1,5 +1,5 @@
 -- @description LOUDNESS TRACE
--- @version 0.6.0
+-- @version 0.7.4
 -- @author Balrulu
 -- @provides
 --   . > ../
@@ -123,7 +123,7 @@ end
 local WindowGeometry=create_window_geometry(reaper,gfx)
 
 -- Application / analysis
-local VERSION="0.6.0"
+local VERSION="0.7.4"
 local MAX_HISTORY_ROWS=126000
 local MAX_SAVE_BYTES=12*1024*1024
 local Core = {}
@@ -216,95 +216,6 @@ end
 function Core.check_channels(api,project,layout)
  local master=api.GetMasterTrack(project)
  assert(master and api.GetMediaTrackInfo_Value(master,'I_NCHAN')>=layout.channels,'マスターのチャンネル数が測定レイアウトより少ないため測定できません。')
-end
-function Core.wav(file)
-  local size=assert(file:seek('end')); file:seek('set',0)
-  local h=assert(file:read(12),'WAVヘッダーがありません。')
-  assert(#h==12 and (h:sub(1,4)=='RIFF' or h:sub(1,4)=='RF64') and h:sub(9,12)=='WAVE','WAV形式を確認できません。')
-  local format,channels,rate,align,bits,offset,bytes,rfbytes
-  while file:seek()+8<=size do
-    local chunk=file:read(8); local id,n=string.unpack('<c4I4',chunk)
-    local pos=file:seek()
-    if id=='ds64' then
-      assert(n>=28 and n<1048576,'不正なRF64ヘッダーです。')
-      local data=assert(file:read(n)); rfbytes=string.unpack('<I8',data,9)
-    elseif id=='fmt ' then
-      assert(n>=16 and n<1048576,'不正なWAVフォーマットです。')
-      local data=assert(file:read(n)); local byteRate
-      format,channels,rate,byteRate,align,bits=string.unpack('<I2I2I4I4I2I2',data)
-      if format==65534 and #data>=40 then format=string.unpack('<I2',data,25) end
-    elseif id=='data' then
-      offset=pos; bytes=n==0xffffffff and rfbytes or n; break
-    end
-    assert(pos+n+n%2<=size,'WAVが途中で終了しています。')
-    file:seek('set',pos+n+n%2)
-  end
-  assert(format==3 and (channels==1 or channels==2 or channels==6 or channels==8) and rate==48000 and align==channels*4 and bits==32,'解析には48 kHz / 1・2・6・8 ch / float32 WAVが必要です。')
-  assert(offset and bytes and bytes>0 and bytes%align==0 and offset+bytes<=size,'レンダーが未完了、またはWAVが破損しています。')
-  file:seek('set',offset)
-  return bytes//align,rate,channels
-end
-function Core.analyze(file,expected,tick,layout)
-  local frames,sr,channels=Core.wav(file)
-  layout=layout or Core.layout(channels==1 and 'mono' or channels==2 and 'stereo' or channels==6 and '5.1' or '7.1')
-  assert(channels==layout.channels or (layout.id=='mono' and channels==2),'レンダーのチャンネル数が測定レイアウトと一致しません。')
-  if expected then
-
-    local expectedFrames=floor(expected*sr+.5)
-    local diffFrames=math.abs(frames-expectedFrames)
-    local toleranceFrames=max(8,floor(sr*.005+.5))
-    assert(diffFrames<=toleranceFrames,
-      string.format('レンダーが中断されたか、測定範囲と音声の長さが一致しません。\n予定: %.6f 秒 / 実際: %.6f 秒 / 差: %.3f ms',
-        expected,frames/sr,diffFrames/sr*1000))
-  end
-
-  local unpack,abs,finite,lufs,db=string.unpack,math.abs,Core.finite,Core.lufs,Core.db
-  local rows,kbins,rbins={}, {}, {}
-  local z={};for c=1,layout.channels do z[c]={0,0,0,0} end
-  local ks,raw,peak,n,processed=0,0,0,0,0
-  local km,ks3,rm=0,0,0
-  local rowCount=0
-  while processed<frames do
-    local count=min(1024,frames-processed)
-    local data=assert(file:read(count*channels*4),'音声を読み取れません。')
-    assert(#data==count*channels*4,'音声が途中で終了しています。')
-    local pos=1
-    for _=1,count do
-      for c=1,channels do
-        local value;value,pos=unpack('<f',data,pos)
-        assert(finite(value),'音声にNaNまたは無限大が含まれています。')
-        if c<=layout.channels then
-          peak=max(peak,abs(value));raw=raw+value*value/layout.channels
-          local state=z[c];local y=1.53512485958697*value+state[1]
-          state[1]=-2.69169618940638*value+1.69065929318241*y+state[2];state[2]=1.19839281085285*value-.73248077421585*y
-          local k=y+state[3];state[3]=-2*y+1.99004745483398*k+state[4];state[4]=y-.99007225036621*k
-          ks=ks+k*k*layout.weights[c]
-        end
-      end
-      n=n+1
-      if n==4800 then
-        rowCount=rowCount+1
-        local i=rowCount; local e=ks/n; local re=raw/n
-        kbins[i],rbins[i]=e,re
-        km=km+e-(kbins[i-4] or 0); ks3=ks3+e-(kbins[i-30] or 0); rm=rm+re-(rbins[i-4] or 0)
-        local me=i>=4 and max(0,km/4) or nil
-        rows[i]={t=i*.1,energy=me,
-          m=me and lufs(me) or nil,s=i>=30 and lufs(max(0,ks3/30)) or nil,
-          rms=i>=4 and db(max(0,rm/4)) or nil,peak=db(peak*peak)}
-        -- Keep only the sliding window; the measurement rows retain all results.
-        kbins[i-30]=nil; rbins[i-4]=nil
-        ks,raw,peak,n=0,0,0,0
-      end
-    end
-    processed=processed+count
-    if tick then tick(.90*processed/frames) end
-  end
-  assert(rowCount>=4,'400 ms以上の時間範囲を選択してください。')
-  if n>0 then rows[rowCount].peak=max(rows[rowCount].peak,db(peak*peak)) end
-  local result={rows=rows,duration=frames/sr,srate=sr}
-  result.integrated=Core.integrate(rows,tick)
-  if tick then tick(.96) end
-  return result
 end
 Core.metrics={'s','m','i','rms','peak'}
 local function build_lod(data,tick)
@@ -539,50 +450,259 @@ function Core.history_summary(previous,first,targets)
   return H
 end
 
-function Core.render(R,project,first,last,directory,basename,layout)
-  basename=basename or 'trace'
-  layout=layout or Core.layout('stereo')
-  Core.check_channels(R,project,layout)
+Core.offline={memory='BLT_LoudnessTrace_Offline_v1',fx='BLT/BLT_Loudness_Trace_Offline_v1.jsfx'}
+function Core.offline.install(api)
+ local root=api.GetResourcePath()..'/Effects/'
+ local path=root..Core.offline.fx
+ local f=io.open(path,'rb');local old=f and f:read('*a');if f then f:close()end
+ if old==Core.offline.jsfx then return end
+ api.RecursiveCreateDirectory(root..'BLT',0)
+ f=assert(io.open(path,'wb'),'オフライン測定JSFXを保存できません。')
+ local ok,why=f:write(Core.offline.jsfx);local closed=f:close()
+ assert(ok and closed,why or 'オフライン測定JSFXを保存できません。')
+end
+function Core.offline.find(api,state)
+ if not api.ValidatePtr2(state.project,state.master,'MediaTrack*')then return end
+ for i=0,api.TrackFX_GetCount(state.master)-1 do
+  if api.TrackFX_GetFXGUID(state.master,i)==state.guid then return i end
+ end
+end
+function Core.offline.detach(api,state)
+ if state.guid then
+  local index=Core.offline.find(api,state)
+  if index then
+   assert(api.TrackFX_Delete(state.master,index)~=false and not Core.offline.find(api,state),'オフライン測定JSFXを終了できません。')
+  end
+  state.guid=nil
+ end
+end
+function Core.offline.close(api,state)
+ if not state then return end
+ local failure
+ local function attempt(fn)
+  local ok,why=pcall(fn);if not ok then failure=failure or why end
+ end
+ api.gmem_attach(Core.offline.memory)
+ if api.gmem_read(state.base)==state.token then api.gmem_write(state.base+1,0)end
+ if state.preference then
+  attempt(function()
+   assert(api.SNM_SetIntConfigVar('fxfloat_focus',state.preference)~=false,'FXウィンドウの自動表示設定を復元できません。')
+   state.preference=nil
+  end)
+ end
+ attempt(function()Core.offline.detach(api,state)end)
+ if not state.guid and api.gmem_read(state.base)==state.token then api.gmem_write(state.base,0)end
+ if failure then error(failure,0)end
+ if Core.offline.active==state then Core.offline.active=nil end
+end
+function Core.offline.open(api,job,gain)
+ Core.offline.install(api)
+ api.gmem_attach(Core.offline.memory)
+ local base,slot
+ for i=0,15 do if api.gmem_read(i*524288)==0 then base,slot=i*524288,i;break end end
+ assert(base,'オフライン測定の共有メモリを確保できません。')
+ local token=max(1,tonumber(api.genGuid():gsub('[^%x]',''):sub(1,6),16)or 1)
+ local state={project=job.project,master=api.GetMasterTrack(job.project),base=base,token=token}
+ Core.offline.active=state
+ job.offline=state
+ api.gmem_write(base,token)
+ for i=1,63 do api.gmem_write(base+i,0)end
+ api.gmem_write(base+8,job.first);api.gmem_write(base+9,floor((job.last-job.first)*48000+.5))
+ api.gmem_write(base+10,job.layout.channels);api.gmem_write(base+11,gain)
+ for i,v in ipairs(job.layout.weights)do api.gmem_write(base+15+i,v)end
+ local previous=api.SNM_GetIntConfigVar('fxfloat_focus',-2147483647)
+ assert(previous~=-2147483647,'FXウィンドウの自動表示設定を取得できません。')
+ state.preference=previous
+ local ok,why=pcall(function()
+  assert(api.SNM_SetIntConfigVar('fxfloat_focus',(previous&~(1|2|4|16|32|64))|8|128|65536)~=false)
+  local index=api.TrackFX_AddByName(state.master,'JS: '..Core.offline.fx,false,-1)
+  assert(index and index>=0,'オフライン測定JSFXを追加できません。')
+  state.guid=assert(api.TrackFX_GetFXGUID(state.master,index))
+  assert(index==api.TrackFX_GetCount(state.master)-1,'オフライン測定JSFXの位置を確認できません。')
+  api.TrackFX_SetNamedConfigParm(state.master,index,'parallel','0')
+  for output=0,1 do for pin=0,7 do
+   assert(api.TrackFX_SetPinMappings(state.master,index,output,pin,1<<pin,0),'測定用JSFXのチャンネルを設定できません。')
+  end end
+  assert(api.TrackFX_SetParam(state.master,index,0,slot)~=false)
+  assert(api.TrackFX_SetParam(state.master,index,1,token)~=false)
+ end)
+ local restored=api.SNM_SetIntConfigVar('fxfloat_focus',previous)
+ if restored~=false then state.preference=nil end
+ assert(restored~=false,'FXウィンドウの自動表示設定を復元できません。')
+ if not ok then error(why,0)end
+ api.gmem_attach(Core.offline.memory);api.gmem_write(base+1,1)
+ return state
+end
+function Core.offline.read(api,job,tick)
+ local state=job.offline;local base=state.base
+ api.gmem_attach(Core.offline.memory);api.gmem_write(base+1,0)
+ assert(api.gmem_read(base)==state.token,'オフライン測定の所有情報が失われました。')
+ assert(api.gmem_read(base+2)==0,'オフライン測定信号の連続性を確認できません。')
+ local frames=api.gmem_read(base+3);local expected=floor((job.last-job.first)*48000+.5)
+ assert(frames==expected,'オフライン測定が完了していません。')
+ local count=api.gmem_read(base+4)
+ assert(count==floor(expected/4800)and count>=4 and count<=126000,'オフライン測定データの長さが不正です。')
+ local rows,kbins,rbins={}, {}, {}
+ local km,ks3,rm=0,0,0
+ for i=1,count do
+  local at=base+64+(i-1)*3
+  local e,re,peak=api.gmem_read(at),api.gmem_read(at+1),api.gmem_read(at+2)
+  assert(Core.finite(e)and e>=0 and Core.finite(re)and re>=0 and Core.finite(peak)and peak>=0,'オフライン測定データが不正です。')
+  kbins[i],rbins[i]=e,re
+  km=km+e-(kbins[i-4]or 0);ks3=ks3+e-(kbins[i-30]or 0);rm=rm+re-(rbins[i-4]or 0)
+  local me=i>=4 and max(0,km/4)or nil
+  rows[i]={t=i*.1,energy=me,m=me and Core.lufs(me)or nil,s=i>=30 and Core.lufs(max(0,ks3/30))or nil,
+   rms=i>=4 and Core.db(max(0,rm/4))or nil,peak=Core.db(peak*peak)}
+  kbins[i-30]=nil;rbins[i-4]=nil
+  if tick and i%1000==0 then tick(.9*i/count);api.gmem_attach(Core.offline.memory)end
+ end
+ local tail=api.gmem_read(base+5)
+ assert(Core.finite(tail)and tail>=0,'オフライン測定データが不正です。')
+ rows[count].peak=max(rows[count].peak,Core.db(tail*tail))
+ local result={rows=rows,duration=frames/48000,srate=48000}
+ result.integrated=Core.integrate(rows,tick)
+ return result
+end
+function Core.offline.measure(api,job,tick)
+ local master=assert(api.GetMasterTrack(job.project),'マスタートラックを取得できません。')
+ -- Measurement uses the master FX output with the starting master gain held constant.
+ local gain=api.GetMediaTrackInfo_Value(master,'D_VOL')
+ assert(Core.finite(gain)and gain>=0,'マスター音量が不正です。')
+ Core.check_channels(api,job.project,job.layout)
+ local ok,result=pcall(function()
+  Core.offline.open(api,job,gain)
+  Core.offline.render(api,job.project,job.first,job.last,job.layout)
+  api.gmem_attach(Core.offline.memory);api.gmem_write(job.offline.base+1,0)
+  Core.offline.detach(api,job.offline)
+  job.renderState=api.GetProjectStateChangeCount(job.project)
+  api.gmem_attach(Core.offline.memory)
+  local fault=api.gmem_read(job.offline.base+2)
+  assert(fault~=1,'測定時の処理レートが48 kHzではありません。')
+  assert(fault~=2,'測定中の音声が不連続になりました。測定結果は保存していません。')
+  assert(fault==0,'音声にNaNまたは無限大が含まれています。')
+  job.phase='analyze'
+  return Core.offline.read(api,job,tick)
+ end)
+ local unchanged=job.renderState==api.GetProjectStateChangeCount(job.project)
+ Core.offline.close(api,job.offline);job.offline=nil
+ if unchanged then job.renderState=api.GetProjectStateChangeCount(job.project)end
+ if not ok then error(result,0)end
+ return result
+end
+
+Core.offline.jsfx=[====[
+desc:BLT Loudness Trace Offline Analysis
+options:gmem=BLT_LoudnessTrace_Offline_v1
+options:no_meter
+in_pin:Measure 1
+in_pin:Measure 2
+in_pin:Measure 3
+in_pin:Measure 4
+in_pin:Measure 5
+in_pin:Measure 6
+in_pin:Measure 7
+in_pin:Measure 8
+out_pin:Pass 1
+out_pin:Pass 2
+out_pin:Pass 3
+out_pin:Pass 4
+out_pin:Pass 5
+out_pin:Pass 6
+out_pin:Pass 7
+out_pin:Pass 8
+slider1:0<0,15,1>-Memory slot
+slider2:0<0,16777215,1>-Owner token
+
+@init
+ext_noinit=1;
+ext_nodenorm=1;
+ext_tail_size=-1;
+
+@block
+base=floor(slider1)*524288;
+owned=slider2>0 && gmem[base]===slider2;
+active=owned && gmem[base+1]==1 && (play_state&1);
+active ? (
+  last_token!==slider2 ? (
+    last_token=slider2;
+    memset(0,0,32);
+    frames=0;bins=0;n=0;energy=0;raw=0;pk=0;
+    first=gmem[base+8];limit=gmem[base+9];channels=gmem[base+10];gain=gmem[base+11];
+    ch=0;loop(channels,32[ch]=gmem[base+16+ch];ch+=1;);
+  );
+  srate!=48000 ? (gmem[base+2]=1;active=0;);
+  offset=floor((play_position-first)*48000+.5);
+  block_i=0;
+);
+
+@sample
+active && frames<limit && !gmem[base+2] ? (
+  frame=offset+block_i;
+  frame>=0 && frame<limit ? (
+    frame!=frames ? gmem[base+2]=2 : (
+      ch=0;
+      loop(channels,
+        v=spl(ch)*gain;
+        !(v===v) || abs(v)>10^150 ? gmem[base+2]=3 : (
+          z=ch*4;
+          y=1.53512485958697*v+z[0];
+          z[0]=-2.69169618940638*v+1.69065929318241*y+z[1];
+          z[1]=1.19839281085285*v-.73248077421585*y;
+          k=y+z[2];z[2]=-2*y+1.99004745483398*k+z[3];z[3]=y-.99007225036621*k;
+          energy+=k*k*32[ch];raw+=v*v/channels;pk=max(pk,abs(v));
+        );
+        ch+=1;
+      );
+      n+=1;frames+=1;
+      n==4800 ? (
+        dest=base+64+bins*3;
+        gmem[dest]=energy/n;gmem[dest+1]=raw/n;gmem[dest+2]=pk;
+        bins+=1;energy=0;raw=0;pk=0;n=0;
+        gmem[base+4]=bins;
+      );
+      frames==limit || block_i+1==samplesblock ? (gmem[base+3]=frames;gmem[base+5]=pk;);
+    );
+  );
+  block_i+=1;
+);
+]====]
+
+function Core.offline.render(R,project,first,last,layout)
 
   local nums={RENDER_SETTINGS=0,RENDER_BOUNDSFLAG=2,RENDER_CHANNELS=layout.render,RENDER_SRATE=48000,
     RENDER_STARTPOS=first,RENDER_ENDPOS=last,RENDER_TAILFLAG=0,RENDER_TAILMS=0,RENDER_ADDTOPROJ=0,
     RENDER_DITHER=16,RENDER_NORMALIZE=4<<16}
-  local strs={RENDER_FILE=directory,RENDER_PATTERN=basename,RENDER_FORMAT='ZXZhdyADAA==',RENDER_FORMAT2=''}
+  local strs={RENDER_FORMAT='ZXZhdyADAA==',RENDER_FORMAT2=''}
   local oldn,olds,oldcfg={},{},{}
   for k in pairs(nums) do oldn[k]=R.GetSetProjectInfo(project,k,0,false) end
   for k in pairs(strs) do local ok,s=R.GetSetProjectInfo_String(project,k,'',false); assert(ok,'レンダー設定を読み取れません: '..k); olds[k]=s end
-  for _,k in ipairs({'renderclosewhendone','autosaveonrender','autosaveonrender2'}) do
+  for _,k in ipairs({'renderclosewhendone','autosaveonrender','autosaveonrender2','projrenderlimit'}) do
     local v=R.SNM_GetIntConfigVar(k,-2147483647)
     if v~=-2147483647 then oldcfg[k]=v end
   end
   assert(oldcfg.renderclosewhendone,'SWSからレンダー設定を取得できません。')
   local function restore()
-    for k,v in pairs(oldn) do R.GetSetProjectInfo(project,k,v,true) end
-    for k,v in pairs(olds) do R.GetSetProjectInfo_String(project,k,v,true) end
-    for k,v in pairs(oldcfg) do R.SNM_SetIntConfigVar(k,v) end
+    local failures={}
+    local function attempt(key,fn)
+      local ok,value=pcall(fn)
+      if not ok or value==false then failures[#failures+1]=key end
+    end
+    for k,v in pairs(oldn) do attempt(k,function()return R.GetSetProjectInfo(project,k,v,true)end)end
+    for k,v in pairs(olds) do attempt(k,function()return R.GetSetProjectInfo_String(project,k,v,true)end)end
+    for k,v in pairs(oldcfg) do attempt(k,function()return R.SNM_SetIntConfigVar(k,v)end)end
+    assert(#failures==0,table.concat(failures,', '))
   end
   local ok,result=pcall(function()
     for k,v in pairs(nums) do R.GetSetProjectInfo(project,k,v,true) end
     for k,v in pairs(strs) do assert(R.GetSetProjectInfo_String(project,k,v,true),'レンダー設定を変更できません: '..k) end
     R.SNM_SetIntConfigVar('renderclosewhendone',(oldcfg.renderclosewhendone|1)&~(16|16384|32768))
     for _,k in ipairs({'autosaveonrender','autosaveonrender2'}) do if oldcfg[k] then R.SNM_SetIntConfigVar(k,0) end end
-    local function prefix_wavs()
-      local found={}; local i=0
-      while true do
-        local name=R.EnumerateFiles(directory,i); if not name then break end
-        if name:sub(1,#basename)==basename and name:lower():match('%.wav$') then found[#found+1]=directory..'/'..name end
-        i=i+1
-      end
-      return found
+    if oldcfg.projrenderlimit~=nil then
+      assert(R.SNM_SetIntConfigVar('projrenderlimit',0)~=false,'レンダー設定を変更できません: projrenderlimit')
     end
-    local before={}
-    for _,p in ipairs(prefix_wavs()) do before[p:gsub('\\','/'):lower()]=true end
-    R.Main_OnCommandEx(41824,0,project)
-    local created={}
-    for _,p in ipairs(prefix_wavs()) do if not before[p:gsub('\\','/'):lower()] then created[#created+1]=p end end
-    assert(#created>0,'一時レンダーのWAVを確認できません。レンダーがキャンセルされた可能性があります。')
-    assert(#created==1,'マスターミックスの一時レンダーが複数ファイルになりました。')
-    return created[1]
+    local ok,stats=R.GetSetProjectInfo_String(project,'RENDER_STATS','42441',false)
+    assert(ok,'オフライン測定を実行できません。')
+    return stats
   end)
   local restored,err=pcall(restore)
   if not restored then error('レンダー設定の復元に失敗: '..tostring(err)) end
@@ -893,29 +1013,33 @@ local function create_language(api,section,catalog)
 end
 
 local LanguageCatalog={en={
+ ["オフライン測定JSFXを保存できません。"]="Cannot save the offline measurement JSFX.",
+ ["オフライン測定JSFXを終了できません。"]="Cannot remove the offline measurement JSFX.",
+ ["オフライン測定の共有メモリを確保できません。"]="Cannot reserve shared memory for offline measurement.",
+ ["オフライン測定JSFXを追加できません。"]="Cannot add the offline measurement JSFX.",
+ ["オフライン測定JSFXの位置を確認できません。"]="Cannot verify the offline measurement JSFX position.",
+ ["オフライン測定の所有情報が失われました。"]="Offline measurement memory ownership was lost.",
+ ["オフライン測定信号の連続性を確認できません。"]="Cannot verify the continuity of the offline measurement signal.",
+ ["オフライン測定が完了していません。"]="Offline measurement was cancelled or did not complete.",
+ ["オフライン測定データの長さが不正です。"]="Invalid offline measurement data length.",
+ ["オフライン測定データが不正です。"]="Invalid offline measurement data.",
+ ["オフライン測定を実行できません。"]="Cannot run offline measurement.",
+ ["FXウィンドウの自動表示設定を復元できません。"]="Cannot restore automatic FX window display settings.",
+ ["マスター音量が不正です。"]="Invalid master volume.",
+ ["測定時の処理レートが48 kHzではありません。"]="Processing sample rate was not 48 kHz.",
+ ["測定中の音声が不連続になりました。測定結果は保存していません。"]="Audio was discontinuous during measurement. Results have not been saved.",
+ ["解析完了：高速解析（一時WAVなし）"]="Analysis complete: fast analysis (no temporary WAV).",
+
  ['測定レイアウトが不正です。']='Invalid measurement layout.',
  ['マスターのチャンネル数が測定レイアウトより少ないため測定できません。']='The master has fewer channels than the measurement layout.',
- ['解析には48 kHz / 1・2・6・8 ch / float32 WAVが必要です。']='Analysis requires 48 kHz / 1, 2, 6 or 8 channel / float32 WAV.',
- ['レンダーのチャンネル数が測定レイアウトと一致しません。']='Rendered channel count does not match the measurement layout.',
  ['ハードウェア出力の経路を確認できません。']='Cannot verify the hardware output routing.',
  ['LIVE測定には各測定チャンネルをゲイン0 dB・PAN中央で、混合せずハードウェアへ出力する経路が必要です。']='LIVE requires an isolated unity-gain, centered-pan hardware route for every measurement channel.',
 
- ["WAVヘッダーがありません。"]="Missing WAV header.",
- ["WAV形式を確認できません。"]="Cannot identify WAV format.",
- ["不正なRF64ヘッダーです。"]="Invalid RF64 header.",
- ["不正なWAVフォーマットです。"]="Invalid WAV format.",
- ["WAVが途中で終了しています。"]="Truncated WAV.",
- ["解析には48 kHz / stereo / float32 WAVが必要です。"]="Analysis requires 48 kHz / stereo / float32 WAV.",
- ["レンダーが未完了、またはWAVが破損しています。"]="Render incomplete or WAV damaged.",
- ["レンダーが中断されたか、測定範囲と音声の長さが一致しません。\n予定: %.6f 秒 / 実際: %.6f 秒 / 差: %.3f ms"]="Render interrupted or duration mismatch.\nExpected: %.6f s / Actual: %.6f s / Difference: %.3f ms",
- ["音声を読み取れません。"]="Cannot read audio.",
- ["音声が途中で終了しています。"]="Truncated audio.",
  ["音声にNaNまたは無限大が含まれています。"]="Audio contains NaN or infinity.",
  ["400 ms以上の時間範囲を選択してください。"]="Select a time range of at least 400 ms.",
  ["レンダー設定を読み取れません: "]="Cannot read render setting: ",
  ["SWSからレンダー設定を取得できません。"]="Cannot read render settings from SWS.",
  ["レンダー設定を変更できません: "]="Cannot change render setting: ",
- ["一時レンダーのWAVを確認できません。レンダーがキャンセルされた可能性があります。"]="Cannot find temporary render WAV. Render may have been cancelled.",
  ["レンダー設定の復元に失敗: "]="Cannot restore render setting: ",
  ["保存区間が不正です。"]="Invalid saved section.",
  ["保存できる共通履歴は最大3.5時間です。古い履歴を整理してから再試行してください。"]="Shared history is limited to 3.5 hours. Remove old history, then retry.",
@@ -975,13 +1099,8 @@ local LanguageCatalog={en={
  ["LOUDNESS TRACE: 表示トラックを作成"]="LOUDNESS TRACE: Create display track",
  ["描画用ビットマップを作成できません。"]="Cannot create drawing bitmap.",
  ["解析ソース"]="Source",
- ["前回の解析で残った可能性がある一時ファイルを%d件検出しました（合計 %s）。\n\n削除してよろしいですか？\n別のLOUDNESS TRACEが現在解析中の場合だけキャンセルしてください。"]="Found %d temporary files possibly left by an earlier analysis (total %s).\n\nDelete them?\nCancel if another LOUDNESS TRACE is currently analyzing.",
- ["LOUDNESS TRACE | 一時ファイル回収"]="LOUDNESS TRACE | Temporary files",
- ["長い範囲を解析するため、一時WAVを約 %s 作成します。\n解析中は同程度の空き容量が必要です。続行しますか？\n\n範囲：%.1f分"]="This range creates about %s of temporary WAV data.\nKeep this much disk space free during analysis. Continue?\n\nRange: %.1f min",
- ["LOUDNESS TRACE | 長尺解析"]="LOUDNESS TRACE | Long analysis",
  ["測定開始前にプロジェクトが切り替わりました。"]="Project changed before measurement started.",
  ["測定開始前に時間選択が変更されました。"]="Time selection changed before measurement started.",
- ["レンダーがキャンセルされたか、一時音声を開けません。"]="Render cancelled or temporary audio unavailable.",
  ["LOUDNESS TRACE | 解析"]="LOUDNESS TRACE | Analysis",
  ["LOUDNESS TRACE | 保存"]="LOUDNESS TRACE | Save",
  ["目標"]="Aim",
@@ -1009,6 +1128,8 @@ local LanguageCatalog={en={
  ["解析を中止  "]="Stop analysis  ",
  ["選択範囲を解析"]="Analyze selection",
  ["解析中 %d%%"]="Analyzing %d%%",
+ ["ドライレンダー解析中"]="Dry render analysis",
+ ["解析準備中"]="Preparing analysis",
  ["プロジェクトが変更されています。再解析してください。"]="Project changed. Analyze again.",
  ["解析結果を表示しています。"]="Showing analysis results.",
  ["時間範囲を選択してください。"]="Select a time range.",
@@ -1050,7 +1171,6 @@ local LanguageCatalog={en={
  ["既存のリアルタイム測定JSFXを読み取れません。権限を確認してください。"]="Cannot read an existing live meter JSFX. Check file permissions.",
  ["リアルタイム測定JSFXの書き込み検証に失敗しました。"]="Live meter JSFX write verification failed.",
  ["リアルタイム測定JSFXの通信形式が一致しません。測定をOFFにしました。"]="Live meter JSFX protocol mismatch. Live measurement was turned OFF.",
- ["マスターミックスの一時レンダーが複数ファイルになりました。"]="The master mix produced multiple temporary WAVs.",
  ["測定データのソースがマスターミックスではありません。"]="Measurement source is not the master mix.",
  ["集計データの対応が失われました。"]="History aggregation is inconsistent.",
  ["測定時刻が逆転しています。"]="Measurement time moved backwards.",
@@ -1092,10 +1212,7 @@ local LanguageCatalog={en={
  ['保存グラフの欠損データを退避しました。グラフをクリアせず再測定できます。']='Damaged graph data retained separately. You can measure again without clearing the graph.',
 },patterns={
  {"^「(.*)」を上書きしますか？$","Overwrite \"%s\"?"},
- {"^レンダーが中断されたか、測定範囲と音声の長さが一致しません。\n予定: ([%+%-]?[%d%.eE]+) 秒 / 実際: ([%+%-]?[%d%.eE]+) 秒 / 差: ([%+%-]?[%d%.eE]+) ms$","Render interrupted or duration mismatch.\nExpected: %.6f s / Actual: %.6f s / Difference: %.3f ms"},
  {"^([%+%-]?[%d%.eE]+)–([%+%-]?[%d%.eE]+) / ([%+%-]?[%d%.eE]+)   スクロールで選択$","%d–%d / %d   Scroll to browse"},
- {"^前回の解析で残った可能性がある一時ファイルを([%+%-]?[%d%.eE]+)件検出しました（合計 (.-)）。\n\n削除してよろしいですか？\n別のLOUDNESS TRACEが現在解析中の場合だけキャンセルしてください。$","Found %d temporary files possibly left by an earlier analysis (total %s).\n\nDelete them?\nCancel if another LOUDNESS TRACE is currently analyzing."},
- {"^長い範囲を解析するため、一時WAVを約 (.-) 作成します。\n解析中は同程度の空き容量が必要です。続行しますか？\n\n範囲：([%+%-]?[%d%.eE]+)分$","This range creates about %s of temporary WAV data.\nKeep this much disk space free during analysis. Continue?\n\nRange: %.1f min"},
  {"^解析中 ([%+%-]?[%d%.eE]+)%%$","Analyzing %d%%"},
  {"^レンダー設定を読み取れません: (.-)$","Cannot read render setting: %s"},
  {"^レンダー設定を変更できません: (.-)$","Cannot change render setting: %s"},
@@ -1126,14 +1243,6 @@ local function create_trace_platform(api,graphics)
  P.graphFont=P.chromeFont
  P.faces=P.mac and {'Hiragino Sans','Helvetica Neue','Menlo','Hiragino Sans'} or {'Yu Gothic UI','Segoe UI','Consolas','Yu Gothic UI'}
  P.bodyFaces=P.mac and {'Hiragino Sans','Menlo','Helvetica Neue','Hiragino Sans'} or {'Yu Gothic UI','Consolas','Segoe UI','Yu Gothic UI'}
- function P.tempDirectory()
-  if P.mac then
-   local directory=os.getenv('TMPDIR')
-   return directory and directory~='' and directory or '/tmp'
-  end
-  return os.getenv('TEMP') or api.GetResourcePath()
- end
-
  if not P.mac then return P end
  local R=setmetatable({}, {__index=WindowGeometry});P.api=R
  -- Async layered drawing can still reference the last published bitmap after
@@ -1914,7 +2023,6 @@ end)()
 
 local SECTION="LOUDNESS_TRACE"
 local TAG="P_EXT:"..SECTION
-local TEMP_WARNING_SECONDS=25*60
 local W,H=646,616
 local COLLAPSED_W,COLLAPSED_H=350,58
 local COMPACT_MEASURE_X,COMPACT_MEASURE_Y,COMPACT_MEASURE_W,COMPACT_MEASURE_H=256,12,78,34
@@ -3825,7 +3933,7 @@ local function button(id,label,x,y,w,h,fn,primary,selected,eyebrow,tone)
       local tw,th=measure_text(label,12.5,1,true)
       text(label,x+(w-tw)/2,y+(h-th)/2,12.5,C.text,tw+2,1,true)
     else
-      local small=analyzing and 'ANALYZING' or (eyebrow or 'MEASURE')
+      local small=analyzing and (A.job.phase=='render' and 'DRY RENDER' or A.job.phase=='prepare' and 'PREPARING' or 'ANALYZING') or (eyebrow or 'MEASURE')
       local sw=measure_text(small,8,2,false)
       text(small,x+(w-sw)/2,y+3,8,C.ice,w,2)
       local tw=measure_text(label,15,1,false)
@@ -3908,17 +4016,6 @@ local function remove_temp_file(path)
   local ok,result=pcall(os.remove,path)
   return ok and result and true or false
 end
-local TEMP_DELETE_QUEUE_LIMIT=128
-local function queue_temp_delete(path)
-  if not temp_file_exists(path) or A.tempDeletePending[path] then return end
-  local count,oldest_path,oldest_time=0,nil,math.huge
-  for pending_path,queued_at in pairs(A.tempDeletePending) do
-    count=count+1;queued_at=type(queued_at)=='number' and queued_at or 0
-    if queued_at<oldest_time then oldest_path,oldest_time=pending_path,queued_at end
-  end
-  if count>=TEMP_DELETE_QUEUE_LIMIT and oldest_path then A.tempDeletePending[oldest_path]=nil end
-  A.tempDeletePending[path]=R.time_precise()
-end
 local function retry_temp_deletes(force)
   local now=R.time_precise()
   if not force and now<(A.tempDeleteRetryAt or 0) then return end
@@ -3927,47 +4024,8 @@ local function retry_temp_deletes(force)
     if remove_temp_file(path) then A.tempDeletePending[path]=nil end
   end
 end
-local function prefix_temp_files(directory,prefix)
-  local files={};local i=0
-  while true do
-    local name=R.EnumerateFiles(directory,i);if not name then break end
-    if name:sub(1,#prefix)==prefix and not name:find('[/\\]') then files[#files+1]=directory..'/'..name end
-    i=i+1
-  end
-  return files
-end
-local function clean_temp(job)
-  if not job then return end
-  if job.file then pcall(function() job.file:close() end);job.file=nil end
-  local paths,seen={},{}
-  local function add(path) if path and path~='' and not seen[path] then seen[path]=true;paths[#paths+1]=path end end
-  add(job.path)
-
-  if job.dir and job.prefix then for _,path in ipairs(prefix_temp_files(job.dir,job.prefix)) do add(path) end end
-  for _,path in ipairs(paths) do if not remove_temp_file(path) then queue_temp_delete(path) end end
-  retry_temp_deletes(true)
-end
-local function human_bytes(bytes)
-  if bytes>=1024^3 then return string.format('%.2f GiB',bytes/1024^3) end
-  return string.format('%.0f MiB',bytes/1024^2)
-end
-local function recover_stale_temp_files(directory)
-  local files={};local bytes=0;local i=0
-  while true do
-    local name=R.EnumerateFiles(directory,i);if not name then break end
-    if name:match('^LoudnessTrace_[%w]+') and not name:find('[/\\]') then
-      local path=directory..'/'..name;files[#files+1]=path
-      local file=io.open(path,'rb')
-      if file then local size=file:seek('end');file:close();if type(size)=='number' then bytes=bytes+size end end
-    end
-    i=i+1
-  end
-  if #files==0 then return end
-  local message=string.format('前回の解析で残った可能性がある一時ファイルを%d件検出しました（合計 %s）。\n\n削除してよろしいですか？\n別のLOUDNESS TRACEが現在解析中の場合だけキャンセルしてください。',#files,human_bytes(bytes))
-  if Language.mb(message,'LOUDNESS TRACE | 一時ファイル回収',1)==1 then
-    for _,path in ipairs(files) do if not remove_temp_file(path) then queue_temp_delete(path) end end
-    retry_temp_deletes(true)
-  end
+local function close_measurement(job)
+  if job and job.offline then Core.offline.close(R,job.offline);job.offline=nil end
 end
 local function trigger_analysis_finish_burst()
   local x,y,w,h
@@ -4002,8 +4060,13 @@ end
 
 local function cancel_job(restoreLive)
   if not A.job then return end
-  local job=A.job; A.job=nil; clean_temp(job)
+  local job=A.job; A.job=nil; close_measurement(job)
   if restoreLive~=false then Live.restore_after_measure(job) end
+end
+local function measurement_status(job)
+  if job.phase=='prepare' then return '解析準備中' end
+  if job.phase=='render' then return 'ドライレンダー解析中' end
+  return string.format('解析中 %d%%',floor(job.progress*100))
 end
 local function measure()
  if not Media.ready(true,true) then return end
@@ -4015,12 +4078,6 @@ local function measure()
   if last-first>12600 then return end
   if A.historyBlocked then Live.message(A.historyProblem or '保存グラフを復元できません。元のデータは保持しています。',true);return end
   local name=source_name()
-  local duration=last-first
-  if duration>TEMP_WARNING_SECONDS then
-    local estimate=duration*48000*Core.layout(A.layout).render*4
-    local message=string.format('長い範囲を解析するため、一時WAVを約 %s 作成します。\n解析中は同程度の空き容量が必要です。続行しますか？\n\n範囲：%.1f分',human_bytes(estimate),duration/60)
-    if Language.mb(message,'LOUDNESS TRACE | 長尺解析',1)~=1 then return end
-  end
   set_graph_track_visible(true)
   local job={project=A.project,first=first,last=last,source=S.source,name=name,progress=0,phase='prepare',resumeLive=Live.enabled,layout=Core.layout(A.layout)}
   A.job=job
@@ -4031,29 +4088,18 @@ local function measure()
     return
   end
   job.co=coroutine.create(function()
-
+    job.phase='render'
     coroutine.yield()
     assert(R.EnumProjects(-1,'')==job.project,'測定開始前にプロジェクトが切り替わりました。')
     local current_first,current_last=R.GetSet_LoopTimeRange2(job.project,false,false,0,0,false)
     assert(math.abs(current_first-first)<=1e-9 and math.abs(current_last-last)<=1e-9,'測定開始前に時間選択が変更されました。')
-    local base=Platform.tempDirectory()
-    job.dir=base:gsub('[/\\]+$','')
-    job.prefix='LoudnessTrace_'..R.genGuid():gsub('[^%w]','')
-    job.phase='render'
-    job.path=Core.render(R,job.project,first,last,job.dir,job.prefix,job.layout)
-    job.renderState=R.GetProjectStateChangeCount(job.project)
-    job.file=assert(io.open(job.path,'rb'),'レンダーがキャンセルされたか、一時音声を開けません。')
-    job.phase='analyze'
-    local deadline=R.time_precise()+.008
+    local deadline=R.time_precise()+.020
     local function tick(p)
       job.progress=p
-      if R.time_precise()>=deadline then coroutine.yield(); deadline=R.time_precise()+.008 end
+      if R.time_precise()>=deadline then coroutine.yield(); deadline=R.time_precise()+.020 end
     end
-    local data=Core.analyze(job.file,last-first,tick,job.layout)
+    local data=Core.offline.measure(R,job,tick)
     data.first,data.last,data.source,data.name=first,last,job.source,name
-    job.file:close(); job.file=nil
-
-    clean_temp(job)
     data=Core.replace_range(A.data,data)
     job.prunedRows=Core.trim_history(data,MAX_HISTORY_ROWS)
     Core.recompute(data,tick)
@@ -4063,14 +4109,14 @@ end
 local function step_job()
   local job=A.job
   if not job then return end
-  if not Media.ready() then return end
+  if job.phase=='prepare' and not Media.ready() then return end
   local ok,err=coroutine.resume(job.co)
   if not ok then
     cancel_job()
     Language.mb(public_error(err),'LOUDNESS TRACE | 解析',0); return
   end
   if coroutine.status(job.co)=='dead' then
-    clean_temp(job); A.job=nil
+    close_measurement(job); A.job=nil
     if R.EnumProjects(-1,'')~=job.project then return end
     trigger_analysis_finish_burst()
     local changed=R.GetProjectStateChangeCount(A.project)~=job.renderState
@@ -4079,6 +4125,8 @@ local function step_job()
     collectgarbage('step',800)
     A.stale=changed; A.revision=A.revision+1; A.baseline=R.GetProjectStateChangeCount(A.project)
     if not saved then Live.dirty=true;Language.mb(public_error(why),'LOUDNESS TRACE | 保存',0) end
+    Live.notice='解析完了：高速解析（一時WAVなし）'
+    Live.noticeBad=false
     Live.restore_after_measure(job)
   end
 end
@@ -4666,7 +4714,7 @@ local function collapsed_controller()
   disc(15,16,A.job and 4.2 or 3.4,C.accent,.055+.045*pulse)
   disc(15,16,1.7,A.job and C.ice or C.mint,A.job and .92 or .72)
   text('LOUDNESS TRACE',28,7,12.2,C.text,145,3,true)
-  local state=A.job and ('ANALYZING  '..floor(A.job.progress*100)..'%') or (Live.enabled and 'LIVE / '..(Live.phase=='writing' and 'RECORDING' or 'WAIT') or 'TRACE ACTIVE')
+  local state=A.job and measurement_status(A.job) or (Live.enabled and 'LIVE / '..(Live.phase=='writing' and 'RECORDING' or 'WAIT') or 'TRACE ACTIVE')
   text(state,29,25,7.7,(A.job or Live.enabled) and C.ice or C.faint,140,3,true)
   fold_control('expand',78,39,48,16,false,expand_window)
   Live.draw_button(183,15,60,28,true)
@@ -4675,7 +4723,7 @@ local function collapsed_controller()
     COMPACT_MEASURE_X,COMPACT_MEASURE_Y,COMPACT_MEASURE_W,COMPACT_MEASURE_H,
     function() if A.job then cancel_job() else measure() end end,
     true,false,A.job and 'CANCEL' or 'ANALYZE')
-  if A.job then
+  if A.job and A.job.phase=='analyze' then
     rect(COMPACT_MEASURE_X,COMPACT_MEASURE_Y+COMPACT_MEASURE_H+2,
       COMPACT_MEASURE_W*A.job.progress,2,C.ice,.86)
   end
@@ -4831,14 +4879,14 @@ local function controller()
 
   button('clear','グラフをクリア',24,555,126,32,function() clear_measurement() end,false,false,nil,'gold')
   Live.draw_button(180,554,146,34,false)
-  button('measure',A.job and ('解析を中止  '..floor(A.job.progress*100)..'%') or '選択範囲を解析',356,550,266,42,function()
+  button('measure',A.job and (A.job.phase=='analyze' and ('解析を中止  '..floor(A.job.progress*100)..'%') or measurement_status(A.job)) or '選択範囲を解析',356,550,266,42,function()
     if A.job then cancel_job() else measure() end
   end,true,false,A.job and 'CANCEL' or 'ANALYZE')
-  if A.job then rect(356,594,266*A.job.progress,2,C.ice,.8) end
+  if A.job and A.job.phase=='analyze' then rect(356,594,266*A.job.progress,2,C.ice,.8) end
   fold_control('collapse',(W-64)*.5,603,64,18,true,function() A.requestFold=true end)
 
   local status,bad
-  if not A.job and (Live.enabled or Live.noticeBad) then status,bad=Live.status() else status=A.job and string.format('解析中 %d%%',math.floor(A.job.progress*100)) or (A.stale and 'プロジェクトが変更されています。再解析してください。' or (A.data and '解析結果を表示しています。' or '時間範囲を選択してください。'));bad=A.stale end
+  if not A.job and (Live.enabled or Live.noticeBad or (Live.notice and not A.stale)) then status,bad=Live.status() else status=A.job and measurement_status(A.job) or (A.stale and 'プロジェクトが変更されています。再解析してください。' or (A.data and '解析結果を表示しています。' or '時間範囲を選択してください。'));bad=A.stale end
   BLT.footer(status,bad,W,H+22,VERSION)
   inputs_mouse();custom_titlebar()
 end
@@ -4886,6 +4934,10 @@ end
 
 local _,_,sectionID,commandID=R.get_action_context()
 local function close()
+ if Core.offline.active then
+  local cleared,why=pcall(Core.offline.close,R,Core.offline.active)
+  if not cleared then BLT.logError(why)end
+ end
  local ok,err=xpcall(function()
   if A.closed then return end; A.closed=true
   clear_loudness_tooltip()
@@ -4925,8 +4977,7 @@ R.atexit(close)
 -- Application lifecycle
 local function startup()
   Live.prepare_install()
-  local tempDirectory=(Platform.tempDirectory()):gsub('[/\\]+$','')
-  recover_stale_temp_files(tempDirectory)
+
   A.gdiFont=R.JS_GDI_CreateFont(14,400,0,false,false,false,Platform.graphFont)
   A.font=R.JS_LICE_CreateFont()
   if not A.gdiFont or not A.font then error("グラフ用フォントを作成できません。") end
@@ -4988,8 +5039,11 @@ local function frame()
   local consumed=edit_key(k)
   if k==13 and not consumed then if A.job then cancel_job() else measure() end; redraw_dirty=true end
   local had_job=A.job~=nil
+  local previous_phase=A.job and A.job.phase
   step_job()
-  if had_job~=(A.job~=nil) then redraw_dirty=true end
+  if had_job~=(A.job~=nil) or previous_phase~=(A.job and A.job.phase) then
+    redraw_dirty=true;next_draw_time=0
+  end
   Live.tick(now)
   local transition_active=A.windowTransition~=nil
   step_window_transition(now)
