@@ -1,5 +1,5 @@
 -- @description MINIMAL INFO PANEL
--- @version 0.1.35
+-- @version 0.1.36
 -- @author Balrulu
 -- @provides
 --   . > ../
@@ -2165,6 +2165,37 @@ local fields={{key='name',label='名前'}, {key='length',label='長さ',width=13
 -- REAPER's projpeaksgain is a linear display multiplier, not item audio gain.
 -- Keep this view control outside item snapshots, presets, and project Undo edits.
 local PeakZoom={key='projpeaksgain',min=0,max=36.1,width=90,gap=18,nextPoll=0}
+PeakZoom.modes={
+ {42301,'通常の波形','Normal peaks'},
+ {42073,'スペクトル波形','Spectral peaks'},
+ {43145,'ラウドネス波形（LUFS-M）','Loudness peaks (LUFS-M)'},
+ {43147,'ラウドネス波形（LUFS-S）','Loudness peaks (LUFS-S)'},
+ {43146,'ラウドネスグラフ（LUFS-M）','Loudness graph (LUFS-M)'},
+ {43148,'ラウドネスグラフ（LUFS-S）','Loudness graph (LUFS-S)'},
+ {42294,'スペクトログラム','Spectrogram'},
+ {42295,'通常の波形 ＋ スペクトログラム','Normal peaks + spectrogram'},
+ {43207,'スペクトル波形 ＋ ラウドネスグラフ（LUFS-M）','Spectral peaks + loudness graph (LUFS-M)'},
+ {43208,'スペクトル波形 ＋ ラウドネスグラフ（LUFS-S）','Spectral peaks + loudness graph (LUFS-S)'},
+ {43209,'スペクトル波形 ＋ スペクトログラム','Spectral peaks + spectrogram'},
+}
+function PeakZoom.menu()
+ WheelUndo.finish();PeakZoom.drag=nil
+ local project=R.EnumProjects(-1,'');local names,commands={},{}
+ for _,mode in ipairs(PeakZoom.modes)do
+  local state=R.GetToggleCommandStateEx(0,mode[1])
+  if state>=0 then
+   names[#names+1]=(state==1 and '!'or '')..mode[Language.code=='JP' and 2 or 3]
+   commands[#commands+1]=mode[1]
+  end
+ end
+ if #commands==0 then return end
+ gfx.x=gfx.mouse_x;gfx.y=gfx.mouse_y
+ local command=commands[gfx.showmenu(table.concat(names,'|'))]
+ if command and project==R.EnumProjects(-1,'') and R.GetToggleCommandStateEx(0,command)~=1 then
+  R.Main_OnCommand(command,0);R.UpdateArrange()
+ end
+ PeakZoom.poll(true);wake_visuals()
+end
 function PeakZoom.supported()
  return (type(R.SNM_GetDoubleConfigVarEx)=='function' or type(R.SNM_GetDoubleConfigVar)=='function')
     and (type(R.SNM_SetDoubleConfigVarEx)=='function' or type(R.SNM_SetDoubleConfigVar)=='function')
@@ -2247,6 +2278,7 @@ function PeakZoom.capture(cap,down)
 end
 function PeakZoom.input(cap,down,right)
  if gesture or not PeakZoom.at(gfx.mouse_x,gfx.mouse_y) then return false end
+ if right and not A.rightLast then PeakZoom.menu();return true end
  local wheel=gfx.mouse_wheel or 0
  if (down and not downLast) or wheel~=0 then
   WheelUndo.finish();PeakZoom.poll(true)
