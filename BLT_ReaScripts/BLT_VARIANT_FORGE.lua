@@ -1,5 +1,5 @@
 -- @description VARIANT FORGE
--- @version 0.5.31
+-- @version 0.5.36
 -- @author Balrulu
 -- @provides
 --   . > ../
@@ -519,6 +519,9 @@ local LanguageCatalog={en={
  ["EQのパラメーター単位を取得できません。"]="Cannot read EQ parameter unit.",
  ["EQパラメーターを設定できません。"]="Cannot set EQ parameter.",
  ["ReaEQ (Cockos) を追加できません。"]="Cannot add ReaEQ (Cockos).",
+ ["ReaEQ設定を読み取れません。"]="Cannot read ReaEQ state.",
+ ["未対応のReaEQ設定形式です。"]="Unsupported ReaEQ state format.",
+ ["ReaEQのバンド数を設定できません。"]="Cannot configure ReaEQ bands.",
  ["ReaEQの初期状態を設定できません。"]="Cannot initialize ReaEQ.",
  ["TEXTURE EQの焼き込みに必要なREAPER APIを利用できません。"]="REAPER API required to bake TEXTURE EQ is unavailable.",
  ["TEXTURE EQのFX位置を確認できません。"]="Cannot identify TEXTURE EQ FX position.",
@@ -581,7 +584,7 @@ local LanguageCatalog={en={
  ["疑似発音数を1段階減らす（1 → ∞）"]="Decrease voice limit one step (1 → ∞)",
  ["全アイテムの疑似発音数を相対的に1段階増やす"]="Increase all voice limits one step relatively",
  ["全アイテムの疑似発音数を相対的に1段階減らす"]="Decrease all voice limits one step relatively",
- ["使用する素材を完全再解析しています。完了後に自動で生成します。"]="Reanalyzing all sources. Generation starts automatically afterward.",
+ ["未解析・更新された素材を解析しています。完了後に自動で生成します。"]="Analyzing new or updated sources. Generation starts automatically afterward.",
  ["%dバリエーション / %dアイテムを作成 · SEED %d%s"]="Created %d variations / %d items · SEED %d%s",
  [" · 素材 %d"]=" · Sources %d",
  ["素材バリエーションの事前解析が完了していません。"]="Source variation pre-analysis is incomplete.",
@@ -1675,7 +1678,7 @@ end
 return B
 end)()
 
-local Core={VERSION='0.5.31',SOURCE_SR=48000,SOURCE_HOP=48,SOURCE_BLOCK=12000,SOURCE_PREVIEW_BINS=1400,SOURCE_MAX_REGIONS=16384,
+local Core={VERSION='0.5.36',SOURCE_SR=48000,SOURCE_HOP=48,SOURCE_BLOCK=12000,SOURCE_PREVIEW_BINS=1400,SOURCE_MAX_REGIONS=16384,
  GENERATED_TAG='P_EXT:BLT_VARIANT_FORGE',TEMP_TAG='P_EXT:BLT_VARIANT_FORGE_TEMP',SECTION='BLT_VARIANT_FORGE',EQ_FIXED_CACHE={}}
 Core.STALE_TEMP_PROJECTS={};Core.RUN_ID='';Core.TEMP_HEARTBEAT_TTL=8;Core.TEMP_HEARTBEAT_KEY='temp_live_registry_v1';Core.temp_heartbeat_at=0
 local abs,min,max,floor,ceil=math.abs,math.min,math.max,math.floor,math.ceil
@@ -1839,20 +1842,22 @@ function Core.item_info(project,item)
   tracknum=R.GetMediaTrackInfo_Value(track,'IP_TRACKNUMBER'),takeindex=R.GetMediaItemTakeInfo_Value(take,'IP_TAKENUMBER'),
   generated=generated or '',temp=temp or ''}
 end
-function Core.items_from_refs(project,refs)
- local list={}
+function Core.items_from_refs(project,refs,skip_unsupported)
+ local list={};local rejected
  for _,item in ipairs(refs or {}) do
-  local info,err=Core.item_info(project,item);if not info then return nil,err end
-  list[#list+1]=info
+  local info,err=Core.item_info(project,item)
+  if info then list[#list+1]=info
+  elseif not skip_unsupported then return nil,err
+  else rejected=rejected or err end
  end
  table.sort(list,function(a,b) if a.tracknum~=b.tracknum then return a.tracknum<b.tracknum end;if a.pos~=b.pos then return a.pos<b.pos end;return a.guid<b.guid end)
- if #list==0 then return nil,'元になる音声またはMIDIアイテムを選択してください。' end
+ if #list==0 then return nil,rejected or '元になる音声またはMIDIアイテムを選択してください。' end
  return list
 end
 function Core.selection(project)
  local refs={}
  for i=0,R.CountSelectedMediaItems(project)-1 do refs[#refs+1]=R.GetSelectedMediaItem(project,i) end
- return Core.items_from_refs(project,refs)
+ return Core.items_from_refs(project,refs,true)
 end
 function Core.target_fingerprint(project,item)
  if not item or not R.ValidatePtr2(project,item,'MediaItem*') then return nil end
@@ -1962,6 +1967,15 @@ function Core.source_eligible(v)
  if v.source_len>3600 then return false,'ソースが60分を超えています' end
  return true
 end
+function Core.source_file_stamp(path)
+ if type(R.JS_File_Stat)~='function' or not path or path=='' then return nil end
+ local ok,rv,size,accessed,modified,created,device,special,inode=pcall(R.JS_File_Stat,path)
+ if not ok or rv~=0 or not finite(size) or type(modified)~='string' or modified=='' then return nil end
+ return table.concat({tostring(size),modified,tostring(created),tostring(device),tostring(inode)},'|')
+end
+function Core.source_cache_reusable(cached,stamp)
+ return cached and (cached.manual_regions or (not cached.error and stamp~=nil and cached.file_stamp==stamp))
+end
 function Core.source_cache_key(v)
  return table.concat({v.file or '',string.format('%.6f',v.source_len or 0),tostring(v.analysis_channels or 0),tostring(v.channel_mode or 0),string.format('%.9f',v.analysis_gain or 1)},'|')
 end
@@ -2048,7 +2062,7 @@ function Core.source_scan_start(project,v)
  if old_source and old_source~=scan_source then pcall(R.PCM_Source_Destroy,old_source) end
  R.SetMediaItemTakeInfo_Value(take,'D_STARTOFFS',0);R.SetMediaItemTakeInfo_Value(take,'D_PLAYRATE',1);R.SetMediaItemTakeInfo_Value(take,'D_PITCH',0);R.SetMediaItemTakeInfo_Value(take,'B_PPITCH',0);R.SetMediaItemTakeInfo_Value(take,'I_CHANMODE',v.channel_mode or 0);R.SetMediaItemTakeInfo_Value(take,'D_VOL',1)
  R.UpdateItemInProject(item);R.PreventUIRefresh(-1)
- local j={project=project,track=v.track,temp_item=item,temp_take=take,info=v,offset=0,total=ceil(v.source_len*Core.SOURCE_SR),regions={},ring={},ring_index=1,ring_sum=0,fast_ring={},fast_index=1,fast_sum=0,bin_energy=0,bin_peak=0,bin_samples=0,bin_index=0,states={},opened=nil,quiet=nil,anchor=nil,preview={},preview_max=0,preview_scale=Core.SOURCE_PREVIEW_BINS/max(1,ceil(v.source_len*1000))}
+ local j={project=project,track=v.track,temp_item=item,temp_take=take,info=v,file_stamp=Core.source_file_stamp(v.file),offset=0,total=ceil(v.source_len*Core.SOURCE_SR),regions={},ring={},ring_index=1,ring_sum=0,fast_ring={},fast_index=1,fast_sum=0,bin_energy=0,bin_peak=0,bin_samples=0,bin_index=0,states={},opened=nil,quiet=nil,anchor=nil,preview={},preview_max=0,preview_scale=Core.SOURCE_PREVIEW_BINS/max(1,ceil(v.source_len*1000))}
  for c=1,v.analysis_channels do j.states[c]={0,0,0,0} end
  local buffer_ok,buffer=pcall(R.new_array,Core.SOURCE_BLOCK*v.analysis_channels)
  if not buffer_ok or not buffer then Core.source_cleanup(j);error('素材解析用バッファを作成できません。',0) end
@@ -2105,9 +2119,12 @@ function Core.source_scan_step(j)
  end
  j.offset=j.offset+count
  if j.offset>=j.total then
+  if j.file_stamp and Core.source_file_stamp(j.info.file)~=j.file_stamp then
+   Core.source_cleanup(j);error('解析中に音声が変更されました。',0)
+  end
   if j.bin_samples>0 then source_finish_bin(j) end
   if j.opened then source_finish_region(j,j.opened,j.info.source_len,j.anchor);j.opened=nil end
-  local result={regions=j.regions,detected=#j.regions,settings=tcopy(Core.SOURCE_DETECT),preview=j.preview,preview_max=j.preview_max or 0,source_len=j.info.source_len};Core.source_cleanup(j);j.done=true;return true,result
+  local result={regions=j.regions,detected=#j.regions,settings=tcopy(Core.SOURCE_DETECT),preview=j.preview,preview_max=j.preview_max or 0,source_len=j.info.source_len,file_stamp=j.file_stamp};Core.source_cleanup(j);j.done=true;return true,result
  end
  return false
 end
@@ -3040,21 +3057,60 @@ function Core.add_reaeq(take)
  if not R.TakeFX_SetPresetByIndex(take,fx,-2) then error('ReaEQの初期状態を設定できません。',0) end
  return fx
 end
-function Core.add_texture_eq(take,bands)
- bands=bands or {};local added=0
- for base=1,#bands,2 do
-  local fx=Core.add_reaeq(take);added=added+1
-  local a=bands[base];local b=bands[base+1]
-  if a then
-   Core.set_eq_value(take,fx,3,a.freq,'freq');Core.set_eq_value(take,fx,4,a.gain,'gain');Core.set_eq_value(take,fx,5,a.bw,'bw')
+local EQ_BASE64='ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/'
+local function eq_decode(text)
+ local out,word,bits={},0,0
+ for c in text:gmatch('.') do
+  if c~='=' and not c:match('%s') then
+   local index=EQ_BASE64:find(c,1,true);assert(index,'ReaEQ設定を読み取れません。')
+   word=(word<<6)|(index-1);bits=bits+6
+   if bits>=8 then bits=bits-8;out[#out+1]=string.char((word>>bits)&255);word=word&((1<<bits)-1) end
   end
-  if b then
-   Core.set_eq_value(take,fx,6,b.freq,'freq');Core.set_eq_value(take,fx,7,b.gain,'gain');Core.set_eq_value(take,fx,8,b.bw,'bw')
-  end
-  pcall(R.TakeFX_SetNamedConfigParm,take,fx,'renamed_name',#bands>2 and ('BLT Variant Forge Texture EQ '..ceil(base/2)) or 'BLT Variant Forge Texture EQ')
-  Core.hide_take_fx(take,fx)
  end
- return added
+ return table.concat(out)
+end
+local function eq_encode(raw)
+ local out={}
+ for i=1,#raw,3 do
+  local a,b,c=raw:byte(i,i+2);local n=(a<<16)|((b or 0)<<8)|(c or 0)
+  out[#out+1]=EQ_BASE64:sub((n>>18)+1,(n>>18)+1)..EQ_BASE64:sub(((n>>12)&63)+1,((n>>12)&63)+1)
+   ..(b and EQ_BASE64:sub(((n>>6)&63)+1,((n>>6)&63)+1)or '=')..(c and EQ_BASE64:sub((n&63)+1,(n&63)+1)or '=')
+ end
+ return table.concat(out)
+end
+function Core.configure_texture_bands(take,fx,count)
+ local ok,text=R.TakeFX_GetNamedConfigParm(take,fx,'vst_chunk')
+ assert(ok and type(text)=='string','ReaEQ設定を読み取れません。')
+ local raw=eq_decode(text)
+ -- ReaEQ state v33: two uint32 header fields, 33 bytes per band, then global settings.
+ -- Keep the installed plugin's default bell-band record and global settings intact.
+ assert(#raw>=8,'未対応のReaEQ設定形式です。')
+ local version,original=string.unpack('<I4I4',raw)
+ assert(version==33 and original>=2 and original<=256 and #raw>=8+original*33+24,'未対応のReaEQ設定形式です。')
+ local bell=raw:sub(42,74);local kind,enabled=string.unpack('<I4I4',bell)
+ assert(kind==8 and enabled==1,'未対応のReaEQ設定形式です。')
+ local expanded=string.pack('<I4I4',version,count)..bell:rep(count)..raw:sub(9+original*33)
+ assert(R.TakeFX_SetNamedConfigParm(take,fx,'vst_chunk',eq_encode(expanded)),'ReaEQのバンド数を設定できません。')
+ assert(R.TakeFX_GetNumParams(take,fx)==count*3+4,'ReaEQのバンド数を設定できません。')
+ local valid,saved=R.TakeFX_GetNamedConfigParm(take,fx,'vst_chunk')
+ assert(valid,'ReaEQのバンド数を設定できません。')
+ local check=eq_decode(saved)
+ assert(#check>=8 and select(2,string.unpack('<I4I4',check))==count,'ReaEQのバンド数を設定できません。')
+end
+function Core.add_texture_eq(take,bands,checkpoint)
+ bands=bands or {};if #bands==0 then return 0 end
+ local fx=Core.add_reaeq(take)
+ Core.configure_texture_bands(take,fx,#bands)
+ for i,band in ipairs(bands)do
+  local param=(i-1)*3
+  Core.set_eq_value(take,fx,param,band.freq,'freq')
+  Core.set_eq_value(take,fx,param+1,band.gain,'gain')
+  Core.set_eq_value(take,fx,param+2,band.bw,'bw')
+  if checkpoint then checkpoint(i/#bands)end
+ end
+ pcall(R.TakeFX_SetNamedConfigParm,take,fx,'renamed_name','BLT Variant Forge Texture EQ')
+ Core.hide_take_fx(take,fx)
+ return 1
 end
 local function media_path_key(path)
  if type(path)~='string' or path=='' then return nil end
@@ -3466,14 +3522,15 @@ function Core.apply(snapshot,groups,s,checkpoint,restore_selection)
  R.Undo_BeginBlock2(project);R.PreventUIRefresh(1);local fx_ui_setting=Core.suppress_new_fx_windows()
  local total,done=0,0;for _,g in ipairs(groups) do total=total+#g.rows end
  local pause_at=0
- local function pause()
-  if not checkpoint or (done>0 and done<total and R.time_precise()<pause_at) then return end
-  Core.restore_new_fx_windows(fx_ui_setting);R.PreventUIRefresh(-1)
-  local called,continue,reason=pcall(checkpoint,done/max(1,total))
-  R.PreventUIRefresh(1);fx_ui_setting=Core.suppress_new_fx_windows()
+ local function pause(partial)
+  if not checkpoint or (done<total and R.time_precise()<pause_at) then return end
+  -- Briefly release refresh for visible progress and cancellation, at most 10 Hz.
+  R.PreventUIRefresh(-1)
+  local called,continue,reason=pcall(checkpoint,min(1,(done+(partial or 0))/max(1,total)))
+  R.PreventUIRefresh(1)
   if not called then error(continue,0) end
   if not continue then error(reason or '生成を中止しました。',0) end
-  pause_at=R.time_precise()+.008
+  pause_at=R.time_precise()+.1
  end
  local ok,err=xpcall(function()
   pause()
@@ -3497,6 +3554,7 @@ function Core.apply(snapshot,groups,s,checkpoint,restore_selection)
    local created_entry={item=item,track=v.track,bake_files={}};created[#created+1]=created_entry
    if not R.SetItemStateChunk(item,Core.clone_chunk(v.chunk,R.genGuid),false) then error('アイテムを複製できません。',0) end
    local take=R.GetTake(item,v.takeindex);if not take then error('複製Takeを取得できません。',0) end;R.SetActiveTake(take)
+   pause(.1)
    local output_len=row.render_len or row.len
    if not R.SetMediaItemInfo_Value(item,'D_POSITION',row.pos) or not R.SetMediaItemInfo_Value(item,'D_LENGTH',output_len) then error('位置または長さを設定できません。',0) end
    R.SetMediaItemInfo_Value(item,'I_GROUPID',0);R.SetMediaItemInfo_Value(item,'C_LOCK',0)
@@ -3550,14 +3608,16 @@ function Core.apply(snapshot,groups,s,checkpoint,restore_selection)
    end
    set_take('D_PLAYRATE',row.playrate);set_take('B_PPITCH',row.ppitch);set_take('D_PITCH',row.pitch)
    if row.curve or row.vibrato then Core.pitch_curve(project,item,take,row) end
+   pause(.4)
    if row.volume then
     if v.is_midi then if not R.SetMediaItemInfo_Value(item,'D_VOL',row.volume) then error('MIDI音量を設定できません。',0) end else set_take('D_VOL',row.volume) end
    end
    if row.tremolo then Core.apply_tremolo(project,item,take,row) end
    if row.eq and #row.eq>0 then
-    created_entry.texture_fx_count=Core.add_texture_eq(take,row.eq)
+    created_entry.texture_fx_count=Core.add_texture_eq(take,row.eq,function(fraction)pause(.5+.35*fraction)end)
    end
    if row.tone then Core.add_tone_eq(take,row.tone) end
+   pause(.9)
    if row.pan then set_take('D_PAN',row.pan) end
    local generated_name=(row.source_track_item and row.source_name and row.source_name~='') and row.source_name or v.name
    R.GetSetMediaItemTakeInfo_String(take,'P_NAME',string.format('%s · VAR %02d',generated_name,g.index),true)
@@ -3611,7 +3671,7 @@ local ITEM_STATE_LIMIT=512
 local TRACK_ANCHOR_LIMIT=512
 local A={project=R.EnumProjects(-1,''),items={},poll=0,status='',warning=false,job=nil,progress=0,closed=false,closing=false,last_created=nil,item_scroll=0,matrix_selected={},matrix_anchor=nil,wave_guid=nil,wave_region_key=nil,wave_region_index=nil,wave_region_selection={},source_wave_drag=nil,source_wave_geom=nil,source_wave_view={key=nil,zoom=1,start=0},source_wave_scroll_drag=nil,target_lock=nil,target_lock_poll=0,texture_bank={},texture_preview_index=1,scroll_drag=nil,field_drag=nil,source_cache={},track_anchor_cache={},source_queue={},source_queue_i=1,source_queue_done=false,source_job=nil,source_progress=0,source_execute_pending=nil,source_auto={},selection_signature='',track_candidate_pools={},item_by_guid={},persist_dirty=false,persist_at=0,pending_bake_delete=Core.load_pending_bake_deletes(),pending_bake_delete_at=0,pending_bake_retry_delay=2,stale_temp_projects=Core.STALE_TEMP_PROJECTS,stale_temp_retry_at=0,bake_scan_record=nil,bake_scan_revision=nil,bake_scan_count=0,apply={lock=lock_apply,items={}}}
 A.source_cache_serial=0;A.item_state_serial=0;A.item_state_used={}
-local W,H=1180,1098
+local W,H=1180,1044
 local C={
   bg={0.018,0.030,0.055}, bg2={0.030,0.090,0.180},
   panel={0.040,0.068,0.110}, panel2={0.055,0.125,0.205},
@@ -4542,10 +4602,10 @@ local FEATURE_COLUMNS={
 local VOICE_MAX=128
 local ITEM_DEFAULT={voice_limit=0,source_mode=1,pitch_global=false,pitch_curve=false,vibrato=false,tremolo=false,timing=false,volume=false,pan=false,eq_texture=false,eq_tone=false,source=false}
 local WAVE_X,WAVE_Y,WAVE_W,WAVE_H=20,538,1140,168
-local MATRIX_X,MATRIX_Y,MATRIX_W,MATRIX_H=20,716,1140,286
+local MATRIX_X,MATRIX_Y,MATRIX_W,MATRIX_H=20,716,1140,252
 local MATRIX_NAME_W=352
 local MATRIX_HEADER_H,MATRIX_ALL_H,MATRIX_LOCK_H,MATRIX_ROW_H=31,32,34,34
-local MATRIX_VISIBLE=5
+local MATRIX_VISIBLE=4
 local MATRIX_SCROLL_W=13
 local click_mods=0
 
@@ -5462,21 +5522,25 @@ function UI.restore_item_selection(project,items,do_refresh)
  for _,item in ipairs(items or {}) do if R.ValidatePtr2(project,item,'MediaItem*') then R.SetMediaItemSelected(item,true) end end
  R.UpdateArrange();if do_refresh then UI.refresh() end
 end
-function UI.begin_fresh_source_execute(restore_selection)
- local requested={};local count,scan_count=0,0
+function UI.begin_source_execute(restore_selection)
+ local requested,stamps,invalidated={},{},{};local count,scan_count=0,0
  UI.stop_source_job()
  for _,v in ipairs(A.items or {}) do
   if UI.source_requested(A.apply,v) then
    UI.prepare_source_info(v)
    local cached=v.source_key and A.source_cache[v.source_key] or nil
-   if v.source_key and not (cached and cached.manual_regions) then A.source_cache[v.source_key]=nil;scan_count=scan_count+1 end
+   local stamp=stamps[v.file]
+   if stamp==nil then stamp=Core.source_file_stamp(v.file)or false;stamps[v.file]=stamp end
+   if v.source_key and not invalidated[v.source_key] and not Core.source_cache_reusable(cached,stamp or nil) then
+    A.source_cache[v.source_key]=nil;invalidated[v.source_key]=true;scan_count=scan_count+1
+   end
    requested[v.guid]=true;count=count+1
   end
  end
  if count==0 or scan_count==0 then return false end
  A.source_execute_pending={project=A.project,selection_signature=A.selection_signature,target_locked=A.target_lock~=nil,requested=requested,restore_selection=restore_selection}
  UI.rebuild_source_queue();UI.source_queue_start_next()
- UI.notice('使用する素材を完全再解析しています。完了後に自動で生成します。')
+ UI.notice('未解析・更新された素材を解析しています。完了後に自動で生成します。')
  return true
 end
 function UI.frozen_apply() return tcopy(A.apply) end
@@ -5537,7 +5601,7 @@ function UI.finish_generation(j)
  if not count then UI.queue_bake_deletes(cleanup_failed,j.snapshot.project);A.job=nil;A.progress=0;UI.refresh();UI.notice(j.cancelled and rollback_ok and '生成を中止し、今回のコピーを削除しました。' or created_or_err,not (j.cancelled and rollback_ok));return nil end
  A.job=nil;A.progress=0;local refs={};for _,v in ipairs(j.snapshot.items) do refs[#refs+1]=v.item end;A.last_created={project=j.snapshot.project,items=created_or_err or {},count=count,seed=j.settings.seed,source_refs=refs,free_before=free_before or {},original_before=original_before or {},undo_desc='BLT Variant Forge: '..#groups..' variations'}
  UI.target_lock_rebase()
- UI.restore_item_selection(j.snapshot.project,A.target_lock and (j.restore_selection or {}) or refs,false);UI.refresh()
+ UI.restore_item_selection(j.snapshot.project,j.restore_selection or refs,false)
  local src_on=0;for _,v in ipairs(j.snapshot.items) do if UI.source_requested(j.apply,v) then src_on=src_on+1 end end
  UI.notice(string.format('%dバリエーション / %dアイテムを作成 · SEED %d%s',#groups,count,j.settings.seed,src_on>0 and string.format(' · 素材 %d',src_on) or ''),false)
  return true
@@ -5577,10 +5641,8 @@ function UI.execute(source_refresh_done)
  end
  local ok,err=Core.validate(S);if not ok then UI.notice(err,true);return end
  UI.refresh();if #A.items==0 then UI.notice(A.selection_error,true);return end;if #A.items*S.count>2000 then UI.notice('合計2000アイテム以下にしてください。',true);return end
- local source_selection={};for _,v in ipairs(A.items) do source_selection[#source_selection+1]=v.item end
- local visible_selection=source_selection
- if A.target_lock then visible_selection={};for i=0,R.CountSelectedMediaItems(A.project)-1 do visible_selection[#visible_selection+1]=R.GetSelectedMediaItem(A.project,i) end end
- if not source_refresh_done and UI.begin_fresh_source_execute(A.target_lock and nil or source_selection) then return end
+ local visible_selection={};for i=0,R.CountSelectedMediaItems(A.project)-1 do visible_selection[#visible_selection+1]=R.GetSelectedMediaItem(A.project,i) end
+ if not source_refresh_done and UI.begin_source_execute(visible_selection) then return end
  local pending=UI.source_preflight_message();if pending then UI.notice(pending,true);return end
  if A.source_job then UI.notice('素材バリエーションの事前解析中です。',true);return end
  if not S.seed_lock then S.seed=Core.random_seed();UI.persist_later() end
@@ -5759,7 +5821,7 @@ function UI.work_step()
   A.source_progress=j.total>0 and clamp(j.offset/j.total,0,1) or 0
   if done then
    local key=j.info.source_key or Core.source_cache_key(j.info);UI.source_cache_set(key,result or {regions={}});if j.cleanup_failed and j.project then A.stale_temp_projects[j.project]=true end;A.source_job=nil;A.source_progress=0;A.revision=R.GetProjectStateChangeCount(A.project)
-   for _,v in ipairs(A.items or {}) do UI.source_status_from_cache(v) end
+   for _,v in ipairs(A.items or {}) do if v.source_key==key then UI.source_status_from_cache(v) end end
    UI.source_queue_start_next();return
   end
  until R.time_precise()>=deadline
@@ -6498,12 +6560,12 @@ function UI.draw()
  local valid,err=Core.validate(S);local auto_status=A.source_job and string.format('素材全体をラウドネス解析中… %d%%',floor((A.source_progress or 0)*100+.5)) or nil
  local status=A.status~='' and A.status or (not valid and err or A.selection_error or auto_status or (#A.items==0 and '音声またはMIDIアイテムを選択してください。' or ''))
  local enabled=A.job~=nil or A.source_execute_pending~=nil or (not A.source_job and #A.items>0 and valid~=nil and #A.items*S.count<=2000)
- local can_regen=UI.regeneration_ready();local pending_texture=A.pending_texture_count();local can_bake=pending_texture>0 and not A.job and not A.source_job
+ local can_regen=UI.regeneration_ready();local pending_texture=not A.job and not A.source_job and A.pending_texture_count()or 0;local can_bake=pending_texture>0
  local lock_on=A.target_lock~=nil;local lock_enabled=not A.job and not A.source_job and not A.source_execute_pending and (lock_on or #A.items>0)
- UI.small_button('target_lock',lock_on and 'ロック解除' or '対象をロック',250,1050,132,31,UI.toggle_target_lock,lock_on and '対象ロックを解除して、現在の選択へ戻します。' or '現在選択中のアイテムを対象として固定。選択が変わっても対象を維持します。',lock_enabled,true,false)
+ UI.small_button('target_lock',lock_on and 'ロック解除' or '対象をロック',250,996,132,31,UI.toggle_target_lock,lock_on and '対象ロックを解除して、現在の選択へ戻します。' or '現在選択中のアイテムを対象として固定。選択が変わっても対象を維持します。',lock_enabled,true,false)
  local primary_text=A.job and '処理を中止' or (can_regen and 'バリエーションを再生成' or string.format('%d バリエーションを生成',S.count))
- UI.draw_primary_button('execute',primary_text,400,1042,380,46,UI.primary_action,'Enter：生成。SOURCEの事前解析中は完了後に実行できます。',enabled)
- UI.small_button('bake_fx','FX FIX',798,1050,92,31,A.bake_last_texture_fx,'直前生成のTEXTURE EQだけを音声へ焼き込み、FX負荷を軽減',can_bake,false,can_bake)
+ UI.draw_primary_button('execute',primary_text,400,988,380,46,UI.primary_action,'Enter：生成。SOURCEの事前解析中は完了後に実行できます。',enabled)
+ UI.small_button('bake_fx','FX FIX',798,996,92,31,A.bake_last_texture_fx,'直前生成のTEXTURE EQだけを音声へ焼き込み、FX負荷を軽減',can_bake,false,can_bake)
  BLT.footer(status,A.warning or not valid,W,H+22,Core.VERSION);flush_text_queue();UI.custom_titlebar()
 end
 
