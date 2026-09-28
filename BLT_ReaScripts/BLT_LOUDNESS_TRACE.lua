@@ -1,5 +1,5 @@
 -- @description LOUDNESS TRACE
--- @version 0.7.4
+-- @version 0.7.5
 -- @author Balrulu
 -- @provides
 --   . > ../
@@ -123,7 +123,7 @@ end
 local WindowGeometry=create_window_geometry(reaper,gfx)
 
 -- Application / analysis
-local VERSION="0.7.4"
+local VERSION="0.7.5"
 local MAX_HISTORY_ROWS=126000
 local MAX_SAVE_BYTES=12*1024*1024
 local Core = {}
@@ -138,7 +138,17 @@ end
 function Core.time_x(t, first, last, width) return (t-first)/(last-first)*width end
 function Core.x_time(x, first, last, width) return first+x/width*(last-first) end
 function Core.level_y(v, top, bottom, lo, hi)
-  return top+(hi-Core.clamp(v,lo,hi))/(hi-lo)*(bottom-top)
+  return top+(hi-v)/(hi-lo)*(bottom-top)
+end
+function Core.clip_level_line(x1,y1,x2,y2,top,bottom)
+  if (y1<top and y2<top) or (y1>bottom and y2>bottom) then return end
+  local dy=y2-y1
+  if dy==0 then return x1,y1,x2,y2 end
+  local a,b=(top-y1)/dy,(bottom-y1)/dy
+  local first,last=max(0,min(a,b)),min(1,max(a,b))
+  if last<=first then return end
+  local dx=x2-x1
+  return x1+dx*first,Core.clamp(y1+dy*first,top,bottom),x1+dx*last,Core.clamp(y1+dy*last,top,bottom)
 end
 function Core.clip_track(y,h,viewport)
   local top=max(0,y); local bottom=min(viewport,y+h)
@@ -3144,10 +3154,13 @@ local function chart(width,height,first,last,mx)
                 local left,right=max(ax,px),min(bx,x)
                 if right>left then
                   local slope=(y-py)/(x-px)
-                  lline(left,py+(left-px)*slope,right,py+(right-px)*slope,pathColor,pathAlpha)
+                  local x1,y1,x2,y2=Core.clip_level_line(left,py+(left-px)*slope,right,py+(right-px)*slope,top,bottom)
+                  if x1 then lline(x1,y1,x2,y2,pathColor,pathAlpha) end
                 end
               end
-              if x>=ax and x<=bx then lline(x,yy(low),x,yy(high),color,.85) end
+              if x>=ax and x<=bx and high>=S.lo and low<=S.hi then
+                lline(x,yy(max(low,S.lo)),x,yy(min(high,S.hi)),color,.85)
+              end
               px,py,pbad=x,y,bad
             else px=nil end
           end
