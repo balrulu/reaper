@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<index version="1" name="BLT ReaScripts" commit="c81865e5935c3bf96619c7ed42b94846bf6c0cbf">
+<index version="1" name="BLT ReaScripts" commit="20d0260451c8de96a941a948d300f4a932d39b27">
   <category name="BLT">
     <reapack name="BLT_SPATIAL_FIELD.jsfx" type="effect" desc="BLT SPATIAL FIELD">
       <version name="0.5.0" author="Balrulu" time="2026-09-22T19:24:46Z">
@@ -428,10 +428,14 @@ Save texture references losslessly with a compact shared frequency grid.]]></cha
     </reapack>
   </category>
   <category name="LangPacks">
-    <reapack name="Japanese_add_SWS_kb_edit.ReaperLangPack" type="langpack" desc="日本語 [JP] - For v7.80 + SWS">
+    <reapack name="Japanese_add_SWS_kb_edit.ReaperLangPack" type="langpack" desc="日本語 [JP] - For v7.81 + SWS">
       <version name="7.80.1" author="Balrulu" time="2026-09-23T22:16:07Z">
         <changelog><![CDATA[Japanese translation for REAPER v7.80 + SWS]]></changelog>
         <source>https://github.com/balrulu/reaper/raw/eaf8627a99f3ed6f853e4da93347bbdcac789d03/LangPacks/Japanese_add_SWS_kb_edit.ReaperLangPack</source>
+      </version>
+      <version name="7.81.0" author="Balrulu" time="2026-09-29T03:12:40Z">
+        <changelog><![CDATA[Japanese translation for REAPER v7.81 + SWS]]></changelog>
+        <source>https://github.com/balrulu/reaper/raw/20d0260451c8de96a941a948d300f4a932d39b27/LangPacks/Japanese_add_SWS_kb_edit.ReaperLangPack</source>
       </version>
     </reapack>
   </category>
