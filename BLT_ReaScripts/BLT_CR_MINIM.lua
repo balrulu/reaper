@@ -1,5 +1,5 @@
 -- @description CR MINIM
--- @version 0.5.10
+-- @version 0.5.11
 -- @author Balrulu
 -- @provides
 --   . > ../
@@ -9,6 +9,157 @@
 --   BLT SERIES Beta TEST UPLOAD
 
 -- BLT preset transfer limits 1.1.0. Embedded; no runtime dependency.
+-- BEGIN BLT COMMON CHROME 1.0.0 (generated from _shared/BLT_Chrome.lua)
+local BLTChrome=(function()
+local M={}
+function M.layout(w,fold,compact)
+ local b=M.layoutCache
+ if b and b.width==w and b.hasFold==fold and b.compact==compact then return b end
+ b={width=w,hasFold=fold,compact=compact,closeX=w-38,resetX=w-72,themeX=w-106}
+ b.foldX=fold and b.themeX-34 or nil;b.languageX=(b.foldX or b.themeX)-26
+ b.nextX=b.languageX-20;b.prevX=b.nextX-20;b.presetX=b.prevX-84
+ if compact then
+  b.resetX=b.closeX;b.themeX=w-72;b.foldX=w-106
+  b.languageX=w+500;b.nextX=w+500;b.prevX=w+500;b.presetX=w+500
+ end
+ b.close,b.reset,b.theme,b.language=b.closeX,b.resetX,b.themeX,b.languageX
+ b.next,b.prev,b.preset=b.nextX,b.prevX,b.presetX
+ M.layoutCache=b;return b
+end
+function M.hit(b,x,y,w,h)
+ if x<0 or x>=w or y<0 or y>=h then return nil end
+ if x>=b.closeX then return 'close' end
+ if not b.compact and x>=b.resetX then return 'reset' end
+ if x>=b.themeX then return 'theme' end
+ if b.foldX and x>=b.foldX then return 'fold' end
+ if x>=b.languageX then return 'language' end
+ if not b.compact then
+  if x>=b.nextX then return 'next' end
+  if x>=b.prevX then return 'prev' end
+  if x>=b.presetX then return 'preset' end
+ end
+ return 'drag'
+end
+function M.background(C,h,x,w)
+ gfx.set(C.bg[1],C.bg[2],C.bg[3],1);gfx.rect(x,0,w,h,1)
+ gfx.gradrect(x,0,w,h,C.field[1],C.field[2],C.field[3],.72,0,0,0,0,(C.bg[1]-C.field[1])/h,(C.bg[2]-C.field[2])/h,(C.bg[3]-C.field[3])/h,.22/h)
+ gfx.set(C.edge[1],C.edge[2],C.edge[3],.42);gfx.line(x,h-1,x+w,h-1,1)
+end
+function M.draw(p)
+ local C,Chrome,b,w=p.C,p.chrome,p.b,gfx.w
+ local closeX,resetX,chamX,foldX=b.closeX,b.resetX,b.themeX,b.foldX
+ local languageX,presetX,prevX,nextX=b.languageX,b.presetX,b.prevX,b.nextX
+ local closeW,resetW,chamW=38,34,34
+ local hoverClose,hoverReset,hoverCham=p.hot=='close',p.hot=='reset',p.hot=='theme'
+ local hoverLanguage,hoverPreset=p.hot=='language',p.hot=='preset'
+ local hoverPrev,hoverNext,hoverFold=p.hot=='prev',p.hot=='next',p.hot=='fold'
+  if b.inline then M.background(C,Chrome.titleH,0,b.titleEnd);M.background(C,Chrome.titleH,presetX,w-presetX)
+  else M.background(C,Chrome.titleH,0,w) end
+
+  p.barFont()
+  local _,titleHeight=p.metrics(Chrome.titleText)
+  local ty=math.floor((Chrome.titleH-titleHeight)*.5)
+  gfx.set(Chrome.mint[1],Chrome.mint[2],Chrome.mint[3],.88); gfx.x=14; gfx.y=ty; gfx.drawstr(p.fit(Chrome.titleText,math.max(0,(b.titleEnd or (b.compact and b.foldX or presetX))-22)))
+
+  if not b.compact then
+  if hoverPreset or p.presetOpen then
+    gfx.set(C.accent[1],C.accent[2],C.accent[3],.10);gfx.rect(presetX+2,3,78,20,1)
+  end
+  gfx.set(C.edge[1],C.edge[2],C.edge[3],(hoverPreset or hoverPrev or hoverNext) and .9 or .5)
+  gfx.roundrect(presetX+2,3,languageX-presetX-5,20,3,1)
+  gfx.set(C.muted[1],C.muted[2],C.muted[3],.35);gfx.line(languageX-1,6,languageX-1,20)
+  local pc=hoverPreset and Chrome.mint or C.muted
+  gfx.set(pc[1],pc[2],pc[3],hoverPreset and .98 or .8)
+  gfx.roundrect(presetX+10,7,7,8,1,1);gfx.roundrect(presetX+13,10,7,8,1,1)
+  p.barFont()
+  gfx.x=presetX+26;gfx.y=7;gfx.drawstr("PRESET")
+  gfx.line(presetX+67,11,presetX+70,14);gfx.line(presetX+70,14,presetX+73,11)
+  if p.dirty then gfx.set(C.warn[1],C.warn[2],C.warn[3],.9);gfx.circle(presetX+23,6,1.3,1,1) end
+
+  p.arrows=p.arrows or {{},{}}
+  local left,right=p.arrows[1],p.arrows[2]
+  left[1],left[2],left[3]=prevX,hoverPrev,-1;right[1],right[2],right[3]=nextX,hoverNext,1
+  for _,arrow in ipairs(p.arrows) do
+    local ax,hover,direction=arrow[1],arrow[2],arrow[3]
+    if hover then
+      gfx.set(Chrome.mint[1],Chrome.mint[2],Chrome.mint[3],.09);gfx.rect(ax+1,3,18,20,1)
+    end
+    local c=hover and Chrome.mint or C.muted
+    gfx.set(c[1],c[2],c[3],hover and .98 or .8)
+    local cx,cy=ax+10,Chrome.titleH*.5
+    gfx.line(cx-direction*2,cy-4,cx+direction*2,cy,1)
+    gfx.line(cx+direction*2,cy,cx-direction*2,cy+4,1)
+  end
+
+  end
+  if not b.compact or p.compactLanguage then
+  local lc=hoverLanguage and Chrome.mint or C.text
+  gfx.set(lc[1],lc[2],lc[3],hoverLanguage and 1 or .95)
+  p.languageFont()
+  local lw,lh=p.metrics(p.language)
+  gfx.x=languageX+(26-lw)/2;gfx.y=(Chrome.titleH-lh)/2;gfx.drawstr(p.language)
+  end -- full-size preset and language controls
+  if foldX then
+    gfx.set(C.accent2[1],C.accent2[2],C.accent2[3],hoverFold and .98 or .8)
+    local cx,cy=foldX+17,13
+    if p.dockButton then
+      gfx.rect(cx-7,cy-6,14,12,0)
+      if p.docked then gfx.rect(cx-5,cy+1,10,3,1)
+      else gfx.line(cx-5,cy+2,cx+5,cy+2);gfx.line(cx,cy-4,cx,cy);gfx.line(cx-2,cy-2,cx,cy);gfx.line(cx,cy,cx+2,cy-2) end
+    else
+      local d=p.collapsed and 1 or -1
+      gfx.line(cx-6,cy-5,cx+6,cy-5);gfx.line(cx-4,cy-d*3,cx,cy+d);gfx.line(cx,cy+d,cx+4,cy-d*3)
+    end
+  end
+  if hoverCham or p.themeEnabled then
+    local a=hoverCham and .095 or .045
+    gfx.set(C.accent[1],C.accent[2],C.accent[3],a); gfx.rect(chamX,0,chamW,Chrome.titleH,1)
+    gfx.set(C.accent2[1],C.accent2[2],C.accent2[3],hoverCham and .42 or .24)
+    gfx.line(chamX,Chrome.titleH-1,resetX,Chrome.titleH-1,1)
+  end
+  local chx,chy=chamX+chamW*.5,Chrome.titleH*.5
+  local active_a=hoverCham and 1 or (p.themeEnabled and .96 or .85)
+
+  local c1,c2,c3=p.c1,p.c2,p.c3
+
+  gfx.set(c1[1],c1[2],c1[3],active_a)
+  gfx.circle(chx-3.5,chy+2,4.5,1,1)
+
+  gfx.set(c2[1],c2[2],c2[3],active_a*.92)
+  gfx.circle(chx+3.5,chy+2,4.5,1,1)
+
+  gfx.set(c3[1],c3[2],c3[3],active_a*.94)
+  gfx.circle(chx,chy-3.3,4.5,1,1)
+
+  if not b.compact then
+  if hoverReset then
+    gfx.set(Chrome.mint[1],Chrome.mint[2],Chrome.mint[3],.050); gfx.rect(resetX,0,resetW,Chrome.titleH,1)
+    gfx.set(Chrome.mint[1],Chrome.mint[2],Chrome.mint[3],.34); gfx.line(resetX,Chrome.titleH-1,closeX,Chrome.titleH-1,1)
+  end
+  local rcx,rcy=resetX+resetW*.5,Chrome.titleH*.5
+  local rcol=hoverReset and Chrome.mint or C.muted
+  gfx.set(rcol[1],rcol[2],rcol[3],p.docked and .25 or (hoverReset and .98 or .82))
+  gfx.roundrect(rcx-6,rcy-6,12,12,1,1)
+  gfx.line(rcx+3,rcy-3,rcx-3,rcy+3,1)
+  gfx.line(rcx-3,rcy+3,rcx-3,rcy-1,1)
+  gfx.line(rcx-3,rcy+3,rcx+1,rcy+3,1)
+
+  end -- full-size reset control
+  if hoverClose then
+    gfx.set(Chrome.red[1],Chrome.red[2],Chrome.red[3],.10); gfx.rect(closeX,0,closeW,Chrome.titleH,1)
+    gfx.set(Chrome.red[1],Chrome.red[2],Chrome.red[3],.56); gfx.line(closeX,Chrome.titleH-1,w,Chrome.titleH-1,1)
+  end
+  local xc=hoverClose and Chrome.red or C.muted
+  local xa=hoverClose and .98 or .82
+  local cx,cy=closeX+closeW*.5,Chrome.titleH*.5
+  gfx.set(xc[1],xc[2],xc[3],xa)
+  gfx.line(cx-4.6,cy-4.6,cx+4.6,cy+4.6,1); gfx.line(cx+4.6,cy-4.6,cx-4.6,cy+4.6,1)
+
+end
+return M
+end)()
+-- END BLT COMMON CHROME
+
 local BLTPresetLimits={bytes=16777216,stringBytes=2097152,nodes=262144,entries=8192}
 function BLTPresetLimits.show(english)
  reaper.MB(english and 'Preset capacity limit exceeded. Export presets individually instead of as a bundle.' or '容量上限オーバーです。一括ではなく個別に保存してください。','BLT PRESET',0)
@@ -787,15 +938,7 @@ function Presets.export(all)
  local f,err=io.open(path,'wb');if not f then notice(B.publicError(err),false);return end
  local wrote,werr=f:write(data);local closed,cerr=f:close();notice(wrote and closed and 'エクスポートしました。' or B.publicError(werr or cerr),wrote and closed)
 end
-function UI.bar(w)
- local compact=host.compactChrome and host.compactChrome() or false
- local c=B.barCache;if c and c.width==w and c.compact==compact then return c end
- local b={width=w,closeX=w-38,resetX=w-72,themeX=w-106}
- b.foldX=host.fold and b.themeX-34 or nil;b.languageX=(b.foldX or b.themeX)-26;b.nextX=b.languageX-20;b.prevX=b.nextX-20;b.presetX=b.prevX-84
- b.compact=compact
- if compact then b.resetX=b.closeX;b.themeX=w-72;b.foldX=w-106;b.languageX=w+500;b.nextX=w+500;b.prevX=w+500;b.presetX=w+500 end
- B.barCache=b;return b
-end
+function UI.bar(w) return BLTChrome.layout(w,host.fold~=nil,host.compactChrome and host.compactChrome() or false) end
 local function gfx_window_handle() return host.handle() end
 local function chrome_resize_hit(x,y) if y<26 and x>=UI.bar(gfx.w).presetX then return nil end;return host.resizeHit(x,y) end
 local function set_resize_cursor(mode) host.cursor(mode) end
@@ -995,117 +1138,31 @@ local function custom_titlebar(blocked)
   local resizing=Chrome.resize~=nil
   local cursorMode=resizing and Chrome.resize.mode or resizeMode
   set_resize_cursor(cursorMode)
-  local hoverClose=inBar and mx>=closeX and mx<w and not resizeMode and not resizing
-  local hoverReset=not (host.collapsed and host.collapsed()) and not (host.transition and host.transition()) and inBar and mx>=resetX and mx<closeX and not resizeMode and not resizing
-  local hoverCham=inBar and mx>=chamX and mx<resetX and not resizeMode and not resizing
-  local hoverPreset=inBar and mx>=presetX and mx<prevX and not resizeMode and not resizing
-  local hoverPrev=inBar and mx>=prevX and mx<nextX and not resizeMode and not resizing
-  local hoverNext=inBar and mx>=nextX and mx<languageX and not resizeMode and not resizing
-  local hoverFold=foldX and not (host.transition and host.transition()) and inBar and mx>=foldX and mx<chamX and not resizeMode and not resizing
-  local hoverLanguage=inBar and mx>=languageX and mx<(foldX or chamX) and not resizeMode and not resizing
+  local control=inBar and not resizeMode and not resizing and BLTChrome.hit(b,mx,my,w,Chrome.titleH) or nil
+  local hoverClose=control=='close'
+  local hoverReset=not (host.collapsed and host.collapsed()) and not (host.transition and host.transition()) and control=='reset'
+  local hoverCham=control=='theme'
+  local hoverPreset=control=='preset'
+  local hoverPrev=control=='prev'
+  local hoverNext=control=='next'
+  local hoverFold=foldX and not (host.transition and host.transition()) and control=='fold'
+  local hoverLanguage=control=='language'
   local down=not blocked and (gfx.mouse_cap&1)~=0
   -- A content modal disables chrome; it does not give chrome ownership of its input.
   Chrome.mouseActive=(Presets.open or Presets.swallow) or inBar or Chrome.drag~=nil or Chrome.resize~=nil or cursorMode~=nil
     or Chrome.languagePressed or Chrome.closePressed or Chrome.resetPressed or Chrome.chameleonPressed or Chrome.presetPressed or Chrome.presetPrevPressed or Chrome.presetNextPressed
 
-  gfx.set(C.bg[1],C.bg[2],C.bg[3],1); gfx.rect(0,0,w,Chrome.titleH,1)
-  gfx.gradrect(0,0,w,Chrome.titleH,C.field[1],C.field[2],C.field[3],.72,
-    0,0,0,0,(C.bg[1]-C.field[1])/Chrome.titleH,(C.bg[2]-C.field[2])/Chrome.titleH,(C.bg[3]-C.field[3])/Chrome.titleH,.22/Chrome.titleH)
-  gfx.set(C.edge[1],C.edge[2],C.edge[3],.42); gfx.line(0,Chrome.titleH-1,w,Chrome.titleH-1,1)
-
-  if not Chrome.textFontsReady or Chrome.fontDPI~=(gfx.ext_retina or 1) then Chrome.fontDPI=gfx.ext_retina or 1;B.chromeFont(); Chrome.textFontsReady=true else B.chromeFont() end; B.fontKey="chrome"
-  -- Center the unadorned title within the bar using the actual font height.
-  local _,titleHeight=UI.textMetrics(Chrome.titleText)
-  local ty=math.floor((Chrome.titleH-titleHeight)*.5)
-  gfx.set(Chrome.mint[1],Chrome.mint[2],Chrome.mint[3],.88); gfx.x=14; gfx.y=ty; gfx.drawstr(UI.fit(Chrome.titleText,math.max(0,(b.compact and b.foldX or presetX)-22)))
-
-  if not b.compact then
-  if hoverPreset or Presets.open then
-    gfx.set(C.accent[1],C.accent[2],C.accent[3],.10);gfx.rect(presetX+2,3,78,20,1)
+  local p=Chrome.presenter
+  if not p then
+    p={C=C,chrome=Chrome,metrics=UI.textMetrics,fit=UI.fit,
+      barFont=B.chromeFont,languageFont=function() B.font(13,2,true,1,host.faces) end}
+    Chrome.presenter=p
   end
-  gfx.set(C.edge[1],C.edge[2],C.edge[3],(hoverPreset or hoverPrev or hoverNext) and .9 or .5)
-  gfx.roundrect(presetX+2,3,languageX-presetX-5,20,3,1)
-  gfx.set(C.muted[1],C.muted[2],C.muted[3],.35);gfx.line(languageX-1,6,languageX-1,20)
-  local pc=hoverPreset and Chrome.mint or C.muted
-  gfx.set(pc[1],pc[2],pc[3],hoverPreset and .98 or .8)
-  gfx.roundrect(presetX+10,7,7,8,1,1);gfx.roundrect(presetX+13,10,7,8,1,1)
-  B.chromeFont();B.fontKey="chrome"
-  gfx.x=presetX+26;gfx.y=7;gfx.drawstr("PRESET")
-  gfx.line(presetX+67,11,presetX+70,14);gfx.line(presetX+70,14,presetX+73,11)
-  if Presets.dirty() then gfx.set(C.warn[1],C.warn[2],C.warn[3],.9);gfx.circle(presetX+23,6,1.3,1,1) end
-
-  B.arrows=B.arrows or {{},{}}
-  local left,right=B.arrows[1],B.arrows[2]
-  left[1],left[2],left[3]=prevX,hoverPrev,-1;right[1],right[2],right[3]=nextX,hoverNext,1
-  for _,arrow in ipairs(B.arrows) do
-    local ax,hover,direction=arrow[1],arrow[2],arrow[3]
-    if hover then
-      gfx.set(Chrome.mint[1],Chrome.mint[2],Chrome.mint[3],.09);gfx.rect(ax+1,3,18,20,1)
-    end
-    local c=hover and Chrome.mint or C.muted
-    gfx.set(c[1],c[2],c[3],hover and .98 or .8)
-    local cx,cy=ax+10,Chrome.titleH*.5
-    gfx.line(cx-direction*2,cy-4,cx+direction*2,cy,1)
-    gfx.line(cx+direction*2,cy,cx-direction*2,cy+4,1)
-  end
-
-  local lc=hoverLanguage and Chrome.mint or C.text
-  gfx.set(lc[1],lc[2],lc[3],hoverLanguage and 1 or .95)
-  B.font(13,2,true,1,host.faces)
-  local lw,lh=UI.textMetrics(Language.code)
-  gfx.x=languageX+(26-lw)/2;gfx.y=(Chrome.titleH-lh)/2;gfx.drawstr(Language.code)
-  end -- full-size preset and language controls
-  if foldX then
-    gfx.set(C.accent2[1],C.accent2[2],C.accent2[3],hoverFold and .98 or .8)
-    local cx,cy=foldX+17,13;local d=host.collapsed() and 1 or -1
-    gfx.line(cx-6,cy-5,cx+6,cy-5);gfx.line(cx-4,cy-d*3,cx,cy+d);gfx.line(cx,cy+d,cx+4,cy-d*3)
-  end
-  if hoverCham or Chameleon.enabled then
-    local a=hoverCham and .095 or .045
-    gfx.set(C.accent[1],C.accent[2],C.accent[3],a); gfx.rect(chamX,0,chamW,Chrome.titleH,1)
-    gfx.set(C.accent2[1],C.accent2[2],C.accent2[3],hoverCham and .42 or .24)
-    gfx.line(chamX,Chrome.titleH-1,resetX,Chrome.titleH-1,1)
-  end
-  local chx,chy=chamX+chamW*.5,Chrome.titleH*.5
-  local active_a=hoverCham and 1 or (Chameleon.enabled and .96 or .85)
-
-  -- Theme / mimicry icon:
-  -- three overlapping color fields, visually reading as "take on / blend into
-  -- surrounding colors" rather than as a literal animal.
-  local c1,c2,c3=Chameleon.icon_colors()
-
-  gfx.set(c1[1],c1[2],c1[3],active_a)
-  gfx.circle(chx-3.5,chy+2,4.5,1,1)
-
-  gfx.set(c2[1],c2[2],c2[3],active_a*.92)
-  gfx.circle(chx+3.5,chy+2,4.5,1,1)
-
-  gfx.set(c3[1],c3[2],c3[3],active_a*.94)
-  gfx.circle(chx,chy-3.3,4.5,1,1)
-
-  if not b.compact then
-  if hoverReset then
-    gfx.set(Chrome.mint[1],Chrome.mint[2],Chrome.mint[3],.050); gfx.rect(resetX,0,resetW,Chrome.titleH,1)
-    gfx.set(Chrome.mint[1],Chrome.mint[2],Chrome.mint[3],.34); gfx.line(resetX,Chrome.titleH-1,closeX,Chrome.titleH-1,1)
-  end
-  local rcx,rcy=resetX+resetW*.5,Chrome.titleH*.5
-  local rcol=hoverReset and Chrome.mint or C.muted
-  gfx.set(rcol[1],rcol[2],rcol[3],hoverReset and .98 or .82)
-  gfx.roundrect(rcx-6,rcy-6,12,12,1,1)
-  gfx.line(rcx+3,rcy-3,rcx-3,rcy+3,1)
-  gfx.line(rcx-3,rcy+3,rcx-3,rcy-1,1)
-  gfx.line(rcx-3,rcy+3,rcx+1,rcy+3,1)
-
-  end -- full-size reset control
-  if hoverClose then
-    gfx.set(Chrome.red[1],Chrome.red[2],Chrome.red[3],.10); gfx.rect(closeX,0,closeW,Chrome.titleH,1)
-    gfx.set(Chrome.red[1],Chrome.red[2],Chrome.red[3],.56); gfx.line(closeX,Chrome.titleH-1,w,Chrome.titleH-1,1)
-  end
-  local xc=hoverClose and Chrome.red or C.muted
-  local xa=hoverClose and .98 or .82
-  local cx,cy=closeX+closeW*.5,Chrome.titleH*.5
-  gfx.set(xc[1],xc[2],xc[3],xa)
-  gfx.line(cx-4.6,cy-4.6,cx+4.6,cy+4.6,1); gfx.line(cx+4.6,cy-4.6,cx-4.6,cy+4.6,1)
+  p.b=b;p.language=Language.code;p.presetOpen=Presets.open;p.dirty=not b.compact and Presets.dirty()
+  p.themeEnabled=Chameleon.enabled;p.c1,p.c2,p.c3=Chameleon.icon_colors()
+  p.hot=hoverClose and 'close' or hoverReset and 'reset' or hoverCham and 'theme' or hoverLanguage and 'language' or hoverPreset and 'preset' or hoverPrev and 'prev' or hoverNext and 'next' or hoverFold and 'fold' or nil
+  p.collapsed=host.collapsed and host.collapsed() or false;p.docked=host.docked and host.docked() or false;p.dockButton=host.docked~=nil;p.compactLanguage=false
+  BLTChrome.draw(p)
 
   if down and not Chrome.mouseDown then
     if resizeMode then
@@ -1381,7 +1438,7 @@ end)()
 local min,max,abs,floor=math.min,math.max,math.abs,math.floor
 local function finite(n) return type(n)=='number' and n==n and abs(n)<math.huge end
 local function clamp(n,a,b) return max(a,min(b,n)) end
-local Core={VERSION='0.5.10',SECTION='BLT_CR_MINIM'}
+local Core={VERSION='0.5.11',SECTION='BLT_CR_MINIM'}
 -- Presentation only: show message content without source locations or filenames.
 function Core.display_message(value)
  local text=tostring(value or '')

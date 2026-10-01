@@ -1,5 +1,5 @@
 -- @description SPECTRAL NORMALIZER
--- @version 0.2.10
+-- @version 0.2.11
 -- @author Balrulu
 -- @provides
 --   . > ../
@@ -9,6 +9,157 @@
 --   BLT SERIES Beta TEST UPLOAD
 
 -- BLT external storage 1.1.0. Embedded; large data stays beside this script.
+-- BEGIN BLT COMMON CHROME 1.0.0 (generated from _shared/BLT_Chrome.lua)
+local BLTChrome=(function()
+local M={}
+function M.layout(w,fold,compact)
+ local b=M.layoutCache
+ if b and b.width==w and b.hasFold==fold and b.compact==compact then return b end
+ b={width=w,hasFold=fold,compact=compact,closeX=w-38,resetX=w-72,themeX=w-106}
+ b.foldX=fold and b.themeX-34 or nil;b.languageX=(b.foldX or b.themeX)-26
+ b.nextX=b.languageX-20;b.prevX=b.nextX-20;b.presetX=b.prevX-84
+ if compact then
+  b.resetX=b.closeX;b.themeX=w-72;b.foldX=w-106
+  b.languageX=w+500;b.nextX=w+500;b.prevX=w+500;b.presetX=w+500
+ end
+ b.close,b.reset,b.theme,b.language=b.closeX,b.resetX,b.themeX,b.languageX
+ b.next,b.prev,b.preset=b.nextX,b.prevX,b.presetX
+ M.layoutCache=b;return b
+end
+function M.hit(b,x,y,w,h)
+ if x<0 or x>=w or y<0 or y>=h then return nil end
+ if x>=b.closeX then return 'close' end
+ if not b.compact and x>=b.resetX then return 'reset' end
+ if x>=b.themeX then return 'theme' end
+ if b.foldX and x>=b.foldX then return 'fold' end
+ if x>=b.languageX then return 'language' end
+ if not b.compact then
+  if x>=b.nextX then return 'next' end
+  if x>=b.prevX then return 'prev' end
+  if x>=b.presetX then return 'preset' end
+ end
+ return 'drag'
+end
+function M.background(C,h,x,w)
+ gfx.set(C.bg[1],C.bg[2],C.bg[3],1);gfx.rect(x,0,w,h,1)
+ gfx.gradrect(x,0,w,h,C.field[1],C.field[2],C.field[3],.72,0,0,0,0,(C.bg[1]-C.field[1])/h,(C.bg[2]-C.field[2])/h,(C.bg[3]-C.field[3])/h,.22/h)
+ gfx.set(C.edge[1],C.edge[2],C.edge[3],.42);gfx.line(x,h-1,x+w,h-1,1)
+end
+function M.draw(p)
+ local C,Chrome,b,w=p.C,p.chrome,p.b,gfx.w
+ local closeX,resetX,chamX,foldX=b.closeX,b.resetX,b.themeX,b.foldX
+ local languageX,presetX,prevX,nextX=b.languageX,b.presetX,b.prevX,b.nextX
+ local closeW,resetW,chamW=38,34,34
+ local hoverClose,hoverReset,hoverCham=p.hot=='close',p.hot=='reset',p.hot=='theme'
+ local hoverLanguage,hoverPreset=p.hot=='language',p.hot=='preset'
+ local hoverPrev,hoverNext,hoverFold=p.hot=='prev',p.hot=='next',p.hot=='fold'
+  if b.inline then M.background(C,Chrome.titleH,0,b.titleEnd);M.background(C,Chrome.titleH,presetX,w-presetX)
+  else M.background(C,Chrome.titleH,0,w) end
+
+  p.barFont()
+  local _,titleHeight=p.metrics(Chrome.titleText)
+  local ty=math.floor((Chrome.titleH-titleHeight)*.5)
+  gfx.set(Chrome.mint[1],Chrome.mint[2],Chrome.mint[3],.88); gfx.x=14; gfx.y=ty; gfx.drawstr(p.fit(Chrome.titleText,math.max(0,(b.titleEnd or (b.compact and b.foldX or presetX))-22)))
+
+  if not b.compact then
+  if hoverPreset or p.presetOpen then
+    gfx.set(C.accent[1],C.accent[2],C.accent[3],.10);gfx.rect(presetX+2,3,78,20,1)
+  end
+  gfx.set(C.edge[1],C.edge[2],C.edge[3],(hoverPreset or hoverPrev or hoverNext) and .9 or .5)
+  gfx.roundrect(presetX+2,3,languageX-presetX-5,20,3,1)
+  gfx.set(C.muted[1],C.muted[2],C.muted[3],.35);gfx.line(languageX-1,6,languageX-1,20)
+  local pc=hoverPreset and Chrome.mint or C.muted
+  gfx.set(pc[1],pc[2],pc[3],hoverPreset and .98 or .8)
+  gfx.roundrect(presetX+10,7,7,8,1,1);gfx.roundrect(presetX+13,10,7,8,1,1)
+  p.barFont()
+  gfx.x=presetX+26;gfx.y=7;gfx.drawstr("PRESET")
+  gfx.line(presetX+67,11,presetX+70,14);gfx.line(presetX+70,14,presetX+73,11)
+  if p.dirty then gfx.set(C.warn[1],C.warn[2],C.warn[3],.9);gfx.circle(presetX+23,6,1.3,1,1) end
+
+  p.arrows=p.arrows or {{},{}}
+  local left,right=p.arrows[1],p.arrows[2]
+  left[1],left[2],left[3]=prevX,hoverPrev,-1;right[1],right[2],right[3]=nextX,hoverNext,1
+  for _,arrow in ipairs(p.arrows) do
+    local ax,hover,direction=arrow[1],arrow[2],arrow[3]
+    if hover then
+      gfx.set(Chrome.mint[1],Chrome.mint[2],Chrome.mint[3],.09);gfx.rect(ax+1,3,18,20,1)
+    end
+    local c=hover and Chrome.mint or C.muted
+    gfx.set(c[1],c[2],c[3],hover and .98 or .8)
+    local cx,cy=ax+10,Chrome.titleH*.5
+    gfx.line(cx-direction*2,cy-4,cx+direction*2,cy,1)
+    gfx.line(cx+direction*2,cy,cx-direction*2,cy+4,1)
+  end
+
+  end
+  if not b.compact or p.compactLanguage then
+  local lc=hoverLanguage and Chrome.mint or C.text
+  gfx.set(lc[1],lc[2],lc[3],hoverLanguage and 1 or .95)
+  p.languageFont()
+  local lw,lh=p.metrics(p.language)
+  gfx.x=languageX+(26-lw)/2;gfx.y=(Chrome.titleH-lh)/2;gfx.drawstr(p.language)
+  end -- full-size preset and language controls
+  if foldX then
+    gfx.set(C.accent2[1],C.accent2[2],C.accent2[3],hoverFold and .98 or .8)
+    local cx,cy=foldX+17,13
+    if p.dockButton then
+      gfx.rect(cx-7,cy-6,14,12,0)
+      if p.docked then gfx.rect(cx-5,cy+1,10,3,1)
+      else gfx.line(cx-5,cy+2,cx+5,cy+2);gfx.line(cx,cy-4,cx,cy);gfx.line(cx-2,cy-2,cx,cy);gfx.line(cx,cy,cx+2,cy-2) end
+    else
+      local d=p.collapsed and 1 or -1
+      gfx.line(cx-6,cy-5,cx+6,cy-5);gfx.line(cx-4,cy-d*3,cx,cy+d);gfx.line(cx,cy+d,cx+4,cy-d*3)
+    end
+  end
+  if hoverCham or p.themeEnabled then
+    local a=hoverCham and .095 or .045
+    gfx.set(C.accent[1],C.accent[2],C.accent[3],a); gfx.rect(chamX,0,chamW,Chrome.titleH,1)
+    gfx.set(C.accent2[1],C.accent2[2],C.accent2[3],hoverCham and .42 or .24)
+    gfx.line(chamX,Chrome.titleH-1,resetX,Chrome.titleH-1,1)
+  end
+  local chx,chy=chamX+chamW*.5,Chrome.titleH*.5
+  local active_a=hoverCham and 1 or (p.themeEnabled and .96 or .85)
+
+  local c1,c2,c3=p.c1,p.c2,p.c3
+
+  gfx.set(c1[1],c1[2],c1[3],active_a)
+  gfx.circle(chx-3.5,chy+2,4.5,1,1)
+
+  gfx.set(c2[1],c2[2],c2[3],active_a*.92)
+  gfx.circle(chx+3.5,chy+2,4.5,1,1)
+
+  gfx.set(c3[1],c3[2],c3[3],active_a*.94)
+  gfx.circle(chx,chy-3.3,4.5,1,1)
+
+  if not b.compact then
+  if hoverReset then
+    gfx.set(Chrome.mint[1],Chrome.mint[2],Chrome.mint[3],.050); gfx.rect(resetX,0,resetW,Chrome.titleH,1)
+    gfx.set(Chrome.mint[1],Chrome.mint[2],Chrome.mint[3],.34); gfx.line(resetX,Chrome.titleH-1,closeX,Chrome.titleH-1,1)
+  end
+  local rcx,rcy=resetX+resetW*.5,Chrome.titleH*.5
+  local rcol=hoverReset and Chrome.mint or C.muted
+  gfx.set(rcol[1],rcol[2],rcol[3],p.docked and .25 or (hoverReset and .98 or .82))
+  gfx.roundrect(rcx-6,rcy-6,12,12,1,1)
+  gfx.line(rcx+3,rcy-3,rcx-3,rcy+3,1)
+  gfx.line(rcx-3,rcy+3,rcx-3,rcy-1,1)
+  gfx.line(rcx-3,rcy+3,rcx+1,rcy+3,1)
+
+  end -- full-size reset control
+  if hoverClose then
+    gfx.set(Chrome.red[1],Chrome.red[2],Chrome.red[3],.10); gfx.rect(closeX,0,closeW,Chrome.titleH,1)
+    gfx.set(Chrome.red[1],Chrome.red[2],Chrome.red[3],.56); gfx.line(closeX,Chrome.titleH-1,w,Chrome.titleH-1,1)
+  end
+  local xc=hoverClose and Chrome.red or C.muted
+  local xa=hoverClose and .98 or .82
+  local cx,cy=closeX+closeW*.5,Chrome.titleH*.5
+  gfx.set(xc[1],xc[2],xc[3],xa)
+  gfx.line(cx-4.6,cy-4.6,cx+4.6,cy+4.6,1); gfx.line(cx+4.6,cy-4.6,cx-4.6,cy+4.6,1)
+
+end
+return M
+end)()
+-- END BLT COMMON CHROME
+
 local function create_external_storage(api,section,source,state_keys)
  local P=setmetatable({}, {__index=api})
  local wanted={};for _,key in ipairs(state_keys) do wanted[key]='state' end
@@ -356,7 +507,7 @@ end
 local WindowGeometry=create_window_geometry(reaper,gfx)
 local BLT_MAC=(reaper.GetOS() or ''):match('OSX')~=nil or (reaper.GetOS() or ''):match('macOS')~=nil
 
-local Core={VERSION='0.2.10',SECTION='BLT_SPECTRAL_NORMALIZER',MAX_POINTS=1024}
+local Core={VERSION='0.2.11',SECTION='BLT_SPECTRAL_NORMALIZER',MAX_POINTS=1024}
 local abs,min,max,sqrt,log,pi,floor,ceil=math.abs,math.min,math.max,math.sqrt,math.log,math.pi,math.floor,math.ceil
 local function clamp(x,a,b) return min(b,max(a,x)) end
 local function finite(x) return type(x)=='number' and x==x and abs(x)<math.huge end
@@ -1748,13 +1899,7 @@ Presets.load()
 Chrome.title='BLT Spectral Normalizer';Chrome.text='S P E C T R A L   N O R M A L I Z E R';Chrome.window=nil;Chrome.minW=1000;Chrome.minH=740
 Chrome.drag=nil;Chrome.resize=nil;Chrome.press=nil;Chrome.resize_cursor=nil;Chrome.isWindows=R.GetOS():match('Win')~=nil
 Chrome.cursor_ids={we=32644,ns=32645,nwse=32642,nesw=32643,arrow=32512};Chrome.cursors={}
-function Chrome.layout()
- if Chrome.layoutWidth==gfx.w then return Chrome.layoutCache end
- local close=gfx.w-38;local reset=close-34;local theme=reset-34;local language=theme-26;local nextp=language-20;local prev=nextp-20;local preset=prev-84
- Chrome.layoutWidth=gfx.w
- Chrome.layoutCache={close=close,reset=reset,theme=theme,language=language,next=nextp,prev=prev,preset=preset}
- return Chrome.layoutCache
-end
+function Chrome.layout() return BLTChrome.layout(gfx.w,false,false) end
 function Chrome.handle()
  if Chrome.window and R.JS_Window_IsWindow(Chrome.window) then return Chrome.window end
  Chrome.window=R.JS_Window_Find(Chrome.title,true);return Chrome.window
@@ -1768,7 +1913,7 @@ end
 function Chrome.resize_hit(x,y)
  if x<0 or y<0 or x>=gfx.w or y>=gfx.h then return end
  local edge,corner=6,22;local l=x<edge;local r=x>=gfx.w-edge;local top=y<edge;local bot=y>=gfx.h-edge
- if top and x>=Chrome.layout().preset and not r then return end
+ if y<TITLE_H and x>=Chrome.layout().preset then return end
  if (l and y<corner) or (top and x<corner) then return 'lt' end
  if (r and y<corner) or (top and x>=gfx.w-corner) then return 'rt' end
  if (l and y>=gfx.h-corner) or (bot and x<corner) then return 'lb' end
@@ -1783,11 +1928,7 @@ function Chrome.cursor(mode)
  if gfx.setcursor then gfx.setcursor(Chrome.cursor_ids[use]) end
  if cursor and R.JS_Mouse_SetCursor then R.JS_Mouse_SetCursor(cursor) end
 end
-function Chrome.control_at(x,y)
- if x<0 or x>=gfx.w or y<0 or y>=TITLE_H then return end;local b=Chrome.layout()
- if x>=b.close then return 'close' elseif x>=b.reset then return 'reset' elseif x>=b.theme then return 'theme' elseif x>=b.language then return 'language'
- elseif x>=b.next then return 'next' elseif x>=b.prev then return 'prev' elseif x>=b.preset then return 'preset' else return 'drag' end
-end
+function Chrome.control_at(x,y) return BLTChrome.hit(Chrome.layout(),x,y,gfx.w,TITLE_H) end
 function Chrome.begin_resize(mode)
  local hwnd=Chrome.handle();if not hwnd then return end;local ok,l,t,r,b=WindowGeometry.JS_Window_GetRect(hwnd);if not ok then return end
  local x,y=WindowGeometry.GetMousePosition();Chrome.resize={mode=mode,mx=x,my=y,l=l,t=t,r=r,b=b};Chrome.drag=nil
@@ -1812,6 +1953,7 @@ function Chrome.action(id)
  elseif id=='language' then L.toggle();A.status=L.text('音声アイテムを選択し、目標カーブを描いてください。');A.status_until=0;A.dirty=true elseif id=='preset' then Presets.menu() elseif id=='prev' then Presets.step(-1) elseif id=='next' then Presets.step(1) end
 end
 function Chrome.input(down,pressed,released)
+ if not A.active or A.modal or Presets.open or Presets.swallow then Chrome.press=nil;Chrome.drag=nil;Chrome.resize=nil;Chrome.cursor(nil);return false end
  local x,y=gfx.mouse_x,gfx.mouse_y;local resize=Chrome.resize_hit(x,y);Chrome.cursor(Chrome.resize and Chrome.resize.mode or resize)
  local control=Chrome.control_at(x,y)
  if pressed and (resize or control) then
@@ -1829,22 +1971,32 @@ function Chrome.input(down,pressed,released)
  return control~=nil or resize~=nil or Chrome.drag~=nil or Chrome.resize~=nil or Chrome.press~=nil
 end
 function Chrome.draw()
- local w=gfx.w;local b=Chrome.layout();local x,y=gfx.mouse_x,gfx.mouse_y;local hot=Chrome.control_at(x,y)
- gfx.set(C.bg[1],C.bg[2],C.bg[3],1);gfx.rect(0,0,w,TITLE_H,1)
- gfx.gradrect(0,0,w,TITLE_H,C.field[1],C.field[2],C.field[3],.72,0,0,0,0,(C.bg[1]-C.field[1])/TITLE_H,(C.bg[2]-C.field[2])/TITLE_H,(C.bg[3]-C.field[3])/TITLE_H,.22/TITLE_H)
- gfx.set(C.edge[1],C.edge[2],C.edge[3],.44);gfx.line(0,TITLE_H-1,w,TITLE_H-1)
- gfx.setfont(14,fonts[2],10,0);gfx.set(C.accent2[1],C.accent2[2],C.accent2[3],.88);gfx.x=14;gfx.y=7;gfx.drawstr(Chrome.text)
- if hot and hot~='drag' then local hx=hot=='close' and b.close or hot=='reset' and b.reset or hot=='theme' and b.theme or hot=='language' and b.language or hot=='next' and b.next or hot=='prev' and b.prev or b.preset;local hw=hot=='close' and 38 or hot=='reset' and 34 or hot=='theme' and 34 or hot=='language' and 26 or hot=='preset' and 84 or 20;local hc=hot=='close' and C.red or C.accent;gfx.set(hc[1],hc[2],hc[3],hot=='close' and .10 or .09);gfx.rect(hx,0,hw,TITLE_H,1);gfx.set(hc[1],hc[2],hc[3],hot=='close' and .56 or .34);gfx.line(hx,TITLE_H-1,hx+hw,TITLE_H-1) end
- gfx.set(C.edge[1],C.edge[2],C.edge[3],(hot=='preset' or hot=='prev' or hot=='next') and .90 or .50);gfx.roundrect(b.preset+2,3,b.language-b.preset-5,20,3,1)
- gfx.set(C.muted[1],C.muted[2],C.muted[3],.35);gfx.line(b.language-1,6,b.language-1,20)
- local pc=hot=='preset' and C.accent2 or C.muted;gfx.set(pc[1],pc[2],pc[3],hot=='preset' and .98 or .80);gfx.roundrect(b.preset+10,7,7,8,1,1);gfx.roundrect(b.preset+13,10,7,8,1,1)
- gfx.setfont(15,fonts[2],10,0);gfx.x=b.preset+26;gfx.y=7;gfx.drawstr('PRESET');gfx.line(b.preset+67,11,b.preset+70,14);gfx.line(b.preset+70,14,b.preset+73,11)
- if A.preset_dirty then gfx.set(C.warn[1],C.warn[2],C.warn[3],.95);gfx.circle(b.preset+23,6,1.3,1,1) end
- for _,q in ipairs({{b.prev,-1,'prev'},{b.next,1,'next'}}) do local cx,cy=q[1]+10,13;local ac=hot==q[3] and C.accent2 or C.muted;gfx.set(ac[1],ac[2],ac[3],hot==q[3] and .98 or .80);gfx.line(cx-q[2]*2,cy-4,cx+q[2]*2,cy);gfx.line(cx+q[2]*2,cy,cx-q[2]*2,cy+4) end
- gfx.setfont(16,fonts[2],12,98);local lc=hot=='language' and C.accent2 or C.text;gfx.set(lc[1],lc[2],lc[3],hot=='language' and 1 or .95);local lw=gfx.measurestr(L.code);gfx.x=b.language+(26-lw)/2;gfx.y=5;gfx.drawstr(L.code)
- local c1,c2,c3=Theme.icon_colors();local ca=hot=='theme' and 1 or .88;local tx,ty=b.theme+17,13;gfx.set(c1[1],c1[2],c1[3],ca);gfx.circle(tx-3.5,ty+2,4.5,1,1);gfx.set(c2[1],c2[2],c2[3],ca*.92);gfx.circle(tx+3.5,ty+2,4.5,1,1);gfx.set(c3[1],c3[2],c3[3],ca*.94);gfx.circle(tx,ty-3.3,4.5,1,1)
- local rc=hot=='reset' and C.accent2 or C.muted;gfx.set(rc[1],rc[2],rc[3],hot=='reset' and .98 or .82);local rx,ry=b.reset+17,13;gfx.roundrect(rx-6,ry-6,12,12,1,1);gfx.line(rx+3,ry-3,rx-3,ry+3);gfx.line(rx-3,ry+3,rx-3,ry-1);gfx.line(rx-3,ry+3,rx+1,ry+3)
- local closec=hot=='close' and C.red or C.muted;gfx.set(closec[1],closec[2],closec[3],hot=='close' and .98 or .82);local cx,cy=b.close+19,13;gfx.line(cx-4.6,cy-4.6,cx+4.6,cy+4.6);gfx.line(cx+4.6,cy-4.6,cx-4.6,cy+4.6)
+ local p=Chrome.presenter
+ if not p then
+  p={C=C,chrome={titleH=TITLE_H,titleText=Chrome.text,mint=C.accent2,red=C.red},metrics=gfx.measurestr}
+  p.barFont=function()
+   local dpi=gfx.ext_retina or 1
+   if p.dpi~=dpi then gfx.setfont(14,fonts[2],10,0);p.dpi=dpi else gfx.setfont(14) end
+  end
+  p.languageFont=function()
+   local dpi=gfx.ext_retina or 1
+   if p.languageDPI~=dpi then gfx.setfont(15,fonts[2],13,98);p.languageDPI=dpi else gfx.setfont(15) end
+  end
+  p.fit=function(text,width)
+   if p.fitText==text and p.fitWidth==width and p.fitDPI==p.dpi then return p.fitted end
+   local shown=text
+   while #shown>0 and gfx.measurestr(shown)>width do
+    local pos=utf8.offset(shown,-1);shown=shown:sub(1,(pos or 1)-1)
+   end
+   p.fitText,p.fitWidth,p.fitDPI,p.fitted=text,width,p.dpi,shown;return shown
+  end
+  Chrome.presenter=p
+ end
+ p.chrome.mint=C.accent2;p.chrome.red=C.red
+ p.b=Chrome.layout();p.language=L.code;p.presetOpen=Presets.open;p.dirty=A.preset_dirty
+ p.themeEnabled=Theme.enabled;p.c1,p.c2,p.c3=Theme.icon_colors()
+ p.hot=A.active and not A.modal and not Presets.open and not Presets.swallow and not Chrome.resize and not Chrome.resize_hit(gfx.mouse_x,gfx.mouse_y) and Chrome.control_at(gfx.mouse_x,gfx.mouse_y) or nil
+ BLTChrome.draw(p)
 end
 
 UI.graph={x=212,y=148,w=764,h=350}
@@ -2049,8 +2201,8 @@ function UI.draw(now)
  local status=A.status;if A.job then local progress=A.job.kind=='analysis' and A.job.progress or ((A.job.index-1)+(A.job.progress or 0))/#A.job.plans;status=string.format(L.text('処理中 %d / %d   %.1f%%  — 対象素材の編集は避けてください。'),min(A.job.index,#A.job.plans),#A.job.plans,progress*100)
  elseif R.time_precise()>A.status_until then status='音声アイテムを選択し、目標カーブを描いてください。' end
  if Media.waiting then status=Media.message(SECTION) end
- UI.line(24,H-22,W-24,H-22,C.edge,.34);UI.label(status,24,H-17,10,A.warning and C.warn or C.muted,1,false,850)
- UI.label('v'..Core.VERSION,W-100,H-17,9,C.faint,3,true,76,'right');UI.draw_modal();Chrome.draw();Presets.draw();gfx.update()
+ UI.line(24,H-16,W-24,H-16,C.edge,.26);UI.label(status,24,H-13,9,A.warning and C.warn or C.muted,1,false,850)
+ UI.label('v'..Core.VERSION,W-100,H-13,8,C.faint,3,true,76,'right');UI.draw_modal();Chrome.draw();Presets.draw();gfx.update()
 end
 function UI.pointer_value(dx,dy)
  local g=UI.graph;local px,py=mx-(dx or 0),my-(dy or 0);local f=Core.from_axis(clamp((px-g.x)/g.w,0,1),A.settings.scale,A.settings.maxfreq);local value=clamp(-(py-g.y)/g.h*120,-120,0)
