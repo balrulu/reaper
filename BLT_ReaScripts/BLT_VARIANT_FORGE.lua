@@ -1,5 +1,5 @@
 -- @description VARIANT FORGE
--- @version 0.5.37
+-- @version 0.5.38
 -- @author Balrulu
 -- @provides
 --   . > ../
@@ -9,6 +9,98 @@
 --   BLT SERIES Beta TEST UPLOAD
 
 -- BLT external storage. Current-format data only.
+-- BEGIN BLT RETINA 1.0.0 (generated from _shared/BLT_Retina.lua)
+-- Layout and pointer coordinates stay in window points on macOS.
+-- Drawing, font rasterization and generated image buffers use backing pixels.
+local gfx=(function(api,native)
+ local osname=api.GetOS() or ''
+ if not osname:match('OSX') and not osname:match('macOS') then return native end
+ local G={}
+ local backing=1
+ local fonts,selected={},nil
+ local function refresh_scale()
+  local dpi=tonumber(native.ext_retina) or 1
+  if dpi~=dpi or dpi<1 or dpi==math.huge then dpi=1 end
+  if dpi==backing then return end
+  backing=dpi
+  for slot,f in pairs(fonts) do native.setfont(slot,f.face,f.size*backing,f.flags) end
+  if selected then native.setfont(selected) end
+ end
+ function G.init(...)
+  local result=native.init(...);refresh_scale();return result
+ end
+ function G.getchar(...)
+  local result,unicode=native.getchar(...);refresh_scale();return result,unicode
+ end
+ function G.update(...)
+  local result=native.update(...);refresh_scale();return result
+ end
+ function G.setfont(slot,face,size,flags)
+  selected=slot
+  if face~=nil then
+   local f=fonts[slot] or {};fonts[slot]=f
+   f.face,f.size,f.flags=face,size or 10,flags or 0
+   return native.setfont(slot,face,f.size*backing,f.flags)
+  end
+  return native.setfont(slot)
+ end
+ function G.measurestr(text)
+  local w,h=native.measurestr(text);return w/backing,h/backing
+ end
+ function G.drawstr(text,flags,right,bottom)
+  if flags==nil then return native.drawstr(text) end
+  return native.drawstr(text,flags,right and right*backing,bottom and bottom*backing)
+ end
+ function G.rect(x,y,w,h,filled)
+  return native.rect(x*backing,y*backing,w*backing,h*backing,filled)
+ end
+ function G.line(x,y,xx,yy,aa)
+  return native.line(x*backing,y*backing,xx*backing,yy*backing,aa)
+ end
+ function G.circle(x,y,r,filled,aa)
+  return native.circle(x*backing,y*backing,r*backing,filled,aa)
+ end
+ function G.arc(x,y,r,start_angle,end_angle,aa)
+  return native.arc(x*backing,y*backing,r*backing,start_angle,end_angle,aa)
+ end
+ function G.roundrect(x,y,w,h,r,aa)
+  return native.roundrect(x*backing,y*backing,w*backing,h*backing,r*backing,aa)
+ end
+ function G.triangle(x,y,xx,yy,xxx,yyy)
+  return native.triangle(x*backing,y*backing,xx*backing,yy*backing,xxx*backing,yyy*backing)
+ end
+ function G.gradrect(x,y,w,h,r,g,b,a,rx,gx,bx,ax,ry,gy,by,ay)
+  return native.gradrect(x*backing,y*backing,w*backing,h*backing,r,g,b,a,
+   (rx or 0)/backing,(gx or 0)/backing,(bx or 0)/backing,(ax or 0)/backing,
+   (ry or 0)/backing,(gy or 0)/backing,(by or 0)/backing,(ay or 0)/backing)
+ end
+ function G.setimgdim(image,w,h)
+  return native.setimgdim(image,w>0 and math.floor(w*backing+.5) or w,h>0 and math.floor(h*backing+.5) or h)
+ end
+ function G.getimgdim(image)
+  local w,h=native.getimgdim(image);return w/backing,h/backing
+ end
+ function G.blit(image,...)
+  local args=table.pack(...)
+  for i=3,args.n do if args[i]~=nil then args[i]=args[i]*backing end end
+  return native.blit(image,table.unpack(args,1,args.n))
+ end
+ -- init/dock/clienttoscreen/screentoclient use native window points.
+ -- showmenu reads native x/y and handles Retina conversion in REAPER.
+ return setmetatable(G,{
+  __index=function(_,key)
+   local value=native[key]
+   if key=='w' or key=='h' or key=='x' or key=='y' or key=='mouse_x' or key=='mouse_y' or key=='texth' then
+    return value and value/backing
+   end
+   return value
+  end,
+  __newindex=function(_,key,value)
+   if key=='x' or key=='y' then native[key]=value*backing else native[key]=value end
+  end})
+end)(reaper,gfx)
+-- END BLT RETINA
+
 -- BEGIN BLT COMMON CHROME 1.0.0 (generated from _shared/BLT_Chrome.lua)
 local BLTChrome=(function()
 local M={}
@@ -1737,7 +1829,7 @@ end
 return B
 end)()
 
-local Core={VERSION='0.5.37',SOURCE_SR=48000,SOURCE_HOP=48,SOURCE_BLOCK=12000,SOURCE_PREVIEW_BINS=1400,SOURCE_MAX_REGIONS=16384,
+local Core={VERSION='0.5.38',SOURCE_SR=48000,SOURCE_HOP=48,SOURCE_BLOCK=12000,SOURCE_PREVIEW_BINS=1400,SOURCE_MAX_REGIONS=16384,
  GENERATED_TAG='P_EXT:BLT_VARIANT_FORGE',TEMP_TAG='P_EXT:BLT_VARIANT_FORGE_TEMP',SECTION='BLT_VARIANT_FORGE',EQ_FIXED_CACHE={}}
 Core.STALE_TEMP_PROJECTS={};Core.RUN_ID='';Core.TEMP_HEARTBEAT_TTL=8;Core.TEMP_HEARTBEAT_KEY='temp_live_registry_v1';Core.temp_heartbeat_at=0
 local abs,min,max,floor,ceil=math.abs,math.min,math.max,math.floor,math.ceil
@@ -3783,7 +3875,7 @@ local effect_activity_until=R.time_precise()+.20
 -- frame (especially after deactivation/expose). A full cached blit is cheap and
 -- keeps the expensive native-gfx UI itself asleep.
 local FRAME_CACHE=127
-local frame_cache_w,frame_cache_h=0,0
+local frame_cache_w,frame_cache_h,frame_cache_dpi=0,0,nil
 local frame_cache_valid=false
 local suppress_scroll_hints=false
 local next_scroll_hint_time=0
@@ -6630,10 +6722,10 @@ end
 
 local function ensure_frame_cache()
  local w,h=max(1,floor(gfx.w+.5)),max(1,floor(gfx.h+.5))
- if w~=frame_cache_w or h~=frame_cache_h then
+ if w~=frame_cache_w or h~=frame_cache_h or frame_cache_dpi~=gfx.ext_retina then
   gfx.setimgdim(FRAME_CACHE,-1,-1)
   gfx.setimgdim(FRAME_CACHE,w,h)
-  frame_cache_w,frame_cache_h=w,h;frame_cache_valid=false
+  frame_cache_w,frame_cache_h,frame_cache_dpi=w,h,gfx.ext_retina;frame_cache_valid=false
  end
  return w,h
 end
@@ -6911,7 +7003,7 @@ do
  local ww,wh=tonumber(R.GetExtState(Core.SECTION,'window_w')),tonumber(R.GetExtState(Core.SECTION,'window_h'))
  ww=finite(ww) and clamp(ww,860,2100) or W;wh=finite(wh) and clamp(wh,720+Chrome.title_h,1900) or H+Chrome.title_h
  -- Match native window/input coordinates in logical points on Mac.
-gfx.ext_retina=BLT_MAC and 0 or 1;if finite(wx) and finite(wy) then gfx.init(Chrome.title,ww,wh,0,wx,wy) else gfx.init(Chrome.title,ww,wh,0) end
+gfx.ext_retina=1;if finite(wx) and finite(wy) then gfx.init(Chrome.title,ww,wh,0,wx,wy) else gfx.init(Chrome.title,ww,wh,0) end
  if not UI.apply_custom_window_style(ww,wh) then gfx.quit();Language.mb('カスタム枠を初期化できません。','BLT Variant Forge',0);return end
  if Chameleon.enabled then Chameleon.refresh(true) end
  UI.wheel_hook_install()

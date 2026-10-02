@@ -1,5 +1,5 @@
 -- @description COLOR PALETTE
--- @version 0.1.14
+-- @version 0.1.15
 -- @author Balrulu
 -- @provides
 --   . > ../
@@ -7,6 +7,98 @@
 --   BLT SERIES Beta TEST UPLOAD
 -- @about
 --   BLT SERIES Beta TEST UPLOAD
+
+-- BEGIN BLT RETINA 1.0.0 (generated from _shared/BLT_Retina.lua)
+-- Layout and pointer coordinates stay in window points on macOS.
+-- Drawing, font rasterization and generated image buffers use backing pixels.
+local gfx=(function(api,native)
+ local osname=api.GetOS() or ''
+ if not osname:match('OSX') and not osname:match('macOS') then return native end
+ local G={}
+ local backing=1
+ local fonts,selected={},nil
+ local function refresh_scale()
+  local dpi=tonumber(native.ext_retina) or 1
+  if dpi~=dpi or dpi<1 or dpi==math.huge then dpi=1 end
+  if dpi==backing then return end
+  backing=dpi
+  for slot,f in pairs(fonts) do native.setfont(slot,f.face,f.size*backing,f.flags) end
+  if selected then native.setfont(selected) end
+ end
+ function G.init(...)
+  local result=native.init(...);refresh_scale();return result
+ end
+ function G.getchar(...)
+  local result,unicode=native.getchar(...);refresh_scale();return result,unicode
+ end
+ function G.update(...)
+  local result=native.update(...);refresh_scale();return result
+ end
+ function G.setfont(slot,face,size,flags)
+  selected=slot
+  if face~=nil then
+   local f=fonts[slot] or {};fonts[slot]=f
+   f.face,f.size,f.flags=face,size or 10,flags or 0
+   return native.setfont(slot,face,f.size*backing,f.flags)
+  end
+  return native.setfont(slot)
+ end
+ function G.measurestr(text)
+  local w,h=native.measurestr(text);return w/backing,h/backing
+ end
+ function G.drawstr(text,flags,right,bottom)
+  if flags==nil then return native.drawstr(text) end
+  return native.drawstr(text,flags,right and right*backing,bottom and bottom*backing)
+ end
+ function G.rect(x,y,w,h,filled)
+  return native.rect(x*backing,y*backing,w*backing,h*backing,filled)
+ end
+ function G.line(x,y,xx,yy,aa)
+  return native.line(x*backing,y*backing,xx*backing,yy*backing,aa)
+ end
+ function G.circle(x,y,r,filled,aa)
+  return native.circle(x*backing,y*backing,r*backing,filled,aa)
+ end
+ function G.arc(x,y,r,start_angle,end_angle,aa)
+  return native.arc(x*backing,y*backing,r*backing,start_angle,end_angle,aa)
+ end
+ function G.roundrect(x,y,w,h,r,aa)
+  return native.roundrect(x*backing,y*backing,w*backing,h*backing,r*backing,aa)
+ end
+ function G.triangle(x,y,xx,yy,xxx,yyy)
+  return native.triangle(x*backing,y*backing,xx*backing,yy*backing,xxx*backing,yyy*backing)
+ end
+ function G.gradrect(x,y,w,h,r,g,b,a,rx,gx,bx,ax,ry,gy,by,ay)
+  return native.gradrect(x*backing,y*backing,w*backing,h*backing,r,g,b,a,
+   (rx or 0)/backing,(gx or 0)/backing,(bx or 0)/backing,(ax or 0)/backing,
+   (ry or 0)/backing,(gy or 0)/backing,(by or 0)/backing,(ay or 0)/backing)
+ end
+ function G.setimgdim(image,w,h)
+  return native.setimgdim(image,w>0 and math.floor(w*backing+.5) or w,h>0 and math.floor(h*backing+.5) or h)
+ end
+ function G.getimgdim(image)
+  local w,h=native.getimgdim(image);return w/backing,h/backing
+ end
+ function G.blit(image,...)
+  local args=table.pack(...)
+  for i=3,args.n do if args[i]~=nil then args[i]=args[i]*backing end end
+  return native.blit(image,table.unpack(args,1,args.n))
+ end
+ -- init/dock/clienttoscreen/screentoclient use native window points.
+ -- showmenu reads native x/y and handles Retina conversion in REAPER.
+ return setmetatable(G,{
+  __index=function(_,key)
+   local value=native[key]
+   if key=='w' or key=='h' or key=='x' or key=='y' or key=='mouse_x' or key=='mouse_y' or key=='texth' then
+    return value and value/backing
+   end
+   return value
+  end,
+  __newindex=function(_,key,value)
+   if key=='x' or key=='y' then native[key]=value*backing else native[key]=value end
+  end})
+end)(reaper,gfx)
+-- END BLT RETINA
 
 -- BEGIN BLT COMMON CHROME 1.0.0 (generated from _shared/BLT_Chrome.lua)
 local BLTChrome=(function()
@@ -161,7 +253,7 @@ end)()
 
 local R=reaper
 local SECTION='BLT_COLOR_PALETTE'
-local VERSION='0.1.14'
+local VERSION='0.1.15'
 local function dependencies()
  local osname=R.GetOS() or ''
  if not (osname:match('Win') or osname:match('OSX') or osname:match('macOS')) then return false,'WindowsまたはmacOSが必要です。' end
@@ -2912,7 +3004,7 @@ if ...=='blt_test' then return {A=A,BLT=BLT,Core=Core,Target=Target,UI=UI,Geomet
 local startup_x,startup_y=tonumber(R.GetExtState(SECTION,'window_x')),tonumber(R.GetExtState(SECTION,'window_y'))
 local startup_w,startup_h=tonumber(R.GetExtState(SECTION,'window_w')),tonumber(R.GetExtState(SECTION,'window_h'))
 startup_w,startup_h=UI.startup_size(startup_w,startup_h)
-gfx.ext_retina=BLT_MAC and 0 or 1
+gfx.ext_retina=1
 if Core.finite(startup_x) and Core.finite(startup_y) then gfx.init(Chrome.windowTitle,startup_w,startup_h,0,startup_x,startup_y)
 else gfx.init(Chrome.windowTitle,startup_w,startup_h,0) end
 if not apply_custom_window_style(startup_w,startup_h) then gfx.quit();R.MB('カスタムアプリバーを初期化できません。','BLT COLOR PALETTE',0);return end

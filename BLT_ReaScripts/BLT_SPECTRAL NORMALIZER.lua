@@ -1,5 +1,5 @@
 -- @description SPECTRAL NORMALIZER
--- @version 0.2.11
+-- @version 0.2.12
 -- @author Balrulu
 -- @provides
 --   . > ../
@@ -9,6 +9,98 @@
 --   BLT SERIES Beta TEST UPLOAD
 
 -- BLT external storage 1.1.0. Embedded; large data stays beside this script.
+-- BEGIN BLT RETINA 1.0.0 (generated from _shared/BLT_Retina.lua)
+-- Layout and pointer coordinates stay in window points on macOS.
+-- Drawing, font rasterization and generated image buffers use backing pixels.
+local gfx=(function(api,native)
+ local osname=api.GetOS() or ''
+ if not osname:match('OSX') and not osname:match('macOS') then return native end
+ local G={}
+ local backing=1
+ local fonts,selected={},nil
+ local function refresh_scale()
+  local dpi=tonumber(native.ext_retina) or 1
+  if dpi~=dpi or dpi<1 or dpi==math.huge then dpi=1 end
+  if dpi==backing then return end
+  backing=dpi
+  for slot,f in pairs(fonts) do native.setfont(slot,f.face,f.size*backing,f.flags) end
+  if selected then native.setfont(selected) end
+ end
+ function G.init(...)
+  local result=native.init(...);refresh_scale();return result
+ end
+ function G.getchar(...)
+  local result,unicode=native.getchar(...);refresh_scale();return result,unicode
+ end
+ function G.update(...)
+  local result=native.update(...);refresh_scale();return result
+ end
+ function G.setfont(slot,face,size,flags)
+  selected=slot
+  if face~=nil then
+   local f=fonts[slot] or {};fonts[slot]=f
+   f.face,f.size,f.flags=face,size or 10,flags or 0
+   return native.setfont(slot,face,f.size*backing,f.flags)
+  end
+  return native.setfont(slot)
+ end
+ function G.measurestr(text)
+  local w,h=native.measurestr(text);return w/backing,h/backing
+ end
+ function G.drawstr(text,flags,right,bottom)
+  if flags==nil then return native.drawstr(text) end
+  return native.drawstr(text,flags,right and right*backing,bottom and bottom*backing)
+ end
+ function G.rect(x,y,w,h,filled)
+  return native.rect(x*backing,y*backing,w*backing,h*backing,filled)
+ end
+ function G.line(x,y,xx,yy,aa)
+  return native.line(x*backing,y*backing,xx*backing,yy*backing,aa)
+ end
+ function G.circle(x,y,r,filled,aa)
+  return native.circle(x*backing,y*backing,r*backing,filled,aa)
+ end
+ function G.arc(x,y,r,start_angle,end_angle,aa)
+  return native.arc(x*backing,y*backing,r*backing,start_angle,end_angle,aa)
+ end
+ function G.roundrect(x,y,w,h,r,aa)
+  return native.roundrect(x*backing,y*backing,w*backing,h*backing,r*backing,aa)
+ end
+ function G.triangle(x,y,xx,yy,xxx,yyy)
+  return native.triangle(x*backing,y*backing,xx*backing,yy*backing,xxx*backing,yyy*backing)
+ end
+ function G.gradrect(x,y,w,h,r,g,b,a,rx,gx,bx,ax,ry,gy,by,ay)
+  return native.gradrect(x*backing,y*backing,w*backing,h*backing,r,g,b,a,
+   (rx or 0)/backing,(gx or 0)/backing,(bx or 0)/backing,(ax or 0)/backing,
+   (ry or 0)/backing,(gy or 0)/backing,(by or 0)/backing,(ay or 0)/backing)
+ end
+ function G.setimgdim(image,w,h)
+  return native.setimgdim(image,w>0 and math.floor(w*backing+.5) or w,h>0 and math.floor(h*backing+.5) or h)
+ end
+ function G.getimgdim(image)
+  local w,h=native.getimgdim(image);return w/backing,h/backing
+ end
+ function G.blit(image,...)
+  local args=table.pack(...)
+  for i=3,args.n do if args[i]~=nil then args[i]=args[i]*backing end end
+  return native.blit(image,table.unpack(args,1,args.n))
+ end
+ -- init/dock/clienttoscreen/screentoclient use native window points.
+ -- showmenu reads native x/y and handles Retina conversion in REAPER.
+ return setmetatable(G,{
+  __index=function(_,key)
+   local value=native[key]
+   if key=='w' or key=='h' or key=='x' or key=='y' or key=='mouse_x' or key=='mouse_y' or key=='texth' then
+    return value and value/backing
+   end
+   return value
+  end,
+  __newindex=function(_,key,value)
+   if key=='x' or key=='y' then native[key]=value*backing else native[key]=value end
+  end})
+end)(reaper,gfx)
+-- END BLT RETINA
+
 -- BEGIN BLT COMMON CHROME 1.0.0 (generated from _shared/BLT_Chrome.lua)
 local BLTChrome=(function()
 local M={}
@@ -507,7 +599,7 @@ end
 local WindowGeometry=create_window_geometry(reaper,gfx)
 local BLT_MAC=(reaper.GetOS() or ''):match('OSX')~=nil or (reaper.GetOS() or ''):match('macOS')~=nil
 
-local Core={VERSION='0.2.11',SECTION='BLT_SPECTRAL_NORMALIZER',MAX_POINTS=1024}
+local Core={VERSION='0.2.12',SECTION='BLT_SPECTRAL_NORMALIZER',MAX_POINTS=1024}
 local abs,min,max,sqrt,log,pi,floor,ceil=math.abs,math.min,math.max,math.sqrt,math.log,math.pi,math.floor,math.ceil
 local function clamp(x,a,b) return min(b,max(a,x)) end
 local function finite(x) return type(x)=='number' and x==x and abs(x)<math.huge end
@@ -1440,6 +1532,10 @@ field_by_key.period_percent={key='period_percent',label='周期幅',min=1,max=20
 field_by_key.height={key='height',label='最大高さ',min=0,max=200,step=1,digits=0,unit='%',drawing=true}
 
 function UI.geometry()
+ local dpi=gfx.ext_retina or 1
+ if UI.fontDPI~=dpi then
+  UI.fontDPI=dpi;UI.font_slots={};UI.metric_cache={};UI.metric_count=0;UI.fit_cache={};UI.fit_count=0
+ end
  local content=max(1,gfx.h-TITLE_H);scale=max(.25,min(gfx.w/W,content/H));ox=(gfx.w-W*scale)/2;oy=TITLE_H+(content-H*scale)/2
  mx=(gfx.mouse_x-ox)/scale;my=(gfx.mouse_y-oy)/scale
 end
@@ -2461,7 +2557,7 @@ function App.loop()
  local count=0;while key>0 and count<32 do UI.key(key);count=count+1;key=gfx.getchar() end;if key<0 then A.closing=true;App.close();return end
  App.poll_selection(now);App.safe(UI.input);App.process(now)
  if Theme.enabled and now>=Theme.poll_at then Theme.poll_at=now+3;if Theme.refresh(false) then A.dirty=true end end
- if gfx.w~=A.last_w or gfx.h~=A.last_h then A.last_w,A.last_h=gfx.w,gfx.h;A.dirty=true end
+ if gfx.w~=A.last_w or gfx.h~=A.last_h or gfx.ext_retina~=A.last_dpi then A.last_w,A.last_h,A.last_dpi=gfx.w,gfx.h,gfx.ext_retina;A.dirty=true end
  if A.status_until>0 and now>=A.status_until and not A.job then A.status_until=0;A.warning=false;A.dirty=true end
  local flashing=false;for _,time in pairs(A.number_flash) do if now-time<1.2 then flashing=true;break end end
  PrimaryButton.tick(now,A.active,function()A.dirty=true end)
@@ -2498,7 +2594,7 @@ local required={'JS_Window_Find' ,'JS_Window_IsWindow','JS_Window_GetRect','JS_W
 if Chrome.isWindows then required[#required+1]='JS_Mouse_LoadCursor';required[#required+1]='JS_Mouse_SetCursor' end
 for _,name in ipairs(required) do if type(R[name])~='function' then R.MB(L.text('カスタムアプリバーには js_ReaScriptAPI が必要です。\nReaPack から js_ReaScriptAPI をインストールしてください。'),'BLT Spectral Normalizer',0);return end end
 local ww=clamp(tonumber(R.GetExtState(SECTION,'window_w')) or W,Chrome.minW,2200);local wh=clamp(tonumber(R.GetExtState(SECTION,'window_h')) or H+TITLE_H,Chrome.minH,1800)
-local wx,wy=tonumber(R.GetExtState(SECTION,'window_x')),tonumber(R.GetExtState(SECTION,'window_y'));gfx.ext_retina=BLT_MAC and 0 or 1
+local wx,wy=tonumber(R.GetExtState(SECTION,'window_x')),tonumber(R.GetExtState(SECTION,'window_y'));gfx.ext_retina=1
 if finite(wx) and finite(wy) then gfx.init(Chrome.title,ww,wh,0,wx,wy) else gfx.init(Chrome.title,ww,wh,0) end
 local hwnd=Chrome.handle();local rect_ok,left,top
 if hwnd then rect_ok,left,top=WindowGeometry.JS_Window_GetRect(hwnd) end

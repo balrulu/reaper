@@ -1,5 +1,5 @@
 -- @description MARKER REGION DESK
--- @version 0.5.12
+-- @version 0.5.13
 -- @author Balrulu
 -- @provides
 --   . > ../
@@ -9,6 +9,98 @@
 --   BLT SERIES Beta TEST UPLOAD
 
 -- BLT preset transfer limits 1.1.0. Embedded; no runtime dependency.
+-- BEGIN BLT RETINA 1.0.0 (generated from _shared/BLT_Retina.lua)
+-- Layout and pointer coordinates stay in window points on macOS.
+-- Drawing, font rasterization and generated image buffers use backing pixels.
+local gfx=(function(api,native)
+ local osname=api.GetOS() or ''
+ if not osname:match('OSX') and not osname:match('macOS') then return native end
+ local G={}
+ local backing=1
+ local fonts,selected={},nil
+ local function refresh_scale()
+  local dpi=tonumber(native.ext_retina) or 1
+  if dpi~=dpi or dpi<1 or dpi==math.huge then dpi=1 end
+  if dpi==backing then return end
+  backing=dpi
+  for slot,f in pairs(fonts) do native.setfont(slot,f.face,f.size*backing,f.flags) end
+  if selected then native.setfont(selected) end
+ end
+ function G.init(...)
+  local result=native.init(...);refresh_scale();return result
+ end
+ function G.getchar(...)
+  local result,unicode=native.getchar(...);refresh_scale();return result,unicode
+ end
+ function G.update(...)
+  local result=native.update(...);refresh_scale();return result
+ end
+ function G.setfont(slot,face,size,flags)
+  selected=slot
+  if face~=nil then
+   local f=fonts[slot] or {};fonts[slot]=f
+   f.face,f.size,f.flags=face,size or 10,flags or 0
+   return native.setfont(slot,face,f.size*backing,f.flags)
+  end
+  return native.setfont(slot)
+ end
+ function G.measurestr(text)
+  local w,h=native.measurestr(text);return w/backing,h/backing
+ end
+ function G.drawstr(text,flags,right,bottom)
+  if flags==nil then return native.drawstr(text) end
+  return native.drawstr(text,flags,right and right*backing,bottom and bottom*backing)
+ end
+ function G.rect(x,y,w,h,filled)
+  return native.rect(x*backing,y*backing,w*backing,h*backing,filled)
+ end
+ function G.line(x,y,xx,yy,aa)
+  return native.line(x*backing,y*backing,xx*backing,yy*backing,aa)
+ end
+ function G.circle(x,y,r,filled,aa)
+  return native.circle(x*backing,y*backing,r*backing,filled,aa)
+ end
+ function G.arc(x,y,r,start_angle,end_angle,aa)
+  return native.arc(x*backing,y*backing,r*backing,start_angle,end_angle,aa)
+ end
+ function G.roundrect(x,y,w,h,r,aa)
+  return native.roundrect(x*backing,y*backing,w*backing,h*backing,r*backing,aa)
+ end
+ function G.triangle(x,y,xx,yy,xxx,yyy)
+  return native.triangle(x*backing,y*backing,xx*backing,yy*backing,xxx*backing,yyy*backing)
+ end
+ function G.gradrect(x,y,w,h,r,g,b,a,rx,gx,bx,ax,ry,gy,by,ay)
+  return native.gradrect(x*backing,y*backing,w*backing,h*backing,r,g,b,a,
+   (rx or 0)/backing,(gx or 0)/backing,(bx or 0)/backing,(ax or 0)/backing,
+   (ry or 0)/backing,(gy or 0)/backing,(by or 0)/backing,(ay or 0)/backing)
+ end
+ function G.setimgdim(image,w,h)
+  return native.setimgdim(image,w>0 and math.floor(w*backing+.5) or w,h>0 and math.floor(h*backing+.5) or h)
+ end
+ function G.getimgdim(image)
+  local w,h=native.getimgdim(image);return w/backing,h/backing
+ end
+ function G.blit(image,...)
+  local args=table.pack(...)
+  for i=3,args.n do if args[i]~=nil then args[i]=args[i]*backing end end
+  return native.blit(image,table.unpack(args,1,args.n))
+ end
+ -- init/dock/clienttoscreen/screentoclient use native window points.
+ -- showmenu reads native x/y and handles Retina conversion in REAPER.
+ return setmetatable(G,{
+  __index=function(_,key)
+   local value=native[key]
+   if key=='w' or key=='h' or key=='x' or key=='y' or key=='mouse_x' or key=='mouse_y' or key=='texth' then
+    return value and value/backing
+   end
+   return value
+  end,
+  __newindex=function(_,key,value)
+   if key=='x' or key=='y' then native[key]=value*backing else native[key]=value end
+  end})
+end)(reaper,gfx)
+-- END BLT RETINA
+
 -- BEGIN BLT COMMON CHROME 1.0.0 (generated from _shared/BLT_Chrome.lua)
 local BLTChrome=(function()
 local M={}
@@ -1826,7 +1918,7 @@ local BACKGROUND_IMAGE=900
 local background_cache={}
 local function cached_background()
   local cache=background_cache
-  if cache.w~=gfx.w or cache.h~=gfx.h or cache.scale~=scale
+  if cache.w~=gfx.w or cache.h~=gfx.h or cache.scale~=scale or cache.dpi~=gfx.ext_retina
     or cache.ox~=ox or cache.oy~=oy or cache.width~=W
     or cache.bg~=C.bg or cache.bg2~=C.bg2 or cache.accent~=C.accent or cache.edge2~=C.edge2 then
     gfx.setimgdim(BACKGROUND_IMAGE,gfx.w,gfx.h)
@@ -1835,7 +1927,7 @@ local function cached_background()
     gfx.set(C.bg[1],C.bg[2],C.bg[3],1);gfx.rect(0,0,gfx.w,gfx.h,1)
     draw_background()
     gfx.dest=dest
-    cache.w=gfx.w;cache.h=gfx.h;cache.scale=scale;cache.ox=ox;cache.oy=oy;cache.width=W
+    cache.w=gfx.w;cache.h=gfx.h;cache.scale=scale;cache.dpi=gfx.ext_retina;cache.ox=ox;cache.oy=oy;cache.width=W
     cache.bg=C.bg;cache.bg2=C.bg2;cache.accent=C.accent;cache.edge2=C.edge2
   end
   local mode=gfx.mode
@@ -2948,7 +3040,7 @@ local function draw()
   small_button("copy_info","全情報をコピー",178,H-32,142,30,function() copy_information(false) end,#A.items>0,true)
   small_button("paste_all","名前を貼付（先頭から）",332,H-32,W-356,30,function() paste_names(false) end,#A.items>0,true)
 
-  BLT.footer(A.blt_status or (#A.items==0 and 'マーカー／リージョンがありません。' or string.format('%d件  選択 %d件',#A.items,A.selected_count)),A.blt_bad,W,H+22,'0.5.12')
+  BLT.footer(A.blt_status or (#A.items==0 and 'マーカー／リージョンがありません。' or string.format('%d件  選択 %d件',#A.items,A.selected_count)),A.blt_bad,W,H+22,'0.5.13')
   custom_titlebar()
   drawn_layout={w=gfx.w,h=gfx.h,generation=A.generation,offset=A.offset}
 end
@@ -3172,7 +3264,7 @@ local x,y=tonumber(R.GetExtState(SECTION,"window_x")),tonumber(R.GetExtState(SEC
 local w,h=tonumber(R.GetExtState(SECTION,"window_w")),tonumber(R.GetExtState(SECTION,"window_h"))
 w=finite(w) and clamp(w,486,1600) or BASE_W; h=finite(h) and clamp(h,Chrome.minH,1400+Chrome.titleH) or (BASE_H+Chrome.titleH)
 -- Match native window/input coordinates in logical points on Mac.
-gfx.ext_retina=BLT_MAC and 0 or 1
+gfx.ext_retina=1
 if finite(x) and finite(y) then gfx.init(Chrome.windowTitle,w,h,0,x,y)
 else gfx.init(Chrome.windowTitle,w,h,0) end
 if not apply_custom_window_style(w,h) then gfx.quit(); Language.mb("カスタムタイトルバーを初期化できません。",APP_NAME,0); return end
