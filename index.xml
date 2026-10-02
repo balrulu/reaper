@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<index version="1" name="BLT ReaScripts" commit="6856e10b21afe8dcf9c26b6e5b37f01f14ca5ce7">
+<index version="1" name="BLT ReaScripts" commit="c99ce4a66eac7adba8ccf8344b4e67c999889739">
   <category name="BLT">
     <reapack name="BLT_SPATIAL_FIELD.jsfx" type="effect" desc="BLT SPATIAL FIELD">
       <version name="0.5.0" author="Balrulu" time="2026-09-22T19:24:46Z">
@@ -10,6 +10,11 @@
         <changelog><![CDATA[BLT SERIES Beta TEST UPLOAD]]></changelog>
         <source>https://github.com/balrulu/reaper/raw/18e2ec316efc9515303909d6a2dfc36c6fd3452a/BLT/BLT_SPATIAL_FIELD.jsfx</source>
         <source main="main" type="script" file="BLT ReaScripts/BLT_SPATIAL_FIELD_THEME_BRIDGE.lua">https://github.com/balrulu/reaper/raw/18e2ec316efc9515303909d6a2dfc36c6fd3452a/BLT/BLT_SPATIAL_FIELD_THEME_BRIDGE.lua</source>
+      </version>
+      <version name="0.5.2" author="Balrulu" time="2026-10-02T18:33:38Z">
+        <changelog><![CDATA[BLT SERIES Beta TEST UPLOAD]]></changelog>
+        <source>https://github.com/balrulu/reaper/raw/c99ce4a66eac7adba8ccf8344b4e67c999889739/BLT/BLT_SPATIAL_FIELD.jsfx</source>
+        <source main="main" type="script" file="../BLT_SPATIAL_FIELD_THEME_BRIDGE.lua">https://github.com/balrulu/reaper/raw/c99ce4a66eac7adba8ccf8344b4e67c999889739/BLT/BLT_SPATIAL_FIELD_THEME_BRIDGE.lua</source>
       </version>
     </reapack>
   </category>
