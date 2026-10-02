@@ -1,10 +1,10 @@
 desc:BLT SPATIAL FIELD
 author:Balrulu
-version:0.5.2
+version:0.5.3
 changelog:BLT SERIES Beta TEST UPLOAD
 provides:
   [script main=main] BLT_SPATIAL_FIELD_THEME_BRIDGE.lua > ../
-// v0.5.2 — horizontal binaural position and distance processor.
+// v0.5.3 — horizontal binaural position and distance processor.
 // SADIE II v2-1 D1 / KU100: Copyright 2018, University of York.
 // Cal Armstrong, Lewis Thresh, Gavin Kearney. Apache-2.0 (see About).
 // Source: https://doi.org/10.5281/zenodo.10886409
@@ -377,7 +377,7 @@ file_var(0,ui_lang);
 
 @gfx 700 614
 !about_text_ready ? (
-90000[0]="BLT SPATIAL FIELD v0.5.2 - Third-party notices";
+90000[0]="BLT SPATIAL FIELD v0.5.3 - Third-party notices";
 90000[1]="";
 90000[2]="SADIE II Database v2-1, D1 / Neumann KU100.";
 90000[3]="Copyright 2018, University of York.";
@@ -644,12 +644,17 @@ function ink(r,g,b,a) local(v,t,ar,ag,ab) (
   );
  ); gfx_set(r,g,b,a);
 );
+function ui_font(slot,face,size,bold) local(flags) (
+ flags=bold ? 'b' : 0;
+ fontmode==1 && bold ? (face=face==jpfont ? "HiraginoSans-W6" : "HelveticaNeue-Bold";flags=0;);
+ gfx_setfont(slot,face,max(8,floor(size*scale+.5)),flags);
+);
 function label(x,y,txt,size,r,g,b) local(c,hasjp) (
  c=0;hasjp=0;loop(strlen(txt),str_getchar(txt,c,'cu')>127 ? hasjp=1;c+=1;);
- gfx_setfont(1,hasjp ? jpfont : latinfont,max(8,floor(size*scale+.5))); ink(r,g,b,1); gfx_x=ox+x*scale; gfx_y=oy+y*scale; gfx_drawstr(txt);
+ ui_font(1,hasjp ? jpfont : latinfont,size,0); ink(r,g,b,1); gfx_x=ox+x*scale; gfx_y=oy+y*scale; gfx_drawstr(txt);
 );
 function right_label(x,y,txt,size,r,g,b) local(tw,th) (
- gfx_setfont(1,latinfont,max(8,floor(size*scale+.5)),0);
+ ui_font(1,latinfont,size,0);
  gfx_measurestr(txt,tw,th);label(x-tw/scale,y,txt,size,r,g,b);
 );
 function panel(x,y,w,h) (
@@ -688,7 +693,7 @@ function field(id,x,y,w,title,unit) local(v,over,lo,hi,tw,th) (
  );
  editing==id && selectall ? (
   gfx_set(.35,.76,1,1);rect(x+7,y+17,w-47,23);
-  gfx_setfont(1,latinfont,max(8,floor(20*scale+.5)),0);
+  ui_font(1,latinfont,20,0);
   gfx_set(.025,.045,.07,1);gfx_x=ox+(x+9)*scale;gfx_y=oy+(y+18)*scale;gfx_drawstr(#val);
  ) : (
   label(x+9,y+18,#val,20,.88,.95,1);
@@ -734,8 +739,8 @@ function toggle(id,x,y,w,txt) local(over,on) (
  label(x+39,y+17,on ? "ON" : "OFF",9,on ? .55 : .47,on ? .87 : .55,on ? 1 : .64);
  clicked && over ? (commit();notify_param(id,!on,1););
 );
-jpfont=fontmode==1 ? "Hiragino Sans" : fontmode==2 ? "Noto Sans CJK JP" : "Yu Gothic UI";
-latinfont=fontmode==1 ? "Helvetica Neue" : fontmode==2 ? "sans-serif" : "Segoe UI";
+jpfont=fontmode==1 ? "HiraginoSans-W4" : fontmode==2 ? "Noto Sans CJK JP" : "Yu Gothic UI";
+latinfont=fontmode==1 ? "HelveticaNeue-Medium" : fontmode==2 ? "sans-serif" : "Segoe UI";
 now=time_precise();
 !bridge_observed ? (
  bridge_observed=1;bridge_tick=gmem[0];bridge_seen=-100;
@@ -771,7 +776,7 @@ clicked && hit(452,-26,60,26) ? (
 clicked && hit(562,-26,62,26) ? (
  commit();i=1;loop(10,notify_param(i,param_default(i),1);i+=1;);
 );
-gfx_setfont(2,latinfont,max(8,floor(35*scale+.5)),'b');
+ui_font(2,latinfont,35,1);
 ink(.90,.95,1,1);gfx_x=ox+24*scale;gfx_y=oy+8*scale;gfx_drawstr("SPATIAL FIELD");
 label(26,48,tr("DISTANCE / AZIMUTH  空間と距離のシミュレーター","DISTANCE / AZIMUTH  Spatial audio simulator"),10,.40,.70,.82);
 clicked && hit(520,-26,34,26) ? (
@@ -907,10 +912,10 @@ hit(449,228,239,42) ? strcpy(#hint,tr("後方強調：0%で無加工 / 背後の
 hit(449,369,239,29) ? strcpy(#hint,tr("伝搬モードを選択 / 初期値は相対分散","Select propagation mode / Default: relative dispersion"));
 editing ? strcpy(#hint,tr("入力中：Enterで確定 / Escで取消 / Ctrl+Aで全選択","EDITING: Enter to apply / Esc to cancel / Ctrl+A to select all"));
 // Share one footer row; reserve the measured credits width before fitting help.
-right_label(688,577,"BLT / SADIE II - KU100 / v0.5.2",9,.40,.57,.71);
-gfx_measurestr("BLT / SADIE II - KU100 / v0.5.2",footer_credit_w,footer_credit_h);
+right_label(688,577,"BLT / SADIE II - KU100 / v0.5.3",9,.40,.57,.71);
+gfx_measurestr("BLT / SADIE II - KU100 / v0.5.3",footer_credit_w,footer_credit_h);
 footer_help_w=max(0,660*scale-footer_credit_w);
-gfx_setfont(1,ui_lang ? latinfont : jpfont,max(8,floor(10*scale+.5)),0);
+ui_font(1,ui_lang ? latinfont : jpfont,10,0);
 strcpy(#footer_help,#hint);strcpy(#footer_display,#hint);
 gfx_measurestr(#footer_display,footer_help_tw,footer_help_th);
 while(footer_help_tw>footer_help_w && strlen(#footer_help)>0) (
