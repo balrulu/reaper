@@ -1,5 +1,5 @@
 -- @description MARKER REGION DESK
--- @version 0.5.11
+-- @version 0.5.12
 -- @author Balrulu
 -- @provides
 --   . > ../
@@ -2948,7 +2948,7 @@ local function draw()
   small_button("copy_info","全情報をコピー",178,H-32,142,30,function() copy_information(false) end,#A.items>0,true)
   small_button("paste_all","名前を貼付（先頭から）",332,H-32,W-356,30,function() paste_names(false) end,#A.items>0,true)
 
-  BLT.footer(A.blt_status or (#A.items==0 and 'マーカー／リージョンがありません。' or string.format('%d件  選択 %d件',#A.items,A.selected_count)),A.blt_bad,W,H+22,'0.5.11')
+  BLT.footer(A.blt_status or (#A.items==0 and 'マーカー／リージョンがありません。' or string.format('%d件  選択 %d件',#A.items,A.selected_count)),A.blt_bad,W,H+22,'0.5.12')
   custom_titlebar()
   drawn_layout={w=gfx.w,h=gfx.h,generation=A.generation,offset=A.offset}
 end
@@ -3075,13 +3075,25 @@ function BLTRestore.start(api)
  local _,path,actionSection,command=api.get_action_context()
  assert(actionSection==0 and path~='','BLT restore requires a Main action')
  local root=api.GetResourcePath()..'/Scripts'
- api.RecursiveCreateDirectory(root..'/BLT',0)
- restore_write(root..'/BLT/BLT_Restore_Open_Apps.lua',BLTRestoreLauncher)
+ api.RecursiveCreateDirectory(root..'/BLT ReaScripts',0)
+ restore_write(root..'/BLT ReaScripts/BLT_Restore_Open_Apps.lua',BLTRestoreLauncher)
  local startup=root..'/__startup.lua';local original=restore_read(startup)or''
  local marker='-- BLT_APP_RESTORE_STARTUP'
  if not original:find(marker,1,true)then
-  local block=marker..'\ndo\n local path=reaper.GetResourcePath().."/Scripts/BLT/BLT_Restore_Open_Apps.lua"\n local fn=loadfile(path)\n if fn then local ok,err=pcall(fn);if not ok then reaper.ShowConsoleMsg(tostring(err).."\\n")end end\nend\n'
+  local block=marker..'\ndo\n local path=reaper.GetResourcePath().."/Scripts/BLT ReaScripts/BLT_Restore_Open_Apps.lua"\n local fn=loadfile(path)\n if fn then local ok,err=pcall(fn);if not ok then reaper.ShowConsoleMsg(tostring(err).."\\n")end end\nend\n'
   restore_write(startup,block..original:gsub('^\239\187\191',''))
+ else
+  local old=' local path=reaper.GetResourcePath().."/Scripts/BLT/BLT_Restore_Open_Apps.lua"'
+  local at=original:find(old,1,true)
+  if at then
+   local replacement=' local path=reaper.GetResourcePath().."/Scripts/BLT ReaScripts/BLT_Restore_Open_Apps.lua"'
+   restore_write(startup,original:sub(1,at-1)..replacement..original:sub(at+#old))
+  end
+ end
+ local legacy=root..'/BLT/BLT_Restore_Open_Apps.lua'
+ local savedStartup=restore_read(startup) or ''
+ if not savedStartup:find('/Scripts/BLT/BLT_Restore_Open_Apps.lua',1,true) and restore_read(legacy)==BLTRestoreLauncher then
+  os.remove(legacy)
  end
  local count=math.min(128,tonumber(api.GetExtState(section,'count'))or 0);local found=false
  for i=1,count do if api.GetExtState(section,'app_'..i)==id then found=true;break end end
