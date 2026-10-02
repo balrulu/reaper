@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<index version="1" name="BLT ReaScripts" commit="c7c7242447b62dc14763c9af8e47843d17908a10">
+<index version="1" name="BLT ReaScripts" commit="6856e10b21afe8dcf9c26b6e5b37f01f14ca5ce7">
   <category name="BLT">
     <reapack name="BLT_SPATIAL_FIELD.jsfx" type="effect" desc="BLT SPATIAL FIELD">
       <version name="0.5.0" author="Balrulu" time="2026-09-22T19:24:46Z">
@@ -333,6 +333,10 @@
         <changelog><![CDATA[BLT SERIES Beta TEST UPLOAD]]></changelog>
         <source main="main" file="../BLT_MARKER_REGION_DESK.lua">https://github.com/balrulu/reaper/raw/e723c01364e5686cc4ee84ff7cec62285eab0196/BLT_ReaScripts/BLT_MARKER_REGION_DESK.lua</source>
       </version>
+      <version name="0.5.12" author="Balrulu" time="2026-10-02T17:53:07Z">
+        <changelog><![CDATA[BLT SERIES Beta TEST UPLOAD]]></changelog>
+        <source main="main" file="../BLT_MARKER_REGION_DESK.lua">https://github.com/balrulu/reaper/raw/6856e10b21afe8dcf9c26b6e5b37f01f14ca5ce7/BLT_ReaScripts/BLT_MARKER_REGION_DESK.lua</source>
+      </version>
     </reapack>
     <reapack name="BLT_MINIMAL_INFO_PANEL.lua" type="script" desc="MINIMAL INFO PANEL">
       <metadata>
@@ -367,6 +371,10 @@
       <version name="0.1.37" author="Balrulu" time="2026-10-01T06:34:16Z">
         <changelog><![CDATA[BLT SERIES Beta TEST UPLOAD]]></changelog>
         <source main="main" file="../BLT_MINIMAL_INFO_PANEL.lua">https://github.com/balrulu/reaper/raw/e723c01364e5686cc4ee84ff7cec62285eab0196/BLT_ReaScripts/BLT_MINIMAL_INFO_PANEL.lua</source>
+      </version>
+      <version name="0.1.38" author="Balrulu" time="2026-10-02T17:53:07Z">
+        <changelog><![CDATA[BLT SERIES Beta TEST UPLOAD]]></changelog>
+        <source main="main" file="../BLT_MINIMAL_INFO_PANEL.lua">https://github.com/balrulu/reaper/raw/6856e10b21afe8dcf9c26b6e5b37f01f14ca5ce7/BLT_ReaScripts/BLT_MINIMAL_INFO_PANEL.lua</source>
       </version>
     </reapack>
     <reapack name="BLT_SIMPLE_NORMALIZER.lua" type="script" desc="SIMPLE NORMALIZER">
@@ -444,6 +452,10 @@
       <version name="0.2.11" author="Balrulu" time="2026-10-01T06:34:16Z">
         <changelog><![CDATA[BLT SERIES Beta TEST UPLOAD]]></changelog>
         <source main="main" file="../BLT_TRACK_TREE.lua">https://github.com/balrulu/reaper/raw/e723c01364e5686cc4ee84ff7cec62285eab0196/BLT_ReaScripts/BLT_TRACK_TREE.lua</source>
+      </version>
+      <version name="0.2.12" author="Balrulu" time="2026-10-02T17:53:07Z">
+        <changelog><![CDATA[BLT SERIES Beta TEST UPLOAD]]></changelog>
+        <source main="main" file="../BLT_TRACK_TREE.lua">https://github.com/balrulu/reaper/raw/6856e10b21afe8dcf9c26b6e5b37f01f14ca5ce7/BLT_ReaScripts/BLT_TRACK_TREE.lua</source>
       </version>
     </reapack>
     <reapack name="BLT_VARIANT_FORGE.lua" type="script" desc="VARIANT FORGE">
