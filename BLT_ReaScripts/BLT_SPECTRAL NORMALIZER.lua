@@ -1,5 +1,5 @@
 -- @description SPECTRAL NORMALIZER
--- @version 0.2.12
+-- @version 0.2.13
 -- @author Balrulu
 -- @provides
 --   . > ../
@@ -9,15 +9,28 @@
 --   BLT SERIES Beta TEST UPLOAD
 
 -- BLT external storage 1.1.0. Embedded; large data stays beside this script.
--- BEGIN BLT RETINA 1.0.0 (generated from _shared/BLT_Retina.lua)
+-- BEGIN BLT RETINA 1.1.0 (generated from _shared/BLT_Retina.lua)
 -- Layout and pointer coordinates stay in window points on macOS.
 -- Drawing, font rasterization and generated image buffers use backing pixels.
 local gfx=(function(api,native)
  local osname=api.GetOS() or ''
  if not osname:match('OSX') and not osname:match('macOS') then return native end
- local G={}
+ local G={mac=true}
  local backing=1
  local fonts,selected={},nil
+ local faces={['Hiragino Sans']={'HiraginoSans-W4','HiraginoSans-W6'},
+  ['Helvetica Neue']={'HelveticaNeue-Medium','HelveticaNeue-Bold'},['Menlo']={'Menlo-Regular','Menlo-Bold'}}
+ faces['Yu Gothic UI'],faces['Segoe UI'],faces.Consolas=faces['Hiragino Sans'],faces['Helvetica Neue'],faces.Menlo
+ faces['sans-serif'],faces.monospace=faces['Helvetica Neue'],faces.Menlo
+ local function font_style(face,flags)
+  local family=faces[face];if not family then return face,flags end
+  local bold,style,shift=false,0,0
+  while flags>0 do
+   local byte=flags&255;flags=flags>>8
+   if byte==98 or byte==66 then bold=true else style=style|(byte<<shift);shift=shift+8 end
+  end
+  return family[bold and 2 or 1],style
+ end
  local function refresh_scale()
   local dpi=tonumber(native.ext_retina) or 1
   if dpi~=dpi or dpi<1 or dpi==math.huge then dpi=1 end
@@ -38,9 +51,13 @@ local gfx=(function(api,native)
  function G.setfont(slot,face,size,flags)
   selected=slot
   if face~=nil then
+   size,flags=size or 10,flags or 0
+   local current=fonts[slot]
+   if current and current.input==face and current.size==size and current.style==flags then return native.setfont(slot) end
    local f=fonts[slot] or {};fonts[slot]=f
-   f.face,f.size,f.flags=face,size or 10,flags or 0
-   return native.setfont(slot,face,f.size*backing,f.flags)
+   f.input,f.size,f.style=face,size,flags
+   f.face,f.flags=font_style(face,flags)
+   return native.setfont(slot,f.face,f.size*backing,f.flags)
   end
   return native.setfont(slot)
  end
@@ -599,7 +616,7 @@ end
 local WindowGeometry=create_window_geometry(reaper,gfx)
 local BLT_MAC=(reaper.GetOS() or ''):match('OSX')~=nil or (reaper.GetOS() or ''):match('macOS')~=nil
 
-local Core={VERSION='0.2.12',SECTION='BLT_SPECTRAL_NORMALIZER',MAX_POINTS=1024}
+local Core={VERSION='0.2.13',SECTION='BLT_SPECTRAL_NORMALIZER',MAX_POINTS=1024}
 local abs,min,max,sqrt,log,pi,floor,ceil=math.abs,math.min,math.max,math.sqrt,math.log,math.pi,math.floor,math.ceil
 local function clamp(x,a,b) return min(b,max(a,x)) end
 local function finite(x) return type(x)=='number' and x==x and abs(x)<math.huge end
@@ -965,7 +982,7 @@ local PrimaryButton=(function()
   if s.flash_until and now<s.flash_until and live then local flash=((s.flash_until-now)/.45)^2;d.rect(x+1,y+1,w-2,h-2,ice,.07*flash);d.line(x,y,x+w,y,ice,.6*flash) end
   local top=caption or 'EXECUTE';if not enabled and not busy then top='WAIT' end
   if type(progress)=='number' then progress=clamp(progress,0,1);top=top..'  '..floor(progress*100+.5)..'%';d.rect(x+4,y+h-5,w-8,2,C.edge,.45);if progress>0 then d.rect(x+4,y+h-5,(w-8)*progress,2,ice,.8) end end
-  local top_y=y+(h-42)/2+3;d.label(top,x+10,top_y,8,(enabled or busy) and ice or C.faint,3,true,w-20,'center');d.label(title,x+10,top_y+14,15,(enabled or busy) and C.text or C.muted,1,false,w-20,'center')
+  local top_y=y+(h-42)/2+3;d.label(top,x+10,top_y,8,(enabled or busy) and ice or C.faint,3,true,w-20,'center');d.label(title,x+10,top_y+14,15,(enabled or busy) and C.text or C.muted,1,gfx.mac==true,w-20,'center')
  end
  function P.tick(now,active,wake)
   local s=P.state;local tail=s.particles and #s.particles>0;local fading=s.hover>.002 and s.hover<.998 or (not s.hot and not s.busy and s.hover>.002)

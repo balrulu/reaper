@@ -1,5 +1,5 @@
 -- @description VARIANT FORGE
--- @version 0.5.38
+-- @version 0.5.39
 -- @author Balrulu
 -- @provides
 --   . > ../
@@ -9,15 +9,28 @@
 --   BLT SERIES Beta TEST UPLOAD
 
 -- BLT external storage. Current-format data only.
--- BEGIN BLT RETINA 1.0.0 (generated from _shared/BLT_Retina.lua)
+-- BEGIN BLT RETINA 1.1.0 (generated from _shared/BLT_Retina.lua)
 -- Layout and pointer coordinates stay in window points on macOS.
 -- Drawing, font rasterization and generated image buffers use backing pixels.
 local gfx=(function(api,native)
  local osname=api.GetOS() or ''
  if not osname:match('OSX') and not osname:match('macOS') then return native end
- local G={}
+ local G={mac=true}
  local backing=1
  local fonts,selected={},nil
+ local faces={['Hiragino Sans']={'HiraginoSans-W4','HiraginoSans-W6'},
+  ['Helvetica Neue']={'HelveticaNeue-Medium','HelveticaNeue-Bold'},['Menlo']={'Menlo-Regular','Menlo-Bold'}}
+ faces['Yu Gothic UI'],faces['Segoe UI'],faces.Consolas=faces['Hiragino Sans'],faces['Helvetica Neue'],faces.Menlo
+ faces['sans-serif'],faces.monospace=faces['Helvetica Neue'],faces.Menlo
+ local function font_style(face,flags)
+  local family=faces[face];if not family then return face,flags end
+  local bold,style,shift=false,0,0
+  while flags>0 do
+   local byte=flags&255;flags=flags>>8
+   if byte==98 or byte==66 then bold=true else style=style|(byte<<shift);shift=shift+8 end
+  end
+  return family[bold and 2 or 1],style
+ end
  local function refresh_scale()
   local dpi=tonumber(native.ext_retina) or 1
   if dpi~=dpi or dpi<1 or dpi==math.huge then dpi=1 end
@@ -38,9 +51,13 @@ local gfx=(function(api,native)
  function G.setfont(slot,face,size,flags)
   selected=slot
   if face~=nil then
+   size,flags=size or 10,flags or 0
+   local current=fonts[slot]
+   if current and current.input==face and current.size==size and current.style==flags then return native.setfont(slot) end
    local f=fonts[slot] or {};fonts[slot]=f
-   f.face,f.size,f.flags=face,size or 10,flags or 0
-   return native.setfont(slot,face,f.size*backing,f.flags)
+   f.input,f.size,f.style=face,size,flags
+   f.face,f.flags=font_style(face,flags)
+   return native.setfont(slot,f.face,f.size*backing,f.flags)
   end
   return native.setfont(slot)
  end
@@ -1087,7 +1104,7 @@ local PrimaryButton=(function()
   -- Center the same two-line typography within each application's existing size.
   local topY=y+(h-42)/2+3
   d.label(top,x+10,topY,8,(enabled or busy) and ice or C.faint,3,w-20,12,5,false)
-  d.label(title,x+10,topY+14,15,(enabled or busy) and C.text or C.muted,1,w-20,21,5,false)
+  d.label(title,x+10,topY+14,15,(enabled or busy) and C.text or C.muted,1,w-20,21,5,gfx.mac==true)
  end
  function P.tick(now,active,wake)
   local s=P.state
@@ -1829,7 +1846,7 @@ end
 return B
 end)()
 
-local Core={VERSION='0.5.38',SOURCE_SR=48000,SOURCE_HOP=48,SOURCE_BLOCK=12000,SOURCE_PREVIEW_BINS=1400,SOURCE_MAX_REGIONS=16384,
+local Core={VERSION='0.5.39',SOURCE_SR=48000,SOURCE_HOP=48,SOURCE_BLOCK=12000,SOURCE_PREVIEW_BINS=1400,SOURCE_MAX_REGIONS=16384,
  GENERATED_TAG='P_EXT:BLT_VARIANT_FORGE',TEMP_TAG='P_EXT:BLT_VARIANT_FORGE_TEMP',SECTION='BLT_VARIANT_FORGE',EQ_FIXED_CACHE={}}
 Core.STALE_TEMP_PROJECTS={};Core.RUN_ID='';Core.TEMP_HEARTBEAT_TTL=8;Core.TEMP_HEARTBEAT_KEY='temp_live_registry_v1';Core.temp_heartbeat_at=0
 local abs,min,max,floor,ceil=math.abs,math.min,math.max,math.floor,math.ceil

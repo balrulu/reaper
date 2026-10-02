@@ -1,5 +1,5 @@
 -- @description LOUDNESS TRACE
--- @version 0.7.7
+-- @version 0.7.9
 -- @author Balrulu
 -- @provides
 --   . > ../
@@ -8,15 +8,28 @@
 -- @about
 --   BLT SERIES Beta TEST UPLOAD
 
--- BEGIN BLT RETINA 1.0.0 (generated from _shared/BLT_Retina.lua)
+-- BEGIN BLT RETINA 1.1.0 (generated from _shared/BLT_Retina.lua)
 -- Layout and pointer coordinates stay in window points on macOS.
 -- Drawing, font rasterization and generated image buffers use backing pixels.
 local gfx=(function(api,native)
  local osname=api.GetOS() or ''
  if not osname:match('OSX') and not osname:match('macOS') then return native end
- local G={}
+ local G={mac=true}
  local backing=1
  local fonts,selected={},nil
+ local faces={['Hiragino Sans']={'HiraginoSans-W4','HiraginoSans-W6'},
+  ['Helvetica Neue']={'HelveticaNeue-Medium','HelveticaNeue-Bold'},['Menlo']={'Menlo-Regular','Menlo-Bold'}}
+ faces['Yu Gothic UI'],faces['Segoe UI'],faces.Consolas=faces['Hiragino Sans'],faces['Helvetica Neue'],faces.Menlo
+ faces['sans-serif'],faces.monospace=faces['Helvetica Neue'],faces.Menlo
+ local function font_style(face,flags)
+  local family=faces[face];if not family then return face,flags end
+  local bold,style,shift=false,0,0
+  while flags>0 do
+   local byte=flags&255;flags=flags>>8
+   if byte==98 or byte==66 then bold=true else style=style|(byte<<shift);shift=shift+8 end
+  end
+  return family[bold and 2 or 1],style
+ end
  local function refresh_scale()
   local dpi=tonumber(native.ext_retina) or 1
   if dpi~=dpi or dpi<1 or dpi==math.huge then dpi=1 end
@@ -37,9 +50,13 @@ local gfx=(function(api,native)
  function G.setfont(slot,face,size,flags)
   selected=slot
   if face~=nil then
+   size,flags=size or 10,flags or 0
+   local current=fonts[slot]
+   if current and current.input==face and current.size==size and current.style==flags then return native.setfont(slot) end
    local f=fonts[slot] or {};fonts[slot]=f
-   f.face,f.size,f.flags=face,size or 10,flags or 0
-   return native.setfont(slot,face,f.size*backing,f.flags)
+   f.input,f.size,f.style=face,size,flags
+   f.face,f.flags=font_style(face,flags)
+   return native.setfont(slot,f.face,f.size*backing,f.flags)
   end
   return native.setfont(slot)
  end
@@ -366,7 +383,7 @@ end
 local WindowGeometry=create_window_geometry(reaper,gfx)
 
 -- Application / analysis
-local VERSION="0.7.7"
+local VERSION="0.7.9"
 local MAX_HISTORY_ROWS=126000
 local MAX_SAVE_BYTES=12*1024*1024
 local Core = {}
@@ -1493,7 +1510,7 @@ local function create_trace_platform(api,graphics)
  local P={mac=osname:match('OSX')~=nil or osname:match('macOS')~=nil,windows=osname:match('Win')~=nil}
  P.api=api
  P.chromeFont=P.mac and 'Helvetica Neue' or 'Segoe UI'
- P.graphFont=P.chromeFont
+ P.graphFont=P.mac and 'HelveticaNeue-Medium' or P.chromeFont
  P.faces=P.mac and {'Hiragino Sans','Helvetica Neue','Menlo','Hiragino Sans'} or {'Yu Gothic UI','Segoe UI','Consolas','Yu Gothic UI'}
  P.bodyFaces=P.mac and {'Hiragino Sans','Menlo','Helvetica Neue','Hiragino Sans'} or {'Yu Gothic UI','Consolas','Segoe UI','Yu Gothic UI'}
  if not P.mac then return P end
@@ -2188,6 +2205,13 @@ local TAG="P_EXT:"..SECTION
 local W,H=646,616
 local COLLAPSED_W,COLLAPSED_H=350,58
 local COMPACT_MEASURE_X,COMPACT_MEASURE_Y,COMPACT_MEASURE_W,COMPACT_MEASURE_H=256,12,78,34
+Core.analysis_button={normal={x=356,y=550,w=266,h=42},
+ compact={x=COMPACT_MEASURE_X,y=COMPACT_MEASURE_Y,w=COMPACT_MEASURE_W,h=COMPACT_MEASURE_H},cut=10}
+function Core.analysis_button_outline(w,h,cut)
+ cut=math.max(0,math.min(cut,w*.5,h*.5))
+ return {{x=cut,y=0},{x=w,y=0},{x=w,y=h-cut},
+  {x=w-cut,y=h},{x=0,y=h},{x=0,y=cut}}
+end
 local C={bg={.018,.030,.055},panel={.040,.068,.110},field={.018,.040,.080},
   edge={.145,.285,.445},text={.955,.980,1},muted={.690,.780,.875},
   faint={.390,.505,.635},accent={.120,.490,.980},ice={.650,.895,1},
@@ -4044,7 +4068,7 @@ local function button(id,label,x,y,w,h,fn,primary,selected,eyebrow,tone)
     gradient(x,y,w,analyzing and 2 or 1,C.ice,C.ice,.62+.28*a+(analyzing and .15*pulse or 0),.03)
     line(x,y+h,x+w,y+h,analyzing and C.ice or C.edge,analyzing and (.52+.20*pulse) or .48)
     line(x,y,x,y+h,C.ice,.66+(analyzing and .18*pulse or 0))
-    finish_corners(x,y,w,h,10,true,C.ice,.68+(analyzing and .18*pulse or 0))
+    finish_corners(x,y,w,h,Core.analysis_button.cut,true,C.ice,.68+(analyzing and .18*pulse or 0))
   else
     local toneColor=tone=='gold' and C.gold or C.accent
     local edgeColor=tone=='gold' and C.gold or C.edge
@@ -4099,22 +4123,34 @@ local function button(id,label,x,y,w,h,fn,primary,selected,eyebrow,tone)
       text(label,x+(w-tw)/2,y+(h-th)/2,12.5,C.text,tw+2,1,true)
     else
       local small=analyzing and (A.job.phase=='render' and 'DRY RENDER' or A.job.phase=='prepare' and 'PREPARING' or 'ANALYZING') or (eyebrow or 'MEASURE')
-      local sw=measure_text(small,8,2,false)
-      text(small,x+(w-sw)/2,y+3,8,C.ice,w,2)
-      local tw=measure_text(label,15,1,false)
-      text(label,x+max(10,(w-tw)/2),y+17,15,C.text,w-20)
+      local sw=measure_text(small,8,2,Platform.mac)
+      text(small,x+(w-sw)/2,y+3,8,C.ice,w,2,Platform.mac)
+      local tw=measure_text(label,15,1,Platform.mac)
+      text(label,x+max(10,(w-tw)/2),y+17,15,C.text,w-20,1,Platform.mac)
     end
 
     if id=='measure' and A.analysisBurst then
       local b=A.analysisBurst
+      if b.w~=w or b.h~=h then b.outline=Core.analysis_button_outline(w,h,Core.analysis_button.cut) end
+      b.x,b.y,b.w,b.h=x,y,w,h
       b.age=b.age+A.realDt
       local u=min(1,b.age/b.life)
       local flash=(1-u)^2
       local expand=3+18*u
       if flash>.001 then
-        line(b.x-expand,b.y-expand,b.x+b.w+expand,b.y-expand,C.ice,.42*flash)
-        line(b.x-expand,b.y+b.h+expand,b.x+b.w+expand,b.y+b.h+expand,C.accent,.30*flash)
-        rect(b.x-expand*.35,b.y-expand*.22,b.w+expand*.7,b.h+expand*.44,C.ice,.028*flash)
+        local outline=Core.analysis_button_outline(w+expand*2,h+expand*2,Core.analysis_button.cut+(2-math.sqrt(2))*expand)
+        for j,v in ipairs(outline) do
+          local nextv=outline[j%#outline+1]
+          line(x-expand+v.x,y-expand+v.y,x-expand+nextv.x,y-expand+nextv.y,
+            j<=2 and C.ice or C.accent,(j<=2 and .42 or .30)*flash)
+        end
+        color(C.ice,.028*flash)
+        local v=b.outline[1]
+        for j=2,#b.outline-1 do
+          local a,c=b.outline[j],b.outline[j+1]
+          gfx.triangle(ox+(x+v.x)*scale,oy+(y+v.y)*scale,
+            ox+(x+a.x)*scale,oy+(y+a.y)*scale,ox+(x+c.x)*scale,oy+(y+c.y)*scale)
+        end
       end
       for i=#A.analysisBurstParticles,1,-1 do
         local p=A.analysisBurstParticles[i]
@@ -4122,8 +4158,9 @@ local function button(id,label,x,y,w,h,fn,primary,selected,eyebrow,tone)
         if p.age>=p.life then table.remove(A.analysisBurstParticles,i)
         else
           local q=p.age/p.life
-          local px=p.x+p.vx*p.age+sin(p.phase+p.age*7)*1.2
-          local py=p.y+p.vy*p.age
+          local v=b.outline[p.edge];local nextv=b.outline[p.edge%#b.outline+1]
+          local px=x+v.x+(nextv.x-v.x)*p.t+p.vx*p.age+(sin(p.phase+p.age*7)-sin(p.phase))*1.2
+          local py=y+v.y+(nextv.y-v.y)*p.t+p.vy*p.age
           local e=(1-q)^2
           disc(px,py,3.6,C.accent,.035*e)
           disc(px,py,1.7,C.ice,.12*e)
@@ -4193,33 +4230,29 @@ local function close_measurement(job)
   if job and job.offline then Core.offline.close(R,job.offline);job.offline=nil end
 end
 local function trigger_analysis_finish_burst()
-  local x,y,w,h
-  if A.collapsed then
-    x,y,w,h=COMPACT_MEASURE_X,COMPACT_MEASURE_Y,COMPACT_MEASURE_W,COMPACT_MEASURE_H
-  else
-    x,y,w,h=250,550,276,42
+  local bounds=A.collapsed and Core.analysis_button.compact or Core.analysis_button.normal
+  local outline=Core.analysis_button_outline(bounds.w,bounds.h,Core.analysis_button.cut)
+  local lengths,perimeter={},0
+  for i,v in ipairs(outline) do
+    local nextv=outline[i%#outline+1]
+    local dx,dy=nextv.x-v.x,nextv.y-v.y
+    local len=math.sqrt(dx*dx+dy*dy);lengths[i]=len;perimeter=perimeter+len
   end
-  A.analysisBurst={age=0,life=.82,x=x,y=y,w=w,h=h}
+  A.analysisBurst={age=0,life=.82,x=bounds.x,y=bounds.y,w=bounds.w,h=bounds.h,outline=outline}
   A.analysisBurstParticles={}
   for i=1,34 do
     A.analysisButtonSerial=A.analysisButtonSerial+1
     local n=A.analysisButtonSerial
     local r1=(sin(n*12.9898)*43758.5453)%1
     local r2=(sin(n*78.233)*12345.6789)%1
-    local side=i%4
-    local px,py
-    if side==0 then px=x+r1*w; py=y+2
-    elseif side==1 then px=x+w-2; py=y+r1*h
-    elseif side==2 then px=x+r1*w; py=y+h-2
-    else px=x+2; py=y+r1*h end
-    local cx,cy=x+w*.5,y+h*.5
-    local dx,dy=px-cx,py-cy
-    local len=max(1,math.sqrt(dx*dx+dy*dy))
-    local speed=28+r2*62
+    local distance=(i-1+r1)/34*perimeter;local edge=1
+    while edge<#outline and distance>=lengths[edge] do distance=distance-lengths[edge];edge=edge+1 end
+    local v,nextv=outline[edge],outline[edge%#outline+1]
+    local dx,dy=nextv.x-v.x,nextv.y-v.y;local len=lengths[edge]
+    local speed=28+r2*62;local tangent=(r1-.5)*16
     A.analysisBurstParticles[#A.analysisBurstParticles+1]={
-      x=px,y=py,vx=dx/len*speed+(r2-.5)*16,vy=dy/len*speed+(r1-.5)*16,
-      age=0,life=.42+r1*.48,phase=r2*pi*2
-    }
+      edge=edge,t=distance/len,vx=(dy*speed+dx*tangent)/len,vy=(-dx*speed+dy*tangent)/len,
+      age=0,life=.42+r1*.48,phase=r2*pi*2}
   end
 end
 
@@ -5044,10 +5077,10 @@ local function controller()
 
   button('clear','グラフをクリア',24,555,126,32,function() clear_measurement() end,false,false,nil,'gold')
   Live.draw_button(180,554,146,34,false)
-  button('measure',A.job and (A.job.phase=='analyze' and ('解析を中止  '..floor(A.job.progress*100)..'%') or measurement_status(A.job)) or '選択範囲を解析',356,550,266,42,function()
+  button('measure',A.job and (A.job.phase=='analyze' and ('解析を中止  '..floor(A.job.progress*100)..'%') or measurement_status(A.job)) or '選択範囲を解析',Core.analysis_button.normal.x,Core.analysis_button.normal.y,Core.analysis_button.normal.w,Core.analysis_button.normal.h,function()
     if A.job then cancel_job() else measure() end
   end,true,false,A.job and 'CANCEL' or 'ANALYZE')
-  if A.job and A.job.phase=='analyze' then rect(356,594,266*A.job.progress,2,C.ice,.8) end
+  if A.job and A.job.phase=='analyze' then local b=Core.analysis_button.normal;rect(b.x,b.y+b.h+2,b.w*A.job.progress,2,C.ice,.8) end
   fold_control('collapse',(W-64)*.5,603,64,18,true,function() A.requestFold=true end)
 
   local status,bad

@@ -1,5 +1,5 @@
 -- @description MARKER REGION DESK
--- @version 0.5.13
+-- @version 0.5.14
 -- @author Balrulu
 -- @provides
 --   . > ../
@@ -9,15 +9,28 @@
 --   BLT SERIES Beta TEST UPLOAD
 
 -- BLT preset transfer limits 1.1.0. Embedded; no runtime dependency.
--- BEGIN BLT RETINA 1.0.0 (generated from _shared/BLT_Retina.lua)
+-- BEGIN BLT RETINA 1.1.0 (generated from _shared/BLT_Retina.lua)
 -- Layout and pointer coordinates stay in window points on macOS.
 -- Drawing, font rasterization and generated image buffers use backing pixels.
 local gfx=(function(api,native)
  local osname=api.GetOS() or ''
  if not osname:match('OSX') and not osname:match('macOS') then return native end
- local G={}
+ local G={mac=true}
  local backing=1
  local fonts,selected={},nil
+ local faces={['Hiragino Sans']={'HiraginoSans-W4','HiraginoSans-W6'},
+  ['Helvetica Neue']={'HelveticaNeue-Medium','HelveticaNeue-Bold'},['Menlo']={'Menlo-Regular','Menlo-Bold'}}
+ faces['Yu Gothic UI'],faces['Segoe UI'],faces.Consolas=faces['Hiragino Sans'],faces['Helvetica Neue'],faces.Menlo
+ faces['sans-serif'],faces.monospace=faces['Helvetica Neue'],faces.Menlo
+ local function font_style(face,flags)
+  local family=faces[face];if not family then return face,flags end
+  local bold,style,shift=false,0,0
+  while flags>0 do
+   local byte=flags&255;flags=flags>>8
+   if byte==98 or byte==66 then bold=true else style=style|(byte<<shift);shift=shift+8 end
+  end
+  return family[bold and 2 or 1],style
+ end
  local function refresh_scale()
   local dpi=tonumber(native.ext_retina) or 1
   if dpi~=dpi or dpi<1 or dpi==math.huge then dpi=1 end
@@ -38,9 +51,13 @@ local gfx=(function(api,native)
  function G.setfont(slot,face,size,flags)
   selected=slot
   if face~=nil then
+   size,flags=size or 10,flags or 0
+   local current=fonts[slot]
+   if current and current.input==face and current.size==size and current.style==flags then return native.setfont(slot) end
    local f=fonts[slot] or {};fonts[slot]=f
-   f.face,f.size,f.flags=face,size or 10,flags or 0
-   return native.setfont(slot,face,f.size*backing,f.flags)
+   f.input,f.size,f.style=face,size,flags
+   f.face,f.flags=font_style(face,flags)
+   return native.setfont(slot,f.face,f.size*backing,f.flags)
   end
   return native.setfont(slot)
  end
@@ -3040,7 +3057,7 @@ local function draw()
   small_button("copy_info","全情報をコピー",178,H-32,142,30,function() copy_information(false) end,#A.items>0,true)
   small_button("paste_all","名前を貼付（先頭から）",332,H-32,W-356,30,function() paste_names(false) end,#A.items>0,true)
 
-  BLT.footer(A.blt_status or (#A.items==0 and 'マーカー／リージョンがありません。' or string.format('%d件  選択 %d件',#A.items,A.selected_count)),A.blt_bad,W,H+22,'0.5.13')
+  BLT.footer(A.blt_status or (#A.items==0 and 'マーカー／リージョンがありません。' or string.format('%d件  選択 %d件',#A.items,A.selected_count)),A.blt_bad,W,H+22,'0.5.14')
   custom_titlebar()
   drawn_layout={w=gfx.w,h=gfx.h,generation=A.generation,offset=A.offset}
 end
