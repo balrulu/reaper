@@ -1,5 +1,5 @@
 -- @description INTERVAL
--- @version 0.5.12
+-- @version 0.5.14
 -- @author Balrulu
 -- @provides
 --   . > ../
@@ -422,7 +422,7 @@ end
 -- BLT PORTING CONFIGURATION: shared chrome metrics, app identity and title.
 -- Keep this script self-contained; no external module loading is required.
 local App={
-  version="0.5.12",section="BLT_INTERVAL",windowTitle="BLT Interval",
+  version="0.5.14",section="BLT_INTERVAL",windowTitle="BLT Interval",
   chromeTitle="I N T E R V A L",title="INTERVAL",
   subtitle="ITEM SPACING  アイテム間隔を整列",
 }
@@ -559,7 +559,7 @@ local Layout={
 local UI={}
 
 -- INTERVAL DOMAIN: normalization, selection planning and undo-safe execution.
-local Core = {}
+local Core = {TIME_EPSILON=1e-9}
 Core.value_specs={sec={min=0,max=3600000,step=1,digits=3},grid={min=0,max=1000000,step=1,digits=2}}
 
 function Core.normalize(value,unit)
@@ -584,16 +584,16 @@ end
 
 function Core.collect(project)
   local selected,records,folders={},{},{}
-  local function read(item)
+  local function read(item,track_index,item_index)
     if records[item] then return records[item] end
-    local track=R.GetMediaItemTrack(item)
+    local track=not track_index and R.GetMediaItemTrack(item)
     local v={item=item,position=R.GetMediaItemInfo_Value(item,"D_POSITION"),
       length=R.GetMediaItemInfo_Value(item,"D_LENGTH"),
-      locked=(math.floor(R.GetMediaItemInfo_Value(item,"C_LOCK"))&1)~=0,
-      track=R.GetMediaTrackInfo_Value(track,"IP_TRACKNUMBER"),
-      index=R.GetMediaItemInfo_Value(item,"IP_ITEMNUMBER")}
+      track=track_index or R.GetMediaTrackInfo_Value(track,"IP_TRACKNUMBER"),
+      index=item_index or R.GetMediaItemInfo_Value(item,"IP_ITEMNUMBER")}
+    if track then v.locked=(math.floor(R.GetMediaItemInfo_Value(item,"C_LOCK"))&1)~=0 end
     records[item]=v
-    if R.CountTracks and R.GetTrack and R.CountTrackMediaItems and R.GetTrackMediaItem
+    if track and R.CountTracks and R.GetTrack and R.CountTrackMediaItems and R.GetTrackMediaItem
       and R.GetMediaTrackInfo_Value(track,"I_FOLDERDEPTH")==1 then folders[v.track]=true end
     return v
   end
@@ -612,37 +612,88 @@ function Core.collect(project)
       depth=depth+delta
     end
     for _,entry in ipairs(stack) do ends[entry.index]=#tracks end
+    local function track_records(ti)
+      local list=track_items[ti]
+      if not list then
+        list={};track_items[ti]=list
+        for j=0,R.CountTrackMediaItems(tracks[ti])-1 do list[#list+1]=read(R.GetTrackMediaItem(tracks[ti],j),ti,j) end
+      end
+      return list
+    end
     local ordered={};for i,v in ipairs(selected) do ordered[i]=v end
     table.sort(ordered,function(a,b)
       if a.track~=b.track then return a.track<b.track end
       if a.position~=b.position then return a.position<b.position end
       return a.index<b.index
     end)
-    for _,parent in ipairs(ordered) do
-      if folders[parent.track] and not claimed[parent.item] then
-        local members={parent};local start,finish=parent.position,parent.position+parent.length
-        -- Ownership is determined from the original block's time range, before
-        -- any writes. Later media on the same folder track are separate units.
-        for ti=parent.track+1,ends[parent.track] or parent.track do
-          local list=track_items[ti]
-          if not list then
-            list={};track_items[ti]=list
-            for j=0,R.CountTrackMediaItems(tracks[ti])-1 do list[#list+1]=read(R.GetTrackMediaItem(tracks[ti],j)) end
-          end
-          for _,v in ipairs(list) do
-            if not claimed[v.item] and v.position<finish and v.position+v.length>start then members[#members+1]=v end
-          end
+    local first=1
+    while first<=#ordered do
+      local track=ordered[first].track;local last=first
+      while last<#ordered and ordered[last+1].track==track do last=last+1 end
+      if folders[track] then
+        local units={}
+        for i=first,last do
+          local parent=ordered[i]
+          if not claimed[parent.item] then units[parent.item]={parent} end
         end
-        if #members>1 then
-          local unit={item={},members=members,position=start,length=parent.length,track=parent.track,index=parent.index,locked=false}
-          local ending=finish
-          for _,v in ipairs(members) do
-            claimed[v.item]=true;unit.position=math.min(unit.position,v.position)
-            ending=math.max(ending,v.position+v.length);unit.locked=unit.locked or v.locked
+        if next(units) then
+          local parents=track_records(track)
+          table.sort(parents,function(a,b) return a.position==b.position and a.index<b.index or a.position<b.position end)
+          -- Index maximum endings to skip parent ranges that cannot overlap.
+          local endings={}
+          local function index_ranges(lo,hi)
+            if lo>hi then return -math.huge end
+            local mid=(lo+hi)//2;local parent=parents[mid]
+            endings[mid]=math.max(parent.position+parent.length,index_ranges(lo,mid-1),index_ranges(mid+1,hi))
+            return endings[mid]
           end
-          unit.length=ending-unit.position;items[#items+1]=unit
+          index_ranges(1,#parents)
+          local function match_parent(lo,hi,v,owner,best,distance)
+            if lo>hi then return owner,best,distance end
+            local mid=(lo+hi)//2;local finish=v.position+v.length
+            if parents[lo].position>=v.position+math.max(v.length,2*Core.TIME_EPSILON)-Core.TIME_EPSILON
+              or endings[mid]<=v.position+Core.TIME_EPSILON then return owner,best,distance end
+            local parent=parents[mid];local ending=parent.position+parent.length
+            local overlap=math.min(finish,ending)-math.max(v.position,parent.position)
+            if v.length==0 and v.position>parent.position+Core.TIME_EPSILON and v.position<ending-Core.TIME_EPSILON then overlap=2*Core.TIME_EPSILON end
+            local fit=math.abs(v.position-parent.position)+math.abs(finish-ending)
+            if overlap>Core.TIME_EPSILON and (not owner or overlap>best+Core.TIME_EPSILON
+              or math.abs(overlap-best)<=Core.TIME_EPSILON and (fit<distance-Core.TIME_EPSILON
+                or math.abs(fit-distance)<=Core.TIME_EPSILON and parent.index<owner.index)) then
+              owner,best,distance=parent,overlap,fit
+            end
+            owner,best,distance=match_parent(lo,mid-1,v,owner,best,distance)
+            return match_parent(mid+1,hi,v,owner,best,distance)
+          end
+          -- Choose ownership once from the original ranges. Include unselected
+          -- neighbours so a small crossfade cannot pull their children along.
+          for ti=track+1,ends[track] or track do
+            for _,v in ipairs(track_records(ti)) do
+              if not claimed[v.item] then
+                local owner=match_parent(1,#parents,v,nil,0,math.huge)
+                local members=owner and units[owner.item]
+                if members then
+                  if v.locked==nil then v.locked=(math.floor(R.GetMediaItemInfo_Value(v.item,"C_LOCK"))&1)~=0 end
+                  members[#members+1]=v
+                end
+              end
+            end
+          end
+          for i=first,last do
+            local parent=ordered[i];local members=units[parent.item]
+            if members and #members>1 then
+              local unit={item={},members=members,position=parent.position,track=track,index=parent.index,locked=false}
+              local ending=parent.position+parent.length
+              for _,v in ipairs(members) do
+                claimed[v.item]=true;unit.position=math.min(unit.position,v.position)
+                ending=math.max(ending,v.position+v.length);unit.locked=unit.locked or v.locked
+              end
+              unit.length=ending-unit.position;items[#items+1]=unit
+            end
+          end
         end
       end
+      first=last+1
     end
   end
   for _,v in ipairs(selected) do if not claimed[v.item] then items[#items+1]=v end end
@@ -757,14 +808,14 @@ local function plan_sequence(project, items, interval, mode, unit, grid, changes
   return true
 end
 
--- Shared overlap block formation: positive overlap, transitive across all tracks.
+-- Ignore rounding noise at touching edges; real overlaps remain transitive.
 function Core.overlap_blocks(ranges)
  local sorted={};for i,r in ipairs(ranges) do sorted[i]=r end
  table.sort(sorted,function(a,b) return a.start==b.start and a.finish<b.finish or a.start<b.start end)
  local blocks={}
  for _,r in ipairs(sorted) do
   local g=blocks[#blocks]
-  if not g or r.start>=g.finish then g={start=r.start,finish=r.finish,members={}};blocks[#blocks+1]=g end
+  if not g or r.start>=g.finish-Core.TIME_EPSILON then g={start=r.start,finish=r.finish,members={}};blocks[#blocks+1]=g end
   g.finish=math.max(g.finish,r.finish);g.members[#g.members+1]=r
  end
  return blocks
@@ -968,17 +1019,7 @@ local C = {
   warn     = {1.000, 0.755, 0.490},
   red      = {1.000, 0.230, 0.300},
 }
-local C_DEFAULT={}
-for k,v in pairs(C) do C_DEFAULT[k]={v[1],v[2],v[3]} end
--- Chameleon runtime state.
--- The theme adapter itself is kept as one self-contained block below so it can
--- be transplanted to other BLT scripts with minimal changes.
-local Chameleon={
-  enabled=R.GetExtState(SECTION,"chameleon")=="1",
-  signature=nil,
-  poll_at=0,
-  poll_interval=3.0,
-}
+local Chameleon
 local motion, frame_clock, frame_dt, anim_time = {}, R.time_precise(), 1/60, 0
 local hud_particles = {}
 local hud_particle_clock = 0
@@ -1681,439 +1722,251 @@ local Chrome={window=nil,mouseDown=false,drag=nil,resize=nil,mouseActive=false,r
   cursorId={we=32644,ns=32645,nwse=32642,nesw=32643,arrow=32512}}
 Chrome.font=fonts[4]
 
-local CHROME_DEFAULT={
-  mint={Chrome.mint[1],Chrome.mint[2],Chrome.mint[3]},
-  ice={Chrome.ice[1],Chrome.ice[2],Chrome.ice[3]},
-}
--- CHAMELEON THEME ADAPTER
---
--- Theme adapter interface:
---   Required palette tables : C, C_DEFAULT
---   Optional chrome colors   : Chrome, CHROME_DEFAULT
---   Persistence              : SECTION / ExtState key "chameleon"
---   Host hooks               : notice(), wake_visuals(), redraw_dirty
---   UI integration           : Chameleon.enabled / Chameleon.set(...)
---   Main-loop integration    : Chameleon.tick(now)
---
-Chameleon.keys={
-  -- Main/surface colors
-  "col_main_bg2","col_main_bg","col_arrangebg","col_tracklistbg","col_mixerbg",
-  "genlist_bg","col_tl_bg","col_trans_bg","col_tr1_bg","col_tr2_bg",
-  "col_main_editbk","col_transport_editbk","col_buttonbg",
-
-  -- Text colors
-  "col_main_text2","col_main_text","genlist_fg","col_tcp_text",
-  "col_toolbar_text","col_toolbar_text_on","col_tl_fg","col_tl_fg2","col_trans_fg",
-
-  -- Selection / active / accent colors
-  "col_seltrack","col_seltrack2","genlist_selbg",
-  "col_tl_bgsel","toolbararmed_color","col_main_resize2",
-  "selitem_dot","selitem_tag","activetake_tag",
-  "col_routinghl1","col_routinghl2","track_lanesolo_tabcol",
-
-  -- REAPER's own highlight / shadow / separators
-  "col_main_3dhl","col_main_3dsh","genlist_grid","col_toolbar_frame",
-  "col_tr1_divline","col_tr2_divline","docker_shadow",
-}
-local function ccopy(c) return {c[1],c[2],c[3]} end
-local function cmix(a,b,t)
+-- BEGIN BLT CHAMELEON 1.0.0 (generated from _shared/BLT_Chameleon.lua)
+-- Standalone embedded factory. Hosts supply persistence and redraw hooks.
+local BLTChameleon=(function()
+-- BEGIN BLT THEME COLORS 1.0.0 (generated from _shared/BLT_ThemeColors.lua)
+local BLTThemeColors=(function()
+ local M={}
+ function M.native(api,key)
+  local ok,n=pcall(api.GetThemeColor,key,0)
+  if not ok or type(n)~='number' or n~=n or n%1~=0 then return -1 end
+  return n
+ end
+ function M.decode(api,n)
+  if n==-1 then return nil end
+  local ok,r,g,b=pcall(api.ColorFromNative,n)
+  if not ok then return nil end
+  for _,v in ipairs({r,g,b}) do
+   if type(v)~='number' or v~=v or v<0 or v>255 then return nil end
+  end
+  if r==nil or g==nil or b==nil then return nil end
+  return {r/255,g/255,b/255}
+ end
+ function M.read(api,key,fallback) return M.decode(api,M.native(api,key)) or fallback end
+ local function linear(v) return v<=.04045 and v/12.92 or ((v+.055)/1.055)^2.4 end
+ function M.luminance(c) return linear(c[1])*.2126+linear(c[2])*.7152+linear(c[3])*.0722 end
+ function M.contrast(a,b)
+  local x,y=M.luminance(a),M.luminance(b)
+  return (math.max(x,y)+.05)/(math.min(x,y)+.05)
+ end
+ return M
+end)()
+-- END BLT THEME COLORS
+ local M={}
+ M.keys={
+  'col_main_bg2','col_main_bg','col_arrangebg','col_tracklistbg','col_mixerbg',
+  'genlist_bg','col_tl_bg','col_trans_bg','col_tr1_bg','col_tr2_bg',
+  'col_main_editbk','col_transport_editbk','col_buttonbg',
+  'col_main_text2','col_main_text','genlist_fg','col_tcp_text',
+  'col_toolbar_text','col_toolbar_text_on','col_tl_fg','col_tl_fg2','col_trans_fg',
+  'col_seltrack','col_seltrack2','genlist_selbg','col_tl_bgsel','toolbararmed_color',
+  'col_main_resize2','selitem_dot','selitem_tag','activetake_tag',
+  'col_routinghl1','col_routinghl2','track_lanesolo_tabcol',
+  'col_main_3dhl','col_main_3dsh','genlist_grid','col_toolbar_frame',
+  'col_tr1_divline','col_tr2_divline','docker_shadow',
+ }
+ function M.copy(c) return {c[1],c[2],c[3]} end
+ function M.mix(a,b,t)
   t=math.max(0,math.min(1,t or 0))
   return {a[1]+(b[1]-a[1])*t,a[2]+(b[2]-a[2])*t,a[3]+(b[3]-a[3])*t}
-end
-local function clum(c) return c[1]*0.2126+c[2]*0.7152+c[3]*0.0722 end
-local function csat(c)
-  local hi=math.max(c[1],c[2],c[3]); local lo=math.min(c[1],c[2],c[3])
-  return hi-lo
-end
-local function cclamp(c)
-  return {
-    math.max(0,math.min(1,c[1])),
-    math.max(0,math.min(1,c[2])),
-    math.max(0,math.min(1,c[3])),
-  }
-end
-local function cshift_luma(c,target)
-  local l=clum(c)
-  target=math.max(0,math.min(1,target))
-  if math.abs(target-l)<1e-5 then return ccopy(c) end
-  if target<l then
-    local t=(l-target)/math.max(l,1e-9)
-    return cmix(c,{0,0,0},t)
-  end
-  local t=(target-l)/math.max(1-l,1e-9)
-  return cmix(c,{1,1,1},t)
-end
-local function cboost_sat(c,factor)
-  local l=clum(c)
-  return cclamp({
-    l+(c[1]-l)*factor,
-    l+(c[2]-l)*factor,
-    l+(c[3]-l)*factor,
-  })
-end
-local function dominant_surface(colors,fallback)
-  local list={}
-  for i=1,#colors do
-    local c=colors[i]
-    if c then list[#list+1]={c=c,l=clum(c)} end
-  end
-  if #list==0 then return ccopy(fallback) end
-  table.sort(list,function(a,b) return a.l<b.l end)
-  local median
-  local n=#list
-  if n%2==1 then median=list[(n+1)//2].l
-  else median=(list[n//2].l+list[n//2+1].l)*.5 end
-  local best,bestd=list[1],math.huge
-  for i=1,n do
-    local d=math.abs(list[i].l-median)
-    if d<bestd then best,bestd=list[i],d end
-  end
-  return ccopy(best.c)
-end
-local function generated_text(bg)
-  -- Text polarity follows the ACTUAL palette background, not a theme text slot.
-  -- This guarantees black-ish text on light themes and white-ish text on dark themes.
-  local l=clum(bg)
-  if l>=0.56 then
-    return {0.070,0.075,0.082},false
-  elseif l<=0.44 then
-    return {0.935,0.945,0.958},true
-  end
-  -- Mid-grey themes: choose the side with the larger luminance separation.
-  if l>=0.50 then return {0.075,0.080,0.088},false end
-  return {0.935,0.945,0.958},true
-end
-local function fit_accent_to_bg(accent,bg,text_is_light)
-  local out=ccopy(accent)
-  local delta=math.abs(clum(out)-clum(bg))
-  if delta>=0.17 then return out end
-  if text_is_light then
-    -- Dark background: lift the accent without washing it toward full white.
-    local target=math.min(.78,clum(bg)+.28)
-    return cshift_luma(out,target)
-  end
-  -- Light background: darken the accent so controls remain visible.
-  local target=math.max(.16,clum(bg)-.30)
-  return cshift_luma(out,target)
-end
-local function contrast_anchor_bg(bg)
-  local l=clum(bg)
-  if l<0.50 then
-    local target=math.max(.025,l-(.50-l)*.16-.018)
-    return cshift_luma(bg,target)
-  end
-  local target=math.min(.975,l+(l-.50)*.10+.010)
-  return cshift_luma(bg,target)
-end
-local function contrast_surface(c,old_bg,new_bg,factor,min_gap,max_gap)
-  local delta=clum(c)-clum(old_bg)
-  local sign=delta<0 and -1 or 1
-  local mag=math.abs(delta)*factor
-  if min_gap and mag<min_gap then mag=min_gap end
-  if max_gap and mag>max_gap then mag=max_gap end
-  return cshift_luma(c,math.max(.01,math.min(.99,clum(new_bg)+sign*mag)))
-end
-local function theme_color(key)
-  local ok,native=pcall(R.GetThemeColor,key,0)
-  if not ok or type(native)~="number" or native==-1 then return nil,native end
-  local okc,r,g,b=pcall(R.ColorFromNative,native)
-  if not okc or type(r)~="number" or type(g)~="number" or type(b)~="number" then return nil,native end
-  return {r/255,g/255,b/255},native
-end
-local function first_near(map,bg,keys,max_delta)
-  for i=1,#keys do
-    local c=map[keys[i]]
-    if c and math.abs(clum(c)-clum(bg))<=(max_delta or .18) then return ccopy(c) end
-  end
-  return nil
-end
-local function best_contrast_color(map,bg,keys,min_delta)
-  local bg_l=clum(bg)
-  local best,best_score=nil,-1
-  for i=1,#keys do
-    local c=map[keys[i]]
-    if c then
-      local delta=math.abs(clum(c)-bg_l)
-      if delta>=(min_delta or 0) then
-        local score=delta+csat(c)*.20
-        if score>best_score then best,best_score=c,score end
-      end
-    end
-  end
-  return best and ccopy(best) or nil
-end
-local function theme_edge_role(map,bg,dark,highlight)
-  local keys
-  if highlight then
-    keys={"col_main_3dhl","col_toolbar_frame","genlist_grid","col_tl_fg2","col_tr1_divline","col_tr2_divline"}
-  else
-    keys={"col_main_3dsh","docker_shadow","genlist_grid","col_tr1_divline","col_tr2_divline"}
-  end
-  local bg_l=clum(bg)
-  local best,best_score=nil,-1
-  for i=1,#keys do
-    local c=map[keys[i]]
-    if c then
-      local delta=clum(c)-bg_l
-      local wanted=highlight and (dark and delta>0 or (not dark and delta<0))
-        or (dark and delta<0 or (not dark and delta>0))
-      local score=math.abs(delta)+(wanted and .16 or 0)
-      if score>best_score then best,best_score=c,score end
-    end
-  end
-  return best and ccopy(best) or nil
-end
-local function usable_theme_text(map,bg,keys,generated)
-  local c=best_contrast_color(map,bg,keys,.28)
-  if not c then return ccopy(generated) end
-  -- Never let a theme text slot invert into poor contrast after user transforms.
-  if math.abs(clum(c)-clum(bg))<.28 then return ccopy(generated) end
-  return c
-end
-
-local function best_theme_accent(map,bg)
-  local keys={
-    "genlist_selbg","col_seltrack","toolbararmed_color","col_tl_bgsel",
-    "col_toolbar_text_on","col_main_resize2","selitem_dot","selitem_tag",
-    "activetake_tag","col_routinghl1","col_routinghl2","track_lanesolo_tabcol",
-    "col_tl_fg",
-  }
-  local bg_l=clum(bg)
-  local best,best_score=nil,-1
-  for i=1,#keys do
-    local c=map[keys[i]]
-    if c then
-      local sat=csat(c)
-      local delta=math.abs(clum(c)-bg_l)
-      local score=sat*1.45+delta*.72
-      if keys[i]=="genlist_selbg" or keys[i]=="col_seltrack" or keys[i]=="toolbararmed_color" then
-        score=score+.12
-      end
-      -- Ignore almost-background colors unless no better candidate exists.
-      if delta<.035 and sat<.035 then score=score-.35 end
-      if score>best_score then best,best_score=c,score end
-    end
-  end
-  return best and ccopy(best) or ccopy(C_DEFAULT.accent)
-end
-local function theme_snapshot()
-  local map,raw={},{}
-  for i=1,#Chameleon.keys do
-    local key=Chameleon.keys[i]
-    local c,native=theme_color(key)
-    map[key]=c
-    raw[#raw+1]=tostring(native or -1)
-  end
-  return map,table.concat(raw,":")
-end
-local function build_chameleon_palette(map)
-  -- Derive a stable BLT palette from REAPER's current theme.
-  -- Missing/unsupported keys are ignored and each semantic role has a safe
-  -- fallback, which is important for custom and older themes.
-  local sampled_bg=dominant_surface({
-    map.col_main_bg2,
-    map.col_main_bg,
-    map.col_tracklistbg,
-    map.genlist_bg,
-    map.col_arrangebg,
-  },C_DEFAULT.bg)
-
-  local sampled_l=clum(sampled_bg)
-  local dark=sampled_l<0.50
-
-  local sampled_panel=
-    first_near(map,sampled_bg,{
-      "col_main_bg","col_tracklistbg","col_mixerbg","genlist_bg",
-      "col_seltrack2","col_tl_bg","col_tr1_bg","col_tr2_bg",
-    },.16)
-
-  local sampled_field=
-    first_near(map,sampled_bg,{
-      "col_main_editbk","col_transport_editbk","genlist_bg","col_buttonbg",
-      "col_trans_bg",
-    },.14)
-
-  if not sampled_panel then
-    sampled_panel=cshift_luma(sampled_bg,dark and math.min(.92,sampled_l+.040) or math.max(.08,sampled_l-.040))
-  end
-  if not sampled_field then
-    sampled_field=cshift_luma(sampled_bg,dark and math.min(.92,sampled_l+.018) or math.min(.96,sampled_l+.020))
-  end
-  local bg=contrast_anchor_bg(sampled_bg)
-  local panel=contrast_surface(sampled_panel,sampled_bg,bg,1.48,.030,.105)
-  local field=contrast_surface(sampled_field,sampled_bg,bg,1.38,.020,.085)
-
-  if dark then
-    if clum(panel)<=clum(bg)+.022 then panel=cshift_luma(panel,math.min(.94,clum(bg)+.038)) end
-  else
-    if clum(panel)>=clum(bg)-.022 then panel=cshift_luma(panel,math.max(.06,clum(bg)-.038)) end
-  end
-
-  -- Generated polarity remains the safety net; a readable theme text color can
-  -- contribute some hue/temperature without sacrificing contrast.
-  local generated,text_is_light=generated_text(bg)
-  local theme_text=usable_theme_text(map,bg,{
-    "col_main_text2","col_main_text","genlist_fg","col_tcp_text",
-    "col_toolbar_text","col_tl_fg","col_trans_fg",
-  },generated)
-  local textcol=cmix(generated,theme_text,.18)
-  local muted=cmix(textcol,bg,dark and .28 or .30)
-  local faint=cmix(textcol,bg,dark and .50 or .52)
-
-  local accent=best_theme_accent(map,bg)
-  accent=cboost_sat(accent,dark and 1.18 or 1.14)
-  accent=fit_accent_to_bg(accent,bg,text_is_light)
-  local al=clum(accent)
-  if dark and al<clum(bg)+.22 then
-    accent=cshift_luma(accent,math.min(.82,clum(bg)+.26))
-  elseif not dark and al>clum(bg)-.22 then
-    accent=cshift_luma(accent,math.max(.12,clum(bg)-.28))
-  end
-
-  -- Use REAPER's own highlight/shadow roles when available, but only as a
-  -- restrained contribution so an unusual theme cannot destroy readability.
-  local theme_hi=theme_edge_role(map,bg,dark,true)
-  local theme_sh=theme_edge_role(map,bg,dark,false)
-  local edge_base=cmix(bg,textcol,dark and .20 or .18)
-  local edge_active=cmix(accent,textcol,dark and .12 or .09)
-  local edge=theme_sh and cmix(edge_base,theme_sh,.28) or edge_base
-  local edge2=theme_hi and cmix(edge_active,theme_hi,.24) or edge_active
-
-  local out={}
-  out.bg=ccopy(bg)
-  out.bg2=cmix(bg,accent,dark and .080 or .065)
-  out.panel=panel
-  out.panel2=cmix(panel,accent,dark and .105 or .085)
-  out.field=field
-
-  out.text=textcol
-  out.muted=muted
-  out.faint=faint
-
-  out.edge=edge
-  out.edge2=edge2
-
-  out.accent=accent
-  out.accent2=cmix(accent,textcol,dark and .14 or .09)
-  out.accent3=cmix(accent,bg,dark and .48 or .46)
-  out.focus=cmix(accent,textcol,dark and .06 or .04)
-  out.focus2=cmix(accent,textcol,dark and .20 or .12)
-  out.ink=cmix(bg,accent,dark and .16 or .12)
-  out.hover=cmix(accent,textcol,dark and .15 or .10)
-
-  out.warn=fit_accent_to_bg(C_DEFAULT.warn,bg,text_is_light)
-  out.red=fit_accent_to_bg(C_DEFAULT.red,bg,text_is_light)
+ end
+ function M.luma(c) return c[1]*.2126+c[2]*.7152+c[3]*.0722 end
+ local function saturation(c) return math.max(c[1],c[2],c[3])-math.min(c[1],c[2],c[3]) end
+ local function shift(c,target)
+  local l=M.luma(c);target=math.max(0,math.min(1,target))
+  if math.abs(target-l)<1e-5 then return M.copy(c) end
+  if target<l then return M.mix(c,{0,0,0},(l-target)/math.max(l,1e-9)) end
+  return M.mix(c,{1,1,1},(target-l)/math.max(1-l,1e-9))
+ end
+ local function boost(c,factor)
+  local l=M.luma(c);local out={}
+  for i=1,3 do out[i]=math.max(0,math.min(1,l+(c[i]-l)*factor)) end
   return out
-end
-
-function Chameleon.restore()
-  for k,v in pairs(C_DEFAULT) do C[k]=ccopy(v) end
-  Chrome.mint=ccopy(CHROME_DEFAULT.mint)
-  Chrome.ice=ccopy(CHROME_DEFAULT.ice)
-end
-
-function Chameleon.apply(palette)
-  for k,v in pairs(palette) do C[k]=v end
-  Chrome.mint=ccopy(C.accent2)
-  Chrome.ice=ccopy(C.focus2)
-end
-
-function Chameleon.refresh(force)
-  if not Chameleon.enabled then return false end
-  local map,sig=theme_snapshot()
-  if not force and sig==Chameleon.signature then return false end
-  Chameleon.signature=sig
-  Chameleon.apply(build_chameleon_palette(map))
-  redraw_dirty=true
-  return true
-end
-
-function Chameleon.set(on)
-  Chameleon.enabled=on and true or false
-  State.set("chameleon",Chameleon.enabled and "1" or "0",true)
-  Chameleon.signature=nil
-
-  if Chameleon.enabled then
-    Chameleon.refresh(true)
-    notice("CHAMELEON  REAPERテーマに擬態",true)
-  else
-    Chameleon.restore()
-    redraw_dirty=true
-    notice("CHAMELEON  オリジナル配色",true)
-  end
-  wake_visuals(R.time_precise())
-end
-
-function Chameleon.tick(now)
-  if not Chameleon.enabled or now<Chameleon.poll_at then return false end
-  Chameleon.poll_at=now+Chameleon.poll_interval
-  return Chameleon.refresh(false)
-end
-
--- Icon-only color separation.
--- The main UI palette remains untouched; this only keeps the three overlapping
--- Chameleon circles visually distinct even when a REAPER theme is nearly mono-hued.
-local function rgb_to_hsv(c)
-  local r,g,b=c[1],c[2],c[3]
-  local mx=math.max(r,g,b)
-  local mn=math.min(r,g,b)
-  local d=mx-mn
-  local h=0
-
-  if d>1e-6 then
-    if mx==r then
-      h=((g-b)/d)%6
-    elseif mx==g then
-      h=(b-r)/d+2
+ end
+ function M.fit(accent,bg,light)
+  if math.abs(M.luma(accent)-M.luma(bg))>=.17 then return M.copy(accent) end
+  return shift(accent,light and math.min(.78,M.luma(bg)+.28) or math.max(.16,M.luma(bg)-.30))
+ end
+ local function surface(c,bg,factor,lo,hi)
+  local delta=M.luma(c)-M.luma(bg)
+  return shift(c,math.max(.01,math.min(.99,M.luma(bg)+(delta<0 and -1 or 1)*math.max(lo,math.min(hi,math.abs(delta)*factor)))))
+ end
+ local function first_near(map,bg,keys,gap)
+  local l=M.luma(bg)
+  for _,key in ipairs(keys) do local c=map[key];if c and math.abs(M.luma(c)-l)<=gap then return c end end
+ end
+ local function generated_text(bg)
+  local light,dark={.935,.945,.958},{.070,.075,.082}
+  local lr,dr=BLTThemeColors.contrast(light,bg),BLTThemeColors.contrast(dark,bg)
+  local is_light=lr>dr;local color=is_light and light or dark
+  if math.max(lr,dr)<4.5 then color=is_light and {1,1,1} or {0,0,0} end
+  return color,is_light
+ end
+ local text_keys={'col_main_text2','col_main_text','genlist_fg','col_tcp_text','col_toolbar_text','col_tl_fg','col_trans_fg'}
+ local accent_keys={'genlist_selbg','col_seltrack','toolbararmed_color','col_tl_bgsel','col_toolbar_text_on','col_main_resize2',
+  'selitem_dot','selitem_tag','activetake_tag','col_routinghl1','col_routinghl2','track_lanesolo_tabcol','col_tl_fg'}
+ local hi_keys={'col_main_3dhl','col_toolbar_frame','genlist_grid','col_tl_fg2','col_tr1_divline','col_tr2_divline'}
+ local sh_keys={'col_main_3dsh','docker_shadow','genlist_grid','col_tr1_divline','col_tr2_divline'}
+ local panel_keys={'col_main_bg','col_tracklistbg','col_mixerbg','genlist_bg','col_seltrack2','col_tl_bg','col_tr1_bg','col_tr2_bg'}
+ local field_keys={'col_main_editbk','col_transport_editbk','genlist_bg','col_buttonbg','col_trans_bg'}
+ local function best_color(map,bg,keys,role,dark)
+  local best,score=nil,-math.huge;local l=M.luma(bg)
+  for i,key in ipairs(keys) do
+   local c=map[key]
+   if c then
+    local delta=M.luma(c)-l;local gap=math.abs(delta);local sat=saturation(c);local value
+    if role=='text' then
+     if gap>=.28 then value=gap+sat*.20 end
+    elseif role=='accent' then
+     value=sat*1.45+gap*.72+(i<=3 and .12 or 0)-(gap<.035 and sat<.035 and .35 or 0)
     else
-      h=(r-g)/d+4
+     local wanted=role=='hi' and (dark and delta>0 or not dark and delta<0)
+      or role=='sh' and (dark and delta<0 or not dark and delta>0)
+     value=gap+(wanted and .16 or 0)
     end
-    h=h/6
+    if value and value>score then best,score=c,value end
+   end
   end
-
-  local s=(mx<=1e-6) and 0 or d/mx
-  return h,s,mx
-end
-
-local function hsv_to_rgb(h,s,v)
-  h=h%1
-  local i=math.floor(h*6)
-  local f=h*6-i
-  local p=v*(1-s)
-  local q=v*(1-f*s)
-  local t=v*(1-(1-f)*s)
+  return best
+ end
+ -- Cache native values and decode only changed slots. Failed decoding is retried.
+ function M.snapshot(api,cache,force)
+  cache=cache or {raw={},map={}};local changed=not cache.ready
+  for i,key in ipairs(M.keys) do
+   local native=BLTThemeColors.native(api,key)
+   if force or native~=cache.raw[i] then
+    local c=BLTThemeColors.decode(api,native)
+    cache.map[key]=c;cache.raw[i]=c and native or -1;changed=true
+   end
+  end
+  cache.ready=true
+  return cache.map,changed,cache
+ end
+ function M.palette(map,defaults)
+  -- Keep the main window/toolbar RGB unchanged; images may override the visible toolbar.
+  local bg=M.copy(map.col_main_bg2 or map.col_main_bg or map.col_tracklistbg or map.genlist_bg or map.col_arrangebg or defaults.bg)
+  local l=M.luma(bg);local dark=l<.50
+  local panel=first_near(map,bg,panel_keys,.16) or shift(bg,dark and math.min(.92,l+.040) or math.max(.08,l-.040))
+  local field=first_near(map,bg,field_keys,.14) or shift(bg,dark and math.min(.92,l+.018) or math.min(.96,l+.020))
+  panel=surface(panel,bg,1.48,.030,.105);field=surface(field,bg,1.38,.020,.085)
+  if dark and M.luma(panel)<=l+.022 then panel=shift(panel,math.min(.94,l+.038))
+  elseif not dark and M.luma(panel)>=l-.022 then panel=shift(panel,math.max(.06,l-.038)) end
+  local generated,light=generated_text(bg)
+  local text=M.mix(generated,best_color(map,bg,text_keys,'text') or generated,.18)
+  if BLTThemeColors.contrast(text,bg)<4.5 then text=generated end
+  local accent=boost(best_color(map,bg,accent_keys,'accent') or defaults.accent,dark and 1.18 or 1.14)
+  accent=M.fit(accent,bg,light)
+  if dark and M.luma(accent)<l+.22 then accent=shift(accent,math.min(.82,l+.26))
+  elseif not dark and M.luma(accent)>l-.22 then accent=shift(accent,math.max(.12,l-.28)) end
+  local edge=M.mix(bg,text,dark and .20 or .18);local edge2=M.mix(accent,text,dark and .12 or .09)
+  local hi=best_color(map,bg,hi_keys,'hi',dark);local sh=best_color(map,bg,sh_keys,'sh',dark)
+  if sh then edge=M.mix(edge,sh,.28) end;if hi then edge2=M.mix(edge2,hi,.24) end
+  local out={bg=bg,bg2=M.mix(bg,accent,dark and .080 or .065),panel=panel,panel2=M.mix(panel,accent,dark and .105 or .085),field=field,
+   text=text,muted=M.mix(text,bg,dark and .28 or .30),faint=M.mix(text,bg,dark and .50 or .52),edge=edge,edge2=edge2,
+   accent=accent,accent2=M.mix(accent,text,dark and .14 or .09),accent3=M.mix(accent,bg,dark and .48 or .46),
+   focus=M.mix(accent,text,dark and .06 or .04),focus2=M.mix(accent,text,dark and .20 or .12),
+   ink=M.mix(bg,accent,dark and .16 or .12),hover=M.mix(accent,text,dark and .15 or .10)}
+  if defaults.green then out.green=M.copy(out.accent2) end
+  for _,key in ipairs({'warn','red','gold','purple','lock'}) do
+   if defaults[key] then out[key]=M.fit(defaults[key],bg,light) end
+  end
+  if out.lock and defaults.lock2 then out.lock2=M.mix(out.lock,text,dark and .22 or .16) end
+  return out
+ end
+ local function hsv(c)
+  local r,g,b=c[1],c[2],c[3];local mx=math.max(r,g,b);local d=mx-math.min(r,g,b);local h=0
+  if d>1e-6 then h=(mx==r and ((g-b)/d)%6 or mx==g and (b-r)/d+2 or (r-g)/d+4)/6 end
+  return h,mx<=1e-6 and 0 or d/mx,mx
+ end
+ local function rgb(h,s,v)
+  h=h%1;local i=math.floor(h*6);local f=h*6-i
+  local p,q,t=v*(1-s),v*(1-f*s),v*(1-(1-f)*s)
   i=i%6
-
-  if i==0 then return {v,t,p}
-  elseif i==1 then return {q,v,p}
-  elseif i==2 then return {p,v,t}
-  elseif i==3 then return {p,q,v}
-  elseif i==4 then return {t,p,v}
-  else return {v,p,q}
+  if i==0 then return {v,t,p} elseif i==1 then return {q,v,p} elseif i==2 then return {p,v,t}
+  elseif i==3 then return {p,q,v} elseif i==4 then return {t,p,v} else return {v,p,q} end
+ end
+ function M.new(api,colors,options)
+  options=options or {};local defaults={};local chrome_defaults
+  for k,c in pairs(colors) do if type(c)=='table' and type(c[1])=='number' then defaults[k]=M.copy(c) end end
+  local theme={enabled=api.GetExtState(options.section,'chameleon')=='1',poll_at=0,poll_interval=3,keys=M.keys}
+  local cache,pending=nil,false
+  local function chrome()
+   local c=options.chrome;if type(c)=='function' then c=c() end
+   if c and not chrome_defaults then chrome_defaults={mint=M.copy(c.mint),ice=M.copy(c.ice)} end
+   return c
   end
-end
-
-function Chameleon.icon_colors()
-  local cache=Chameleon.iconCache
-  if cache and cache.enabled==Chameleon.enabled and cache.r==C.accent[1] and cache.g==C.accent[2] and cache.b==C.accent[3] then return cache[1],cache[2],cache[3] end
-  if not Chameleon.enabled then
-    cache={{0.59,0.66,0.64},{0.48,0.53,0.58},{0.56,0.63,0.63},enabled=false,r=C.accent[1],g=C.accent[2],b=C.accent[3]}
-    Chameleon.iconCache=cache;return cache[1],cache[2],cache[3]
+  chrome()
+  local function updated(restored,palette)
+   theme.bltIcon=nil
+   if options.applied then options.applied(restored,palette) end
+   if options.changed then options.changed() end
   end
+  function theme.apply(palette)
+   for key in pairs(defaults) do
+    local c=palette[options.roles and options.roles[key] or key]
+    if c then colors[key]=c end
+   end
+   local c=chrome();if c then c.mint=M.copy(palette.accent2);c.ice=M.copy(palette.focus2) end
+   updated(false,palette)
+  end
+  function theme.restore()
+   for key,c in pairs(defaults) do colors[key]=M.copy(c) end
+   local c=chrome();if c then c.mint=M.copy(chrome_defaults.mint);c.ice=M.copy(chrome_defaults.ice) end
+   updated(true)
+  end
+  function theme.refresh(force)
+   if not theme.enabled then return false end
+   local map,changed;map,changed,cache=M.snapshot(api,cache,force)
+   if not force and not changed and not pending then return false end
+   pending=true;theme.apply(M.palette(map,defaults));pending=false
+   if force then theme.poll_at=api.time_precise()+theme.poll_interval end
+   return true
+  end
+  function theme.set(on)
+   theme.enabled=on and true or false;cache=nil;pending=false
+   local value=theme.enabled and '1' or '0'
+   if options.store then options.store(options.section,'chameleon',value,true)
+   else api.SetExtState(options.section,'chameleon',value,true) end
+   if theme.enabled then theme.refresh(true) else theme.restore() end
+   if options.notify then options.notify(theme.enabled and 'CHAMELEON  REAPERテーマに擬態' or 'CHAMELEON  オリジナル配色') end
+  end
+  function theme.toggle() theme.set(not theme.enabled) end
+  function theme.tick(now)
+   if not theme.enabled or now<theme.poll_at then return false end
+   theme.poll_at=now+theme.poll_interval
+   return theme.refresh(false)
+  end
+  function theme.sample() local map=M.snapshot(api);return map,M.palette(map,defaults) end
+  function theme.icon_colors()
+   local c=theme.bltIcon;local a=colors.accent
+   if c and c.on==theme.enabled and c.r==a[1] and c.g==a[2] and c.b==a[3] then return c[1],c[2],c[3] end
+   local x,y,z
+   if theme.enabled then
+    local h,s,v=hsv(a);s=math.max(s,.46)
+    x,y,z=rgb(h,s,v),rgb(h+.19,math.max(.42,s*.90),v),rgb(h-.19,math.max(.42,s*.86),v)
+   else
+    x,y,z=M.copy(colors.muted),M.copy(colors.faint),M.copy(colors.edge)
+    for _,color in ipairs({x,y,z}) do
+     local gray=M.luma(color);for i=1,3 do color[i]=gray+(color[i]-gray)*.12 end
+    end
+   end
+   theme.bltIcon={x,y,z,on=theme.enabled,r=a[1],g=a[2],b=a[3]};return x,y,z
+  end
+  return theme
+ end
+ return M
+end)()
+-- END BLT CHAMELEON
 
-  local h,s,v=rgb_to_hsv(C.accent)
-  -- Only the icon gets a saturation floor; the actual BLT theme does not.
-  s=math.max(s,.46)
+Chameleon=BLTChameleon.new(R,C,{
+ section=SECTION,
+ store=function(_,key,value,persist) State.set(key,value,persist) end,
+ notify=function(value) notice(value,true) end,
+ chrome=Chrome,
+ changed=wake_visuals
+})
 
-  -- Preserve the theme's base hue, but fan the other two colors away from it.
-  -- +/- 0.19 ~= 68 degrees: clearly different without turning into a rainbow badge.
-  local c1=hsv_to_rgb(h,      s,                v)
-  local c2=hsv_to_rgb(h+.19, math.max(.42,s*.90), v)
-  local c3=hsv_to_rgb(h-.19, math.max(.42,s*.86), v)
-
-  Chameleon.iconCache={c1,c2,c3,enabled=true,r=C.accent[1],g=C.accent[2],b=C.accent[3]}
-  return c1,c2,c3
-end
 
 local function titlebar_api_ready()
   local required={"JS_Window_Find","JS_Window_IsWindow","JS_Window_GetRect","JS_Window_SetPosition","JS_Window_SetStyle"}

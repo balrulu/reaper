@@ -1,5 +1,5 @@
 -- @description TRACK TREE
--- @version 0.2.14
+-- @version 0.2.17
 -- @author Balrulu
 -- @provides
 --   . > ../
@@ -657,11 +657,16 @@ end
 function UI.bar(w)
  local inline=host.docked()
  local compact=inline
- local c=B.barCache;if c and c.width==w and c.compact==compact and c.inline==inline then return c end
+ local dpi=gfx.ext_retina or 1
+ local c=B.barCache;if c and c.width==w and c.compact==compact and c.inline==inline and c.dpi==dpi then return c end
  local b={width=w,closeX=w-38,resetX=w-72,themeX=w-106}
  b.foldX=host.fold and b.themeX-34 or nil;b.languageX=(b.foldX or b.themeX)-26;b.nextX=b.languageX-20;b.prevX=b.nextX-20;b.presetX=b.prevX-84
- b.compact=compact;b.inline=inline;b.titleEnd=inline and math.min(210,math.max(0,b.presetX-100)) or nil
- if compact then b.resetX=b.closeX;b.themeX=w-72;b.foldX=w-106;b.languageX=w-132;b.nextX=w+500;b.prevX=w+500;b.presetX=w+500;b.titleEnd=b.languageX-8 end
+ b.compact=compact;b.inline=inline;b.dpi=dpi
+ if compact then
+  b.resetX=b.closeX;b.themeX=w-72;b.foldX=w-106;b.languageX=w-132;b.nextX=w+500;b.prevX=w+500
+  b.presetX=b.languageX -- Hidden presets; shared background starts at the visible controls.
+  B.chromeFont();b.titleEnd=math.min(math.ceil(UI.textMetrics(Chrome.titleText))+28,math.max(0,b.languageX-8))
+ end
  B.barCache=b;return b
 end
 function UI.barHit(x,y)
@@ -1435,16 +1440,7 @@ local function cut_panel(x,y,w,h,cut,c,a,edge,edge_a,top_left)
   if edge then for i=1,#pts do local p,q=pts[i],pts[i%#pts+1]; line(p[1],p[2],q[1],q[2],edge,edge_a or 1) end end
 end
 
-local C_DEFAULT={}
-for k,v in pairs(C) do
-  if type(v)=="table" and type(v[1])=="number" and type(v[2])=="number" and type(v[3])=="number" then
-    C_DEFAULT[k]={v[1],v[2],v[3]}
-  end
-end
-local Chameleon={
-  enabled=R.GetExtState(SECTION,"chameleon")=="1",
-  signature=nil,poll_at=0,poll_interval=3.0,
-}
+local Chameleon
 local Chrome={window=nil,mouseDown=false,drag=nil,resize=nil,mouseActive=false,requestClose=false,requestReset=false,
   chameleonPressed=false,resizeCursors={},resizeCursorMode=nil,titleH=26,windowTitle='BLT TRACK TREE',titleText='T R A C K   T R E E',
   minW=360,minH=300,mint={0.38,0.88,0.72},ice={0.65,0.895,1.0},red={1.0,0.27,0.34},
@@ -1452,409 +1448,255 @@ local Chrome={window=nil,mouseDown=false,drag=nil,resize=nil,mouseActive=false,r
   tooltipHover=nil,tooltipSince=0,tooltipVisible=false,tooltipDelay=.70,
   cursorId={we=32644,ns=32645,nwse=32642,nesw=32643,arrow=32512}}
 Chrome.font=Chrome.isWindows and "Segoe UI" or (BLT_MAC and "Helvetica Neue" or "sans-serif")
-local CHROME_DEFAULT={
-  mint={Chrome.mint[1],Chrome.mint[2],Chrome.mint[3]},
-  ice={Chrome.ice[1],Chrome.ice[2],Chrome.ice[3]},
-}
 local function chameleon_notify(text)
   status(text,false)
 end
 
-Chameleon.keys={
-  "col_main_bg2","col_main_bg","col_arrangebg","col_tracklistbg","col_mixerbg",
-  "genlist_bg","col_tl_bg","col_trans_bg","col_tr1_bg","col_tr2_bg",
-  "col_main_editbk","col_transport_editbk","col_buttonbg",
-
-  "col_main_text2","col_main_text","genlist_fg","col_tcp_text",
-  "col_toolbar_text","col_toolbar_text_on","col_tl_fg","col_tl_fg2","col_trans_fg",
-
-  "col_seltrack","col_seltrack2","genlist_selbg",
-  "col_tl_bgsel","toolbararmed_color","col_main_resize2",
-  "selitem_dot","selitem_tag","activetake_tag",
-  "col_routinghl1","col_routinghl2","track_lanesolo_tabcol",
-
-  "col_main_3dhl","col_main_3dsh","genlist_grid","col_toolbar_frame",
-  "col_tr1_divline","col_tr2_divline","docker_shadow",
-}
-local function ccopy(c) return {c[1],c[2],c[3]} end
-local function cmix(a,b,t)
+-- BEGIN BLT CHAMELEON 1.0.0 (generated from _shared/BLT_Chameleon.lua)
+-- Standalone embedded factory. Hosts supply persistence and redraw hooks.
+local BLTChameleon=(function()
+-- BEGIN BLT THEME COLORS 1.0.0 (generated from _shared/BLT_ThemeColors.lua)
+local BLTThemeColors=(function()
+ local M={}
+ function M.native(api,key)
+  local ok,n=pcall(api.GetThemeColor,key,0)
+  if not ok or type(n)~='number' or n~=n or n%1~=0 then return -1 end
+  return n
+ end
+ function M.decode(api,n)
+  if n==-1 then return nil end
+  local ok,r,g,b=pcall(api.ColorFromNative,n)
+  if not ok then return nil end
+  for _,v in ipairs({r,g,b}) do
+   if type(v)~='number' or v~=v or v<0 or v>255 then return nil end
+  end
+  if r==nil or g==nil or b==nil then return nil end
+  return {r/255,g/255,b/255}
+ end
+ function M.read(api,key,fallback) return M.decode(api,M.native(api,key)) or fallback end
+ local function linear(v) return v<=.04045 and v/12.92 or ((v+.055)/1.055)^2.4 end
+ function M.luminance(c) return linear(c[1])*.2126+linear(c[2])*.7152+linear(c[3])*.0722 end
+ function M.contrast(a,b)
+  local x,y=M.luminance(a),M.luminance(b)
+  return (math.max(x,y)+.05)/(math.min(x,y)+.05)
+ end
+ return M
+end)()
+-- END BLT THEME COLORS
+ local M={}
+ M.keys={
+  'col_main_bg2','col_main_bg','col_arrangebg','col_tracklistbg','col_mixerbg',
+  'genlist_bg','col_tl_bg','col_trans_bg','col_tr1_bg','col_tr2_bg',
+  'col_main_editbk','col_transport_editbk','col_buttonbg',
+  'col_main_text2','col_main_text','genlist_fg','col_tcp_text',
+  'col_toolbar_text','col_toolbar_text_on','col_tl_fg','col_tl_fg2','col_trans_fg',
+  'col_seltrack','col_seltrack2','genlist_selbg','col_tl_bgsel','toolbararmed_color',
+  'col_main_resize2','selitem_dot','selitem_tag','activetake_tag',
+  'col_routinghl1','col_routinghl2','track_lanesolo_tabcol',
+  'col_main_3dhl','col_main_3dsh','genlist_grid','col_toolbar_frame',
+  'col_tr1_divline','col_tr2_divline','docker_shadow',
+ }
+ function M.copy(c) return {c[1],c[2],c[3]} end
+ function M.mix(a,b,t)
   t=math.max(0,math.min(1,t or 0))
   return {a[1]+(b[1]-a[1])*t,a[2]+(b[2]-a[2])*t,a[3]+(b[3]-a[3])*t}
-end
-local function clum(c) return c[1]*0.2126+c[2]*0.7152+c[3]*0.0722 end
-local function csat(c)
-  local hi=math.max(c[1],c[2],c[3]); local lo=math.min(c[1],c[2],c[3])
-  return hi-lo
-end
-local function cclamp(c)
-  return {
-    math.max(0,math.min(1,c[1])),
-    math.max(0,math.min(1,c[2])),
-    math.max(0,math.min(1,c[3])),
-  }
-end
-local function cshift_luma(c,target)
-  local l=clum(c)
-  target=math.max(0,math.min(1,target))
-  if math.abs(target-l)<1e-5 then return ccopy(c) end
-  if target<l then
-    local t=(l-target)/math.max(l,1e-9)
-    return cmix(c,{0,0,0},t)
-  end
-  local t=(target-l)/math.max(1-l,1e-9)
-  return cmix(c,{1,1,1},t)
-end
-local function cboost_sat(c,factor)
-  local l=clum(c)
-  return cclamp({
-    l+(c[1]-l)*factor,
-    l+(c[2]-l)*factor,
-    l+(c[3]-l)*factor,
-  })
-end
-local function dominant_surface(colors,fallback)
-  local list={}
-  for i=1,#colors do
-    local c=colors[i]
-    if c then list[#list+1]={c=c,l=clum(c)} end
-  end
-  if #list==0 then return ccopy(fallback) end
-  table.sort(list,function(a,b) return a.l<b.l end)
-  local median
-  local n=#list
-  if n%2==1 then median=list[(n+1)//2].l
-  else median=(list[n//2].l+list[n//2+1].l)*.5 end
-  local best,bestd=list[1],math.huge
-  for i=1,n do
-    local d=math.abs(list[i].l-median)
-    if d<bestd then best,bestd=list[i],d end
-  end
-  return ccopy(best.c)
-end
-local function generated_text(bg)
-  local l=clum(bg)
-  if l>=0.56 then
-    return {0.070,0.075,0.082},false
-  elseif l<=0.44 then
-    return {0.935,0.945,0.958},true
-  end
-  if l>=0.50 then return {0.075,0.080,0.088},false end
-  return {0.935,0.945,0.958},true
-end
-local function fit_accent_to_bg(accent,bg,text_is_light)
-  local out=ccopy(accent)
-  local delta=math.abs(clum(out)-clum(bg))
-  if delta>=0.17 then return out end
-  if text_is_light then
-    local target=math.min(.78,clum(bg)+.28)
-    return cshift_luma(out,target)
-  end
-  local target=math.max(.16,clum(bg)-.30)
-  return cshift_luma(out,target)
-end
-local function contrast_anchor_bg(bg)
-  local l=clum(bg)
-  if l<0.50 then
-    local target=math.max(.025,l-(.50-l)*.16-.018)
-    return cshift_luma(bg,target)
-  end
-  local target=math.min(.975,l+(l-.50)*.10+.010)
-  return cshift_luma(bg,target)
-end
-local function contrast_surface(c,old_bg,new_bg,factor,min_gap,max_gap)
-  local delta=clum(c)-clum(old_bg)
-  local sign=delta<0 and -1 or 1
-  local mag=math.abs(delta)*factor
-  if min_gap and mag<min_gap then mag=min_gap end
-  if max_gap and mag>max_gap then mag=max_gap end
-  return cshift_luma(c,math.max(.01,math.min(.99,clum(new_bg)+sign*mag)))
-end
-local function theme_color(key)
-  local ok,native=pcall(R.GetThemeColor,key,0)
-  if not ok or type(native)~="number" or native==-1 then return nil,native end
-  local okc,r,g,b=pcall(R.ColorFromNative,native)
-  if not okc or type(r)~="number" or type(g)~="number" or type(b)~="number" then return nil,native end
-  return {r/255,g/255,b/255},native
-end
-local function first_near(map,bg,keys,max_delta)
-  for i=1,#keys do
-    local c=map[keys[i]]
-    if c and math.abs(clum(c)-clum(bg))<=(max_delta or .18) then return ccopy(c) end
-  end
-  return nil
-end
-local function best_contrast_color(map,bg,keys,min_delta)
-  local bg_l=clum(bg)
-  local best,best_score=nil,-1
-  for i=1,#keys do
-    local c=map[keys[i]]
-    if c then
-      local delta=math.abs(clum(c)-bg_l)
-      if delta>=(min_delta or 0) then
-        local score=delta+csat(c)*.20
-        if score>best_score then best,best_score=c,score end
-      end
-    end
-  end
-  return best and ccopy(best) or nil
-end
-local function theme_edge_role(map,bg,dark,highlight)
-  local keys
-  if highlight then
-    keys={"col_main_3dhl","col_toolbar_frame","genlist_grid","col_tl_fg2","col_tr1_divline","col_tr2_divline"}
-  else
-    keys={"col_main_3dsh","docker_shadow","genlist_grid","col_tr1_divline","col_tr2_divline"}
-  end
-  local bg_l=clum(bg)
-  local best,best_score=nil,-1
-  for i=1,#keys do
-    local c=map[keys[i]]
-    if c then
-      local delta=clum(c)-bg_l
-      local wanted=highlight and (dark and delta>0 or (not dark and delta<0))
-        or (dark and delta<0 or (not dark and delta>0))
-      local score=math.abs(delta)+(wanted and .16 or 0)
-      if score>best_score then best,best_score=c,score end
-    end
-  end
-  return best and ccopy(best) or nil
-end
-local function usable_theme_text(map,bg,keys,generated)
-  local c=best_contrast_color(map,bg,keys,.28)
-  if not c then return ccopy(generated) end
-  if math.abs(clum(c)-clum(bg))<.28 then return ccopy(generated) end
-  return c
-end
-
-local function best_theme_accent(map,bg)
-  local keys={
-    "genlist_selbg","col_seltrack","toolbararmed_color","col_tl_bgsel",
-    "col_toolbar_text_on","col_main_resize2","selitem_dot","selitem_tag",
-    "activetake_tag","col_routinghl1","col_routinghl2","track_lanesolo_tabcol",
-    "col_tl_fg",
-  }
-  local bg_l=clum(bg)
-  local best,best_score=nil,-1
-  for i=1,#keys do
-    local c=map[keys[i]]
-    if c then
-      local sat=csat(c)
-      local delta=math.abs(clum(c)-bg_l)
-      local score=sat*1.45+delta*.72
-      if keys[i]=="genlist_selbg" or keys[i]=="col_seltrack" or keys[i]=="toolbararmed_color" then
-        score=score+.12
-      end
-      if delta<.035 and sat<.035 then score=score-.35 end
-      if score>best_score then best,best_score=c,score end
-    end
-  end
-  return best and ccopy(best) or ccopy(C_DEFAULT.accent)
-end
-local function theme_snapshot()
-  local map,raw={},{}
-  for i=1,#Chameleon.keys do
-    local key=Chameleon.keys[i]
-    local c,native=theme_color(key)
-    map[key]=c
-    raw[#raw+1]=tostring(native or -1)
-  end
-  return map,table.concat(raw,":")
-end
-local function build_chameleon_palette(map)
-  local sampled_bg=dominant_surface({
-    map.col_main_bg2,
-    map.col_main_bg,
-    map.col_tracklistbg,
-    map.genlist_bg,
-    map.col_arrangebg,
-  },C_DEFAULT.bg)
-
-  local sampled_l=clum(sampled_bg)
-  local dark=sampled_l<0.50
-
-  local sampled_panel=
-    first_near(map,sampled_bg,{
-      "col_main_bg","col_tracklistbg","col_mixerbg","genlist_bg",
-      "col_seltrack2","col_tl_bg","col_tr1_bg","col_tr2_bg",
-    },.16)
-
-  local sampled_field=
-    first_near(map,sampled_bg,{
-      "col_main_editbk","col_transport_editbk","genlist_bg","col_buttonbg",
-      "col_trans_bg",
-    },.14)
-
-  if not sampled_panel then
-    sampled_panel=cshift_luma(sampled_bg,dark and math.min(.92,sampled_l+.040) or math.max(.08,sampled_l-.040))
-  end
-  if not sampled_field then
-    sampled_field=cshift_luma(sampled_bg,dark and math.min(.92,sampled_l+.018) or math.min(.96,sampled_l+.020))
-  end
-  local bg=contrast_anchor_bg(sampled_bg)
-  local panel=contrast_surface(sampled_panel,sampled_bg,bg,1.48,.030,.105)
-  local field=contrast_surface(sampled_field,sampled_bg,bg,1.38,.020,.085)
-
-  if dark then
-    if clum(panel)<=clum(bg)+.022 then panel=cshift_luma(panel,math.min(.94,clum(bg)+.038)) end
-  else
-    if clum(panel)>=clum(bg)-.022 then panel=cshift_luma(panel,math.max(.06,clum(bg)-.038)) end
-  end
-  local generated,text_is_light=generated_text(bg)
-  local theme_text=usable_theme_text(map,bg,{
-    "col_main_text2","col_main_text","genlist_fg","col_tcp_text",
-    "col_toolbar_text","col_tl_fg","col_trans_fg",
-  },generated)
-  local textcol=cmix(generated,theme_text,.18)
-  local muted=cmix(textcol,bg,dark and .28 or .30)
-  local faint=cmix(textcol,bg,dark and .50 or .52)
-
-  local accent=best_theme_accent(map,bg)
-  accent=cboost_sat(accent,dark and 1.18 or 1.14)
-  accent=fit_accent_to_bg(accent,bg,text_is_light)
-  local al=clum(accent)
-  if dark and al<clum(bg)+.22 then
-    accent=cshift_luma(accent,math.min(.82,clum(bg)+.26))
-  elseif not dark and al>clum(bg)-.22 then
-    accent=cshift_luma(accent,math.max(.12,clum(bg)-.28))
-  end
-  local theme_hi=theme_edge_role(map,bg,dark,true)
-  local theme_sh=theme_edge_role(map,bg,dark,false)
-  local edge_base=cmix(bg,textcol,dark and .20 or .18)
-  local edge_active=cmix(accent,textcol,dark and .12 or .09)
-  local edge=theme_sh and cmix(edge_base,theme_sh,.28) or edge_base
-  local edge2=theme_hi and cmix(edge_active,theme_hi,.24) or edge_active
-
-  local out={}
-  out.bg=ccopy(bg)
-  out.bg2=cmix(bg,accent,dark and .080 or .065)
-  out.panel=panel
-  out.panel2=cmix(panel,accent,dark and .105 or .085)
-  out.field=field
-
-  out.text=textcol
-  out.muted=muted
-  out.faint=faint
-
-  out.edge=edge
-  out.edge2=edge2
-
-  out.accent=accent
-  out.accent2=cmix(accent,textcol,dark and .14 or .09)
-  out.accent3=cmix(accent,bg,dark and .48 or .46)
-  out.focus=cmix(accent,textcol,dark and .06 or .04)
-  out.focus2=cmix(accent,textcol,dark and .20 or .12)
-  out.ink=cmix(bg,accent,dark and .16 or .12)
-  out.hover=cmix(accent,textcol,dark and .15 or .10)
-  out.green=ccopy(out.accent2)
-
-  out.warn=fit_accent_to_bg(C_DEFAULT.warn,bg,text_is_light)
-  out.red=fit_accent_to_bg(C_DEFAULT.red,bg,text_is_light)
+ end
+ function M.luma(c) return c[1]*.2126+c[2]*.7152+c[3]*.0722 end
+ local function saturation(c) return math.max(c[1],c[2],c[3])-math.min(c[1],c[2],c[3]) end
+ local function shift(c,target)
+  local l=M.luma(c);target=math.max(0,math.min(1,target))
+  if math.abs(target-l)<1e-5 then return M.copy(c) end
+  if target<l then return M.mix(c,{0,0,0},(l-target)/math.max(l,1e-9)) end
+  return M.mix(c,{1,1,1},(target-l)/math.max(1-l,1e-9))
+ end
+ local function boost(c,factor)
+  local l=M.luma(c);local out={}
+  for i=1,3 do out[i]=math.max(0,math.min(1,l+(c[i]-l)*factor)) end
   return out
-end
-
-function Chameleon.restore()
-  for k,v in pairs(C_DEFAULT) do C[k]=ccopy(v) end
-  Chrome.mint=ccopy(CHROME_DEFAULT.mint)
-  Chrome.ice=ccopy(CHROME_DEFAULT.ice)
-end
-
-function Chameleon.apply(palette)
-  for k,v in pairs(palette) do C[k]=v end
-  Chrome.mint=ccopy(C.accent2)
-  Chrome.ice=ccopy(C.focus2)
-end
-
-function Chameleon.refresh(force)
-  if not Chameleon.enabled then return false end
-  local map,sig=theme_snapshot()
-  if not force and sig==Chameleon.signature then return false end
-  Chameleon.signature=sig
-  Chameleon.apply(build_chameleon_palette(map))
-  A.dirty=true
-  return true
-end
-
-function Chameleon.set(on)
-  Chameleon.enabled=on and true or false
-  BLT.store(SECTION,"chameleon",Chameleon.enabled and "1" or "0",true)
-  Chameleon.signature=nil
-
-  if Chameleon.enabled then
-    Chameleon.refresh(true)
-    chameleon_notify("CHAMELEON  REAPERテーマに擬態")
-  else
-    Chameleon.restore()
-    A.dirty=true
-    chameleon_notify("CHAMELEON  オリジナル配色")
-  end
-  A.dirty=true
-end
-
-function Chameleon.tick(now)
-  if not Chameleon.enabled or now<Chameleon.poll_at then return false end
-  Chameleon.poll_at=now+Chameleon.poll_interval
-  return Chameleon.refresh(false)
-end
-local function rgb_to_hsv(c)
-  local r,g,b=c[1],c[2],c[3]
-  local mx=math.max(r,g,b)
-  local mn=math.min(r,g,b)
-  local d=mx-mn
-  local h=0
-
-  if d>1e-6 then
-    if mx==r then
-      h=((g-b)/d)%6
-    elseif mx==g then
-      h=(b-r)/d+2
+ end
+ function M.fit(accent,bg,light)
+  if math.abs(M.luma(accent)-M.luma(bg))>=.17 then return M.copy(accent) end
+  return shift(accent,light and math.min(.78,M.luma(bg)+.28) or math.max(.16,M.luma(bg)-.30))
+ end
+ local function surface(c,bg,factor,lo,hi)
+  local delta=M.luma(c)-M.luma(bg)
+  return shift(c,math.max(.01,math.min(.99,M.luma(bg)+(delta<0 and -1 or 1)*math.max(lo,math.min(hi,math.abs(delta)*factor)))))
+ end
+ local function first_near(map,bg,keys,gap)
+  local l=M.luma(bg)
+  for _,key in ipairs(keys) do local c=map[key];if c and math.abs(M.luma(c)-l)<=gap then return c end end
+ end
+ local function generated_text(bg)
+  local light,dark={.935,.945,.958},{.070,.075,.082}
+  local lr,dr=BLTThemeColors.contrast(light,bg),BLTThemeColors.contrast(dark,bg)
+  local is_light=lr>dr;local color=is_light and light or dark
+  if math.max(lr,dr)<4.5 then color=is_light and {1,1,1} or {0,0,0} end
+  return color,is_light
+ end
+ local text_keys={'col_main_text2','col_main_text','genlist_fg','col_tcp_text','col_toolbar_text','col_tl_fg','col_trans_fg'}
+ local accent_keys={'genlist_selbg','col_seltrack','toolbararmed_color','col_tl_bgsel','col_toolbar_text_on','col_main_resize2',
+  'selitem_dot','selitem_tag','activetake_tag','col_routinghl1','col_routinghl2','track_lanesolo_tabcol','col_tl_fg'}
+ local hi_keys={'col_main_3dhl','col_toolbar_frame','genlist_grid','col_tl_fg2','col_tr1_divline','col_tr2_divline'}
+ local sh_keys={'col_main_3dsh','docker_shadow','genlist_grid','col_tr1_divline','col_tr2_divline'}
+ local panel_keys={'col_main_bg','col_tracklistbg','col_mixerbg','genlist_bg','col_seltrack2','col_tl_bg','col_tr1_bg','col_tr2_bg'}
+ local field_keys={'col_main_editbk','col_transport_editbk','genlist_bg','col_buttonbg','col_trans_bg'}
+ local function best_color(map,bg,keys,role,dark)
+  local best,score=nil,-math.huge;local l=M.luma(bg)
+  for i,key in ipairs(keys) do
+   local c=map[key]
+   if c then
+    local delta=M.luma(c)-l;local gap=math.abs(delta);local sat=saturation(c);local value
+    if role=='text' then
+     if gap>=.28 then value=gap+sat*.20 end
+    elseif role=='accent' then
+     value=sat*1.45+gap*.72+(i<=3 and .12 or 0)-(gap<.035 and sat<.035 and .35 or 0)
     else
-      h=(r-g)/d+4
+     local wanted=role=='hi' and (dark and delta>0 or not dark and delta<0)
+      or role=='sh' and (dark and delta<0 or not dark and delta>0)
+     value=gap+(wanted and .16 or 0)
     end
-    h=h/6
+    if value and value>score then best,score=c,value end
+   end
   end
-
-  local s=(mx<=1e-6) and 0 or d/mx
-  return h,s,mx
-end
-
-local function hsv_to_rgb(h,s,v)
-  h=h%1
-  local i=math.floor(h*6)
-  local f=h*6-i
-  local p=v*(1-s)
-  local q=v*(1-f*s)
-  local t=v*(1-(1-f)*s)
+  return best
+ end
+ -- Cache native values and decode only changed slots. Failed decoding is retried.
+ function M.snapshot(api,cache,force)
+  cache=cache or {raw={},map={}};local changed=not cache.ready
+  for i,key in ipairs(M.keys) do
+   local native=BLTThemeColors.native(api,key)
+   if force or native~=cache.raw[i] then
+    local c=BLTThemeColors.decode(api,native)
+    cache.map[key]=c;cache.raw[i]=c and native or -1;changed=true
+   end
+  end
+  cache.ready=true
+  return cache.map,changed,cache
+ end
+ function M.palette(map,defaults)
+  -- Keep the main window/toolbar RGB unchanged; images may override the visible toolbar.
+  local bg=M.copy(map.col_main_bg2 or map.col_main_bg or map.col_tracklistbg or map.genlist_bg or map.col_arrangebg or defaults.bg)
+  local l=M.luma(bg);local dark=l<.50
+  local panel=first_near(map,bg,panel_keys,.16) or shift(bg,dark and math.min(.92,l+.040) or math.max(.08,l-.040))
+  local field=first_near(map,bg,field_keys,.14) or shift(bg,dark and math.min(.92,l+.018) or math.min(.96,l+.020))
+  panel=surface(panel,bg,1.48,.030,.105);field=surface(field,bg,1.38,.020,.085)
+  if dark and M.luma(panel)<=l+.022 then panel=shift(panel,math.min(.94,l+.038))
+  elseif not dark and M.luma(panel)>=l-.022 then panel=shift(panel,math.max(.06,l-.038)) end
+  local generated,light=generated_text(bg)
+  local text=M.mix(generated,best_color(map,bg,text_keys,'text') or generated,.18)
+  if BLTThemeColors.contrast(text,bg)<4.5 then text=generated end
+  local accent=boost(best_color(map,bg,accent_keys,'accent') or defaults.accent,dark and 1.18 or 1.14)
+  accent=M.fit(accent,bg,light)
+  if dark and M.luma(accent)<l+.22 then accent=shift(accent,math.min(.82,l+.26))
+  elseif not dark and M.luma(accent)>l-.22 then accent=shift(accent,math.max(.12,l-.28)) end
+  local edge=M.mix(bg,text,dark and .20 or .18);local edge2=M.mix(accent,text,dark and .12 or .09)
+  local hi=best_color(map,bg,hi_keys,'hi',dark);local sh=best_color(map,bg,sh_keys,'sh',dark)
+  if sh then edge=M.mix(edge,sh,.28) end;if hi then edge2=M.mix(edge2,hi,.24) end
+  local out={bg=bg,bg2=M.mix(bg,accent,dark and .080 or .065),panel=panel,panel2=M.mix(panel,accent,dark and .105 or .085),field=field,
+   text=text,muted=M.mix(text,bg,dark and .28 or .30),faint=M.mix(text,bg,dark and .50 or .52),edge=edge,edge2=edge2,
+   accent=accent,accent2=M.mix(accent,text,dark and .14 or .09),accent3=M.mix(accent,bg,dark and .48 or .46),
+   focus=M.mix(accent,text,dark and .06 or .04),focus2=M.mix(accent,text,dark and .20 or .12),
+   ink=M.mix(bg,accent,dark and .16 or .12),hover=M.mix(accent,text,dark and .15 or .10)}
+  if defaults.green then out.green=M.copy(out.accent2) end
+  for _,key in ipairs({'warn','red','gold','purple','lock'}) do
+   if defaults[key] then out[key]=M.fit(defaults[key],bg,light) end
+  end
+  if out.lock and defaults.lock2 then out.lock2=M.mix(out.lock,text,dark and .22 or .16) end
+  return out
+ end
+ local function hsv(c)
+  local r,g,b=c[1],c[2],c[3];local mx=math.max(r,g,b);local d=mx-math.min(r,g,b);local h=0
+  if d>1e-6 then h=(mx==r and ((g-b)/d)%6 or mx==g and (b-r)/d+2 or (r-g)/d+4)/6 end
+  return h,mx<=1e-6 and 0 or d/mx,mx
+ end
+ local function rgb(h,s,v)
+  h=h%1;local i=math.floor(h*6);local f=h*6-i
+  local p,q,t=v*(1-s),v*(1-f*s),v*(1-(1-f)*s)
   i=i%6
-
-  if i==0 then return {v,t,p}
-  elseif i==1 then return {q,v,p}
-  elseif i==2 then return {p,v,t}
-  elseif i==3 then return {p,q,v}
-  elseif i==4 then return {t,p,v}
-  else return {v,p,q}
+  if i==0 then return {v,t,p} elseif i==1 then return {q,v,p} elseif i==2 then return {p,v,t}
+  elseif i==3 then return {p,q,v} elseif i==4 then return {t,p,v} else return {v,p,q} end
+ end
+ function M.new(api,colors,options)
+  options=options or {};local defaults={};local chrome_defaults
+  for k,c in pairs(colors) do if type(c)=='table' and type(c[1])=='number' then defaults[k]=M.copy(c) end end
+  local theme={enabled=api.GetExtState(options.section,'chameleon')=='1',poll_at=0,poll_interval=3,keys=M.keys}
+  local cache,pending=nil,false
+  local function chrome()
+   local c=options.chrome;if type(c)=='function' then c=c() end
+   if c and not chrome_defaults then chrome_defaults={mint=M.copy(c.mint),ice=M.copy(c.ice)} end
+   return c
   end
-end
-
-function Chameleon.compute_icon_colors()
-  if not Chameleon.enabled then
-    return C.muted,C.faint,C.edge
+  chrome()
+  local function updated(restored,palette)
+   theme.bltIcon=nil
+   if options.applied then options.applied(restored,palette) end
+   if options.changed then options.changed() end
   end
+  function theme.apply(palette)
+   for key in pairs(defaults) do
+    local c=palette[options.roles and options.roles[key] or key]
+    if c then colors[key]=c end
+   end
+   local c=chrome();if c then c.mint=M.copy(palette.accent2);c.ice=M.copy(palette.focus2) end
+   updated(false,palette)
+  end
+  function theme.restore()
+   for key,c in pairs(defaults) do colors[key]=M.copy(c) end
+   local c=chrome();if c then c.mint=M.copy(chrome_defaults.mint);c.ice=M.copy(chrome_defaults.ice) end
+   updated(true)
+  end
+  function theme.refresh(force)
+   if not theme.enabled then return false end
+   local map,changed;map,changed,cache=M.snapshot(api,cache,force)
+   if not force and not changed and not pending then return false end
+   pending=true;theme.apply(M.palette(map,defaults));pending=false
+   if force then theme.poll_at=api.time_precise()+theme.poll_interval end
+   return true
+  end
+  function theme.set(on)
+   theme.enabled=on and true or false;cache=nil;pending=false
+   local value=theme.enabled and '1' or '0'
+   if options.store then options.store(options.section,'chameleon',value,true)
+   else api.SetExtState(options.section,'chameleon',value,true) end
+   if theme.enabled then theme.refresh(true) else theme.restore() end
+   if options.notify then options.notify(theme.enabled and 'CHAMELEON  REAPERテーマに擬態' or 'CHAMELEON  オリジナル配色') end
+  end
+  function theme.toggle() theme.set(not theme.enabled) end
+  function theme.tick(now)
+   if not theme.enabled or now<theme.poll_at then return false end
+   theme.poll_at=now+theme.poll_interval
+   return theme.refresh(false)
+  end
+  function theme.sample() local map=M.snapshot(api);return map,M.palette(map,defaults) end
+  function theme.icon_colors()
+   local c=theme.bltIcon;local a=colors.accent
+   if c and c.on==theme.enabled and c.r==a[1] and c.g==a[2] and c.b==a[3] then return c[1],c[2],c[3] end
+   local x,y,z
+   if theme.enabled then
+    local h,s,v=hsv(a);s=math.max(s,.46)
+    x,y,z=rgb(h,s,v),rgb(h+.19,math.max(.42,s*.90),v),rgb(h-.19,math.max(.42,s*.86),v)
+   else
+    x,y,z=M.copy(colors.muted),M.copy(colors.faint),M.copy(colors.edge)
+    for _,color in ipairs({x,y,z}) do
+     local gray=M.luma(color);for i=1,3 do color[i]=gray+(color[i]-gray)*.12 end
+    end
+   end
+   theme.bltIcon={x,y,z,on=theme.enabled,r=a[1],g=a[2],b=a[3]};return x,y,z
+  end
+  return theme
+ end
+ return M
+end)()
+-- END BLT CHAMELEON
 
-  local h,s,v=rgb_to_hsv(C.accent)
-  s=math.max(s,.46)
-  local c1=hsv_to_rgb(h,      s,                v)
-  local c2=hsv_to_rgb(h+.19, math.max(.42,s*.90), v)
-  local c3=hsv_to_rgb(h-.19, math.max(.42,s*.86), v)
+Chameleon=BLTChameleon.new(R,C,{
+ section=SECTION,
+ store=BLT.store,
+ notify=chameleon_notify,
+ chrome=Chrome,
+ changed=function() A.dirty=true end
+})
 
-  return c1,c2,c3
-end
-function Chameleon.icon_colors()
- local c=Chameleon.bltIcon;local a=C.accent
- if c and c.on==Chameleon.enabled and c.r==a[1] and c.g==a[2] and c.b==a[3] then return c[1],c[2],c[3] end
- local x,y,z=Chameleon.compute_icon_colors()
- if not Chameleon.enabled then for _,v in ipairs({x,y,z}) do local gray=v[1]*.2126+v[2]*.7152+v[3]*.0722;for i=1,3 do v[i]=gray+(v[i]-gray)*.12 end end end
- Chameleon.bltIcon={x,y,z,on=Chameleon.enabled,r=a[1],g=a[2],b=a[3]};return x,y,z
-end
 
 local function titlebar_api_ready()
   local required={"JS_Window_Find","JS_Window_IsWindow","JS_Window_GetRect","JS_Window_SetPosition","JS_Window_SetStyle"}
@@ -2112,21 +1954,26 @@ local function toolbar_geometry()
 end
 local function capacity()return max(1,floor((gfx.h-TOP-28)/ROW))end
 local function search_match(row,q)
- if S.tr and(row.name:lower():find(q,1,true)or row.master and ('マスター'):find(q,1,true))then return true end
- if not S.it and not S.fx then return false end
- A.search=A.search or{}
- local data=A.search[row.id]
- if not data then
-  if not R.ValidatePtr2(A.tree.project,row.ptr,'MediaTrack*')then return false end
-  data=Core.searchdata(R,row,S.it,S.fx);A.search[row.id]=data
+ -- Cache both hits and misses for the current normalized query.
+ if A.matchQuery~=q or not A.matches then A.matchQuery=q;A.matches={} end
+ local found=A.matches[row.id];if found~=nil then return found end
+ found=S.tr and(row.name:lower():find(q,1,true)~=nil or row.master and ('マスター'):find(q,1,true)~=nil)or false
+ if not found and(S.it or S.fx)then
+  A.search=A.search or{}
+  local data=A.search[row.id]
+  if not data then
+   if not R.ValidatePtr2(A.tree.project,row.ptr,'MediaTrack*')then return false end
+   data=Core.searchdata(R,row,S.it,S.fx);A.search[row.id]=data
+  end
+  for _,name in ipairs(data.items)do if name:find(q,1,true)then found=true;break end end
+  if not found then for _,name in ipairs(data.fx)do if name:find(q,1,true)then found=true;break end end end
  end
- for _,name in ipairs(data.items)do if name:find(q,1,true)then return true end end
- for _,name in ipairs(data.fx)do if name:find(q,1,true)then return true end end
- return false
+ A.matches[row.id]=found;return found
 end
-local function update_view(relink)
+local function update_view(relink,reuse)
  if not A.tree then return end
- A.rows=Core.visible(A.tree,A.closed,A.query,search_match,S.related)
+ A.viewPending=true;A.viewRetry=R.time_precise()+.25
+ if not reuse then A.rows=Core.visible(A.tree,A.closed,A.query,search_match,S.related)end
  if relink then A.manualVisibility=nil end
  if A.manualVisibility then
   local saved=A.manualVisibility;local same=saved.project==A.tree.project and #saved.ids==#A.rows
@@ -2137,7 +1984,7 @@ local function update_view(relink)
   if not A.linkState then A.linkState={project=A.tree.project,tracks={},master=A.tree.master.shown}end
   Core.linkview(R,A.tree,A.rows,A.linkState);A.revision=R.GetProjectStateChangeCount(A.tree.project);A.masterVisibility=R.GetMasterTrackVisibility()end
  A.lastChild={};for _,row in ipairs(A.rows)do if row.parent then A.lastChild[row.parent.id]=row.id end end
- A.offset=clamp(A.offset,0,max(0,#A.rows-capacity()));A.dirty=true
+ A.offset=clamp(A.offset,0,max(0,#A.rows-capacity()));A.dirty=true;A.viewPending=nil;A.viewRetry=nil
 end
 local function sync_selection(project)
  local selected=A.selectionScratch or{};for row in pairs(selected)do selected[row]=nil end
@@ -2162,18 +2009,21 @@ local function refresh(force)
  local revision=R.GetProjectStateChangeCount(project)
  if not force and A.tree and A.tree.project==project and A.revision==revision
   and R.CountTracks(project)==#A.tree.rows and R.GetMasterTrackVisibility()==A.masterVisibility then
-  if sync_selection(project)then return end
+  if sync_selection(project)then if A.viewPending and now>=(A.viewRetry or 0)then update_view()end;return end
  end
  local searchChanged=A.revision~=revision or not A.tree or A.tree.project~=project
- if searchChanged then A.search=nil end
+ if searchChanged then A.search=nil;if S.it or S.fx then A.matches=nil end end
  A.revision=revision
  local tree=Core.snapshot(R)
  if not A.tree or A.tree.project~=tree.project then A.closed={};A.offset=0;A.anchor=nil;A.drag=nil end
  local old=A.tree;local replaced=false
  local changed=not old or old.project~=tree.project or old.signature~=tree.signature
+ local filterChanged=changed;local visibilityChanged=false
  local function compare(row,previous)
   if not previous then changed=true;return end
   if row.ptr~=previous.ptr then replaced=true end
+  if row.name~=previous.name and S.tr then filterChanged=true end
+  if row.shown~=previous.shown then visibilityChanged=true end
   if row.name~=previous.name or row.selected~=previous.selected or row.shown~=previous.shown
    or row.mixer~=previous.mixer or row.color~=previous.color or row.pinned~=previous.pinned then changed=true end
  end
@@ -2186,9 +2036,17 @@ local function refresh(force)
  A.masterVisibility=R.GetMasterTrackVisibility()
  local function register(row)A.byPointer[row.ptr]=row;if row.selected then A.selectedRows[row]=true;A.selectionCount=A.selectionCount+1 end end
  register(tree.master);for _,row in ipairs(tree.rows)do register(row)end
+ if replaced or filterChanged then A.matches=nil end
  if replaced then A.search=nil end
- if force or replaced or changed or(searchChanged and(S.it or S.fx)and A.query~='')then update_view()
- else for i,row in ipairs(A.rows)do A.rows[i]=tree.by[row.id]end end
+ local retryReady=not A.viewPending or now>=(A.viewRetry or 0)
+ if retryReady and(A.viewPending or replaced or filterChanged or(searchChanged and(S.it or S.fx)and A.query:match('%S')))then update_view()
+ else
+  local count,total=0,#A.rows
+  for i=1,total do local row=tree.by[A.rows[i].id];if row then count=count+1;A.rows[count]=row end end
+  for i=total,count+1,-1 do A.rows[i]=nil end
+  if changed then A.dirty=true end
+  if visibilityChanged and S.link and retryReady then update_view(false,true)end
+ end
 end
 local function selected_ids()
  local ids={};for row in pairs(A.selectedRows)do ids[row.id]=true end;return ids
@@ -2211,6 +2069,7 @@ local function set_option(key,value)
  if key=='related'and S.related~=value then A.relatedMotion={from=A.relatedPosition or(S.related and 1 or 0),at=R.time_precise()}end
  if key=='link'and not value and A.linkState then Core.restoreview(R,A.linkState);A.linkState=nil end
  S[key]=value;A.offset=0
+ if key=='tr'or key=='it'or key=='fx'then A.matches=nil end
  if key=='it'or key=='fx'then A.search=nil end
  R.SetExtState(SECTION,key,value and '1'or'0',true)
  if key=='link'and not value then refresh(true)else update_view(true)end
@@ -2349,7 +2208,7 @@ local function draw()
  local hot=gfx.mouse_x>=clearX and gfx.mouse_x<clearX+clearW and gfx.mouse_y>=39 and gfx.mouse_y<64
  if hot then rect(clearX,39,clearW,25,C.panel2,.8)end
  label('クリア',clearX+4,45,clearW-8,18,11,hot and C.text or C.muted,false,0)
- widgets[#widgets+1]={id='clear',x=clearX,y=39,w=clearW,h=25,tip='フィルタークリア',fn=function()stop_edit(false);query('');A.closed={};update_view(true)end}
+ widgets[#widgets+1]={id='clear',x=clearX,y=39,w=clearW,h=25,tip='フィルタークリア',fn=function()stop_edit(false);A.closed={};query('')end}
  rect(11,73,103,26,C.edge,.6)
  filter_button('tr','Tr',12,32,'トラック名を検索')
  filter_button('it','It',46,32,'アイテムのテイク名を検索')
@@ -2452,7 +2311,7 @@ local function input()
  local down=(cap&1)~=0;local ctrl=(cap&4)~=0 or(BLT_MAC and(cap&32)~=0);local shift=(cap&8)~=0
  local clearX,clearW=clear_geometry()
  if editor and down and not A.down and x>=clearX and x<clearX+clearW and y>=39 and y<64 then
-  stop_edit(false);query('');A.closed={};update_view(true);A.down=down;return
+  stop_edit(false);A.closed={};query('');A.down=down;return
  end
  if BLT.blocked()or editor then A.drag=nil;A.down=down;return end
  if rightPressed and not down then
@@ -2566,7 +2425,7 @@ BLT.attach({R=R,C=C,Chrome=Chrome,Chameleon=Chameleon,section=SECTION,faces=font
  wake=function()A.dirty=true end,defaults={query='',tr=true,it=false,fx=false,related=false,link=false},capture=function()return S end,valid=valid,apply=function(v)
  if S.link and not v.link and A.linkState then Core.restoreview(R,A.linkState);A.linkState=nil;S.link=false;refresh(true)end
  for _,key in ipairs(OPTION_KEYS)do S[key]=v[key];R.SetExtState(SECTION,key,v[key]and'1'or'0',true)end
- A.search=nil;query(v.query)end,
+ A.search=nil;A.matches=nil;query(v.query)end,
  busy=function()return A.drag~=nil end,commit=function()stop_edit(false);return true end,cancelEdit=function()stop_edit(true)end,
  editing=function()return editor~=nil end,modal=function()return false end,
  handle=gfx_window_handle,resizeHit=chrome_resize_hit,cursor=set_resize_cursor,beginResize=begin_window_resize,resize=update_window_resize,
@@ -2579,7 +2438,7 @@ clipboard_action=function(copy,ids)
   local text,count=Core.copynames(R,ids)
   if count>0 then R.CF_SetClipboard(text);status(string.format(Language.text('%dトラック名をコピーしました。'),count))end
  else
-  local count=Core.pastenames(R,R.CF_GetClipboard(''),ids);A.search=nil;refresh(true)
+  local count=Core.pastenames(R,R.CF_GetClipboard(''),ids);A.search=nil;A.matches=nil;refresh(true)
   status(string.format(Language.text('%dトラック名を変更しました。'),count))
  end
  return true
@@ -2624,7 +2483,8 @@ local function loop()
   if clipboard_shortcut(k)then k=0 end
   if not editor then
    if k==27 then A.manualClose=true;A.closing=true
-   elseif k==1 then refresh(true);for _,r in ipairs(A.rows)do R.SetTrackSelected(r.ptr,true)end;refresh(true)
+   elseif k==1 then refresh(true);for _,r in ipairs(A.rows)do if not r.selected then R.SetTrackSelected(r.ptr,true)end end
+    A.revision=R.GetProjectStateChangeCount(A.tree.project);sync_selection(A.tree.project)
    elseif k==6 then start_edit()end
   end
   local now=R.time_precise();BLT.tick(now);if Chameleon.tick(now)then A.dirty=true end

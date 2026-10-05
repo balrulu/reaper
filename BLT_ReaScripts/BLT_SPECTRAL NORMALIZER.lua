@@ -1,5 +1,5 @@
 -- @description SPECTRAL NORMALIZER
--- @version 0.2.13
+-- @version 0.2.14
 -- @author Balrulu
 -- @provides
 --   . > ../
@@ -616,7 +616,7 @@ end
 local WindowGeometry=create_window_geometry(reaper,gfx)
 local BLT_MAC=(reaper.GetOS() or ''):match('OSX')~=nil or (reaper.GetOS() or ''):match('macOS')~=nil
 
-local Core={VERSION='0.2.13',SECTION='BLT_SPECTRAL_NORMALIZER',MAX_POINTS=1024}
+local Core={VERSION='0.2.14',SECTION='BLT_SPECTRAL_NORMALIZER',MAX_POINTS=1024}
 local abs,min,max,sqrt,log,pi,floor,ceil=math.abs,math.min,math.max,math.sqrt,math.log,math.pi,math.floor,math.ceil
 local function clamp(x,a,b) return min(b,max(a,x)) end
 local function finite(x) return type(x)=='number' and x==x and abs(x)<math.huge end
@@ -1431,104 +1431,248 @@ local C={
  edge={.145,.285,.445},edge2={.360,.650,.900},text={.955,.980,1},muted={.690,.780,.875},faint={.390,.505,.635},
  accent={.120,.490,.980},accent2={.650,.895,1},accent3={.045,.235,.520},focus2={.690,.900,1},
  ink={.018,.075,.160},warn={1,.755,.490},red={1,.230,.300}}
-local C_BASE={};for k,v in pairs(C) do C_BASE[k]={v[1],v[2],v[3]} end
 local fonts={'Yu Gothic UI','Segoe UI','Consolas'}
 if BLT_MAC then fonts={'Hiragino Sans','Helvetica Neue','Menlo'} elseif R.GetOS():match('Linux') then fonts={'sans-serif','sans-serif','monospace'} end
 
-function Theme.rgb_to_hsv(c)
-  local r,g,b=c[1],c[2],c[3]
-  local mx=math.max(r,g,b)
-  local mn=math.min(r,g,b)
-  local d=mx-mn
-  local h=0
-
-  if d>1e-6 then
-    if mx==r then
-      h=((g-b)/d)%6
-    elseif mx==g then
-      h=(b-r)/d+2
-    else
-      h=(r-g)/d+4
-    end
-    h=h/6
-  end
-
-  local s=(mx<=1e-6) and 0 or d/mx
-  return h,s,mx
-end
-function Theme.hsv_to_rgb(h,s,v)
-  h=h%1
-  local i=math.floor(h*6)
-  local f=h*6-i
-  local p=v*(1-s)
-  local q=v*(1-f*s)
-  local t=v*(1-(1-f)*s)
-  i=i%6
-
-  if i==0 then return {v,t,p}
-  elseif i==1 then return {q,v,p}
-  elseif i==2 then return {p,v,t}
-  elseif i==3 then return {p,q,v}
-  elseif i==4 then return {t,p,v}
-  else return {v,p,q}
-  end
-end
-function Theme.icon_colors()
-  local cache=Theme.iconCache
-  if cache and cache.enabled==Theme.enabled and cache.r==C.accent[1] and cache.g==C.accent[2] and cache.b==C.accent[3] then return cache[1],cache[2],cache[3] end
-  if not Theme.enabled then
-    cache={{0.59,0.66,0.64},{0.48,0.53,0.58},{0.56,0.63,0.63},enabled=false,r=C.accent[1],g=C.accent[2],b=C.accent[3]}
-    Theme.iconCache=cache;return cache[1],cache[2],cache[3]
-  end
-
-  local h,s,v=Theme.rgb_to_hsv(C.accent)
-  s=math.max(s,.46)
-
-  local c1=Theme.hsv_to_rgb(h,      s,                v)
-  local c2=Theme.hsv_to_rgb(h+.19, math.max(.42,s*.90), v)
-  local c3=Theme.hsv_to_rgb(h-.19, math.max(.42,s*.86), v)
-
-  Theme.iconCache={c1,c2,c3,enabled=true,r=C.accent[1],g=C.accent[2],b=C.accent[3]}
-  return c1,c2,c3
-end
-function Theme.copy(c) return {c[1],c[2],c[3]} end
-function Theme.mix(a,b,q) return {a[1]+(b[1]-a[1])*q,a[2]+(b[2]-a[2])*q,a[3]+(b[3]-a[3])*q} end
-function Theme.luma(c) return c[1]*.2126+c[2]*.7152+c[3]*.0722 end
-function Theme.sample(names,fallback)
- if type(R.GetThemeColor)~='function' or type(R.ColorFromNative)~='function' then return Theme.copy(fallback) end
- for _,name in ipairs(names) do
-  local value=R.GetThemeColor(name,0)
-  if type(value)=='number' and value>=0 then local r,g,b=R.ColorFromNative(value);return {r/255,g/255,b/255} end
+-- BEGIN BLT CHAMELEON 1.0.0 (generated from _shared/BLT_Chameleon.lua)
+-- Standalone embedded factory. Hosts supply persistence and redraw hooks.
+local BLTChameleon=(function()
+-- BEGIN BLT THEME COLORS 1.0.0 (generated from _shared/BLT_ThemeColors.lua)
+local BLTThemeColors=(function()
+ local M={}
+ function M.native(api,key)
+  local ok,n=pcall(api.GetThemeColor,key,0)
+  if not ok or type(n)~='number' or n~=n or n%1~=0 then return -1 end
+  return n
  end
- return Theme.copy(fallback)
-end
-function Theme.restore() for k,v in pairs(C_BASE) do C[k]=Theme.copy(v) end end
-function Theme.signature()
- if type(R.GetThemeColor)~='function' then return 'none' end
- local out={};for _,k in ipairs({'col_main_bg2','col_main_text2','col_toolbar_text_on','col_tl_fg','genlist_bg'}) do out[#out+1]=tostring(R.GetThemeColor(k,0)) end
- return table.concat(out,':')
-end
-function Theme.refresh(force)
- if not Theme.enabled then return false end
- local sig=Theme.signature();if not force and sig==Theme.last_signature then return false end;Theme.last_signature=sig
- local raw_bg=Theme.sample({'col_main_bg2','genlist_bg','col_main_bg'},C_BASE.bg);local dark=Theme.luma(raw_bg)<.5
- local anchor=dark and {0,0,0} or {1,1,1};local bg=Theme.mix(raw_bg,anchor,dark and .18 or .12)
- local generated=dark and {.96,.98,1} or {.035,.045,.06}
- local theme_text=Theme.sample({'col_main_text2','genlist_fg','col_main_text'},generated)
- local text=Theme.mix(generated,theme_text,.18);local accent=Theme.sample({'col_toolbar_text_on','col_tl_fg','col_main_3dhl'},C_BASE.accent2)
- if abs(Theme.luma(accent)-Theme.luma(bg))<.22 then accent=Theme.mix(accent,generated,.55) end
- C.bg=bg;C.bg2=Theme.mix(bg,accent,.08);C.panel=Theme.mix(bg,generated,dark and .045 or .055);C.panel2=Theme.mix(C.panel,accent,.11)
- C.field=Theme.mix(bg,anchor,dark and .06 or .04);C.text=text;C.muted=Theme.mix(text,bg,.30);C.faint=Theme.mix(text,bg,.52)
- C.edge=Theme.mix(bg,text,.20);C.edge2=Theme.mix(accent,text,.18);C.accent=accent;C.accent2=Theme.mix(accent,text,.16);C.accent3=Theme.mix(accent,bg,.48)
- C.focus2=Theme.mix(accent,text,.24);C.ink=Theme.mix(bg,accent,.15)
- C.warn=Theme.copy(C_BASE.warn);C.red=Theme.copy(C_BASE.red);A.dirty=true;return true
-end
-function Theme.toggle()
- Theme.enabled=not Theme.enabled;App.store(SECTION,'chameleon',Theme.enabled and '1' or '0',true);Theme.last_signature=nil
- if Theme.enabled then Theme.refresh(true);App.notice('CHAMELEON  REAPERテーマに擬態',false,3)
- else Theme.restore();App.notice('CHAMELEON  オリジナル配色',false,3) end
-end
-Theme.enabled=R.GetExtState(SECTION,'chameleon')=='1';Theme.poll_at=0
+ function M.decode(api,n)
+  if n==-1 then return nil end
+  local ok,r,g,b=pcall(api.ColorFromNative,n)
+  if not ok then return nil end
+  for _,v in ipairs({r,g,b}) do
+   if type(v)~='number' or v~=v or v<0 or v>255 then return nil end
+  end
+  if r==nil or g==nil or b==nil then return nil end
+  return {r/255,g/255,b/255}
+ end
+ function M.read(api,key,fallback) return M.decode(api,M.native(api,key)) or fallback end
+ local function linear(v) return v<=.04045 and v/12.92 or ((v+.055)/1.055)^2.4 end
+ function M.luminance(c) return linear(c[1])*.2126+linear(c[2])*.7152+linear(c[3])*.0722 end
+ function M.contrast(a,b)
+  local x,y=M.luminance(a),M.luminance(b)
+  return (math.max(x,y)+.05)/(math.min(x,y)+.05)
+ end
+ return M
+end)()
+-- END BLT THEME COLORS
+ local M={}
+ M.keys={
+  'col_main_bg2','col_main_bg','col_arrangebg','col_tracklistbg','col_mixerbg',
+  'genlist_bg','col_tl_bg','col_trans_bg','col_tr1_bg','col_tr2_bg',
+  'col_main_editbk','col_transport_editbk','col_buttonbg',
+  'col_main_text2','col_main_text','genlist_fg','col_tcp_text',
+  'col_toolbar_text','col_toolbar_text_on','col_tl_fg','col_tl_fg2','col_trans_fg',
+  'col_seltrack','col_seltrack2','genlist_selbg','col_tl_bgsel','toolbararmed_color',
+  'col_main_resize2','selitem_dot','selitem_tag','activetake_tag',
+  'col_routinghl1','col_routinghl2','track_lanesolo_tabcol',
+  'col_main_3dhl','col_main_3dsh','genlist_grid','col_toolbar_frame',
+  'col_tr1_divline','col_tr2_divline','docker_shadow',
+ }
+ function M.copy(c) return {c[1],c[2],c[3]} end
+ function M.mix(a,b,t)
+  t=math.max(0,math.min(1,t or 0))
+  return {a[1]+(b[1]-a[1])*t,a[2]+(b[2]-a[2])*t,a[3]+(b[3]-a[3])*t}
+ end
+ function M.luma(c) return c[1]*.2126+c[2]*.7152+c[3]*.0722 end
+ local function saturation(c) return math.max(c[1],c[2],c[3])-math.min(c[1],c[2],c[3]) end
+ local function shift(c,target)
+  local l=M.luma(c);target=math.max(0,math.min(1,target))
+  if math.abs(target-l)<1e-5 then return M.copy(c) end
+  if target<l then return M.mix(c,{0,0,0},(l-target)/math.max(l,1e-9)) end
+  return M.mix(c,{1,1,1},(target-l)/math.max(1-l,1e-9))
+ end
+ local function boost(c,factor)
+  local l=M.luma(c);local out={}
+  for i=1,3 do out[i]=math.max(0,math.min(1,l+(c[i]-l)*factor)) end
+  return out
+ end
+ function M.fit(accent,bg,light)
+  if math.abs(M.luma(accent)-M.luma(bg))>=.17 then return M.copy(accent) end
+  return shift(accent,light and math.min(.78,M.luma(bg)+.28) or math.max(.16,M.luma(bg)-.30))
+ end
+ local function surface(c,bg,factor,lo,hi)
+  local delta=M.luma(c)-M.luma(bg)
+  return shift(c,math.max(.01,math.min(.99,M.luma(bg)+(delta<0 and -1 or 1)*math.max(lo,math.min(hi,math.abs(delta)*factor)))))
+ end
+ local function first_near(map,bg,keys,gap)
+  local l=M.luma(bg)
+  for _,key in ipairs(keys) do local c=map[key];if c and math.abs(M.luma(c)-l)<=gap then return c end end
+ end
+ local function generated_text(bg)
+  local light,dark={.935,.945,.958},{.070,.075,.082}
+  local lr,dr=BLTThemeColors.contrast(light,bg),BLTThemeColors.contrast(dark,bg)
+  local is_light=lr>dr;local color=is_light and light or dark
+  if math.max(lr,dr)<4.5 then color=is_light and {1,1,1} or {0,0,0} end
+  return color,is_light
+ end
+ local text_keys={'col_main_text2','col_main_text','genlist_fg','col_tcp_text','col_toolbar_text','col_tl_fg','col_trans_fg'}
+ local accent_keys={'genlist_selbg','col_seltrack','toolbararmed_color','col_tl_bgsel','col_toolbar_text_on','col_main_resize2',
+  'selitem_dot','selitem_tag','activetake_tag','col_routinghl1','col_routinghl2','track_lanesolo_tabcol','col_tl_fg'}
+ local hi_keys={'col_main_3dhl','col_toolbar_frame','genlist_grid','col_tl_fg2','col_tr1_divline','col_tr2_divline'}
+ local sh_keys={'col_main_3dsh','docker_shadow','genlist_grid','col_tr1_divline','col_tr2_divline'}
+ local panel_keys={'col_main_bg','col_tracklistbg','col_mixerbg','genlist_bg','col_seltrack2','col_tl_bg','col_tr1_bg','col_tr2_bg'}
+ local field_keys={'col_main_editbk','col_transport_editbk','genlist_bg','col_buttonbg','col_trans_bg'}
+ local function best_color(map,bg,keys,role,dark)
+  local best,score=nil,-math.huge;local l=M.luma(bg)
+  for i,key in ipairs(keys) do
+   local c=map[key]
+   if c then
+    local delta=M.luma(c)-l;local gap=math.abs(delta);local sat=saturation(c);local value
+    if role=='text' then
+     if gap>=.28 then value=gap+sat*.20 end
+    elseif role=='accent' then
+     value=sat*1.45+gap*.72+(i<=3 and .12 or 0)-(gap<.035 and sat<.035 and .35 or 0)
+    else
+     local wanted=role=='hi' and (dark and delta>0 or not dark and delta<0)
+      or role=='sh' and (dark and delta<0 or not dark and delta>0)
+     value=gap+(wanted and .16 or 0)
+    end
+    if value and value>score then best,score=c,value end
+   end
+  end
+  return best
+ end
+ -- Cache native values and decode only changed slots. Failed decoding is retried.
+ function M.snapshot(api,cache,force)
+  cache=cache or {raw={},map={}};local changed=not cache.ready
+  for i,key in ipairs(M.keys) do
+   local native=BLTThemeColors.native(api,key)
+   if force or native~=cache.raw[i] then
+    local c=BLTThemeColors.decode(api,native)
+    cache.map[key]=c;cache.raw[i]=c and native or -1;changed=true
+   end
+  end
+  cache.ready=true
+  return cache.map,changed,cache
+ end
+ function M.palette(map,defaults)
+  -- Keep the main window/toolbar RGB unchanged; images may override the visible toolbar.
+  local bg=M.copy(map.col_main_bg2 or map.col_main_bg or map.col_tracklistbg or map.genlist_bg or map.col_arrangebg or defaults.bg)
+  local l=M.luma(bg);local dark=l<.50
+  local panel=first_near(map,bg,panel_keys,.16) or shift(bg,dark and math.min(.92,l+.040) or math.max(.08,l-.040))
+  local field=first_near(map,bg,field_keys,.14) or shift(bg,dark and math.min(.92,l+.018) or math.min(.96,l+.020))
+  panel=surface(panel,bg,1.48,.030,.105);field=surface(field,bg,1.38,.020,.085)
+  if dark and M.luma(panel)<=l+.022 then panel=shift(panel,math.min(.94,l+.038))
+  elseif not dark and M.luma(panel)>=l-.022 then panel=shift(panel,math.max(.06,l-.038)) end
+  local generated,light=generated_text(bg)
+  local text=M.mix(generated,best_color(map,bg,text_keys,'text') or generated,.18)
+  if BLTThemeColors.contrast(text,bg)<4.5 then text=generated end
+  local accent=boost(best_color(map,bg,accent_keys,'accent') or defaults.accent,dark and 1.18 or 1.14)
+  accent=M.fit(accent,bg,light)
+  if dark and M.luma(accent)<l+.22 then accent=shift(accent,math.min(.82,l+.26))
+  elseif not dark and M.luma(accent)>l-.22 then accent=shift(accent,math.max(.12,l-.28)) end
+  local edge=M.mix(bg,text,dark and .20 or .18);local edge2=M.mix(accent,text,dark and .12 or .09)
+  local hi=best_color(map,bg,hi_keys,'hi',dark);local sh=best_color(map,bg,sh_keys,'sh',dark)
+  if sh then edge=M.mix(edge,sh,.28) end;if hi then edge2=M.mix(edge2,hi,.24) end
+  local out={bg=bg,bg2=M.mix(bg,accent,dark and .080 or .065),panel=panel,panel2=M.mix(panel,accent,dark and .105 or .085),field=field,
+   text=text,muted=M.mix(text,bg,dark and .28 or .30),faint=M.mix(text,bg,dark and .50 or .52),edge=edge,edge2=edge2,
+   accent=accent,accent2=M.mix(accent,text,dark and .14 or .09),accent3=M.mix(accent,bg,dark and .48 or .46),
+   focus=M.mix(accent,text,dark and .06 or .04),focus2=M.mix(accent,text,dark and .20 or .12),
+   ink=M.mix(bg,accent,dark and .16 or .12),hover=M.mix(accent,text,dark and .15 or .10)}
+  if defaults.green then out.green=M.copy(out.accent2) end
+  for _,key in ipairs({'warn','red','gold','purple','lock'}) do
+   if defaults[key] then out[key]=M.fit(defaults[key],bg,light) end
+  end
+  if out.lock and defaults.lock2 then out.lock2=M.mix(out.lock,text,dark and .22 or .16) end
+  return out
+ end
+ local function hsv(c)
+  local r,g,b=c[1],c[2],c[3];local mx=math.max(r,g,b);local d=mx-math.min(r,g,b);local h=0
+  if d>1e-6 then h=(mx==r and ((g-b)/d)%6 or mx==g and (b-r)/d+2 or (r-g)/d+4)/6 end
+  return h,mx<=1e-6 and 0 or d/mx,mx
+ end
+ local function rgb(h,s,v)
+  h=h%1;local i=math.floor(h*6);local f=h*6-i
+  local p,q,t=v*(1-s),v*(1-f*s),v*(1-(1-f)*s)
+  i=i%6
+  if i==0 then return {v,t,p} elseif i==1 then return {q,v,p} elseif i==2 then return {p,v,t}
+  elseif i==3 then return {p,q,v} elseif i==4 then return {t,p,v} else return {v,p,q} end
+ end
+ function M.new(api,colors,options)
+  options=options or {};local defaults={};local chrome_defaults
+  for k,c in pairs(colors) do if type(c)=='table' and type(c[1])=='number' then defaults[k]=M.copy(c) end end
+  local theme={enabled=api.GetExtState(options.section,'chameleon')=='1',poll_at=0,poll_interval=3,keys=M.keys}
+  local cache,pending=nil,false
+  local function chrome()
+   local c=options.chrome;if type(c)=='function' then c=c() end
+   if c and not chrome_defaults then chrome_defaults={mint=M.copy(c.mint),ice=M.copy(c.ice)} end
+   return c
+  end
+  chrome()
+  local function updated(restored,palette)
+   theme.bltIcon=nil
+   if options.applied then options.applied(restored,palette) end
+   if options.changed then options.changed() end
+  end
+  function theme.apply(palette)
+   for key in pairs(defaults) do
+    local c=palette[options.roles and options.roles[key] or key]
+    if c then colors[key]=c end
+   end
+   local c=chrome();if c then c.mint=M.copy(palette.accent2);c.ice=M.copy(palette.focus2) end
+   updated(false,palette)
+  end
+  function theme.restore()
+   for key,c in pairs(defaults) do colors[key]=M.copy(c) end
+   local c=chrome();if c then c.mint=M.copy(chrome_defaults.mint);c.ice=M.copy(chrome_defaults.ice) end
+   updated(true)
+  end
+  function theme.refresh(force)
+   if not theme.enabled then return false end
+   local map,changed;map,changed,cache=M.snapshot(api,cache,force)
+   if not force and not changed and not pending then return false end
+   pending=true;theme.apply(M.palette(map,defaults));pending=false
+   if force then theme.poll_at=api.time_precise()+theme.poll_interval end
+   return true
+  end
+  function theme.set(on)
+   theme.enabled=on and true or false;cache=nil;pending=false
+   local value=theme.enabled and '1' or '0'
+   if options.store then options.store(options.section,'chameleon',value,true)
+   else api.SetExtState(options.section,'chameleon',value,true) end
+   if theme.enabled then theme.refresh(true) else theme.restore() end
+   if options.notify then options.notify(theme.enabled and 'CHAMELEON  REAPERテーマに擬態' or 'CHAMELEON  オリジナル配色') end
+  end
+  function theme.toggle() theme.set(not theme.enabled) end
+  function theme.tick(now)
+   if not theme.enabled or now<theme.poll_at then return false end
+   theme.poll_at=now+theme.poll_interval
+   return theme.refresh(false)
+  end
+  function theme.sample() local map=M.snapshot(api);return map,M.palette(map,defaults) end
+  function theme.icon_colors()
+   local c=theme.bltIcon;local a=colors.accent
+   if c and c.on==theme.enabled and c.r==a[1] and c.g==a[2] and c.b==a[3] then return c[1],c[2],c[3] end
+   local x,y,z
+   if theme.enabled then
+    local h,s,v=hsv(a);s=math.max(s,.46)
+    x,y,z=rgb(h,s,v),rgb(h+.19,math.max(.42,s*.90),v),rgb(h-.19,math.max(.42,s*.86),v)
+   else
+    x,y,z=M.copy(colors.muted),M.copy(colors.faint),M.copy(colors.edge)
+    for _,color in ipairs({x,y,z}) do
+     local gray=M.luma(color);for i=1,3 do color[i]=gray+(color[i]-gray)*.12 end
+    end
+   end
+   theme.bltIcon={x,y,z,on=theme.enabled,r=a[1],g=a[2],b=a[3]};return x,y,z
+  end
+  return theme
+ end
+ return M
+end)()
+-- END BLT CHAMELEON
+
+Theme=BLTChameleon.new(R,C,{section=SECTION,store=App.store,
+ notify=function(text) App.notice(text,false,3) end,changed=function() A.dirty=true end})
 if Theme.enabled then Theme.refresh(true) end
 
 local scale,ox,oy,mx,my=1,0,TITLE_H,-1,-1
@@ -2573,7 +2717,7 @@ function App.loop()
  if active~=A.active then A.active=active;if not active then if A.edit then UI.commit_edit() end;UI.release_capture() end;A.dirty=true end
  local count=0;while key>0 and count<32 do UI.key(key);count=count+1;key=gfx.getchar() end;if key<0 then A.closing=true;App.close();return end
  App.poll_selection(now);App.safe(UI.input);App.process(now)
- if Theme.enabled and now>=Theme.poll_at then Theme.poll_at=now+3;if Theme.refresh(false) then A.dirty=true end end
+ Theme.tick(now)
  if gfx.w~=A.last_w or gfx.h~=A.last_h or gfx.ext_retina~=A.last_dpi then A.last_w,A.last_h,A.last_dpi=gfx.w,gfx.h,gfx.ext_retina;A.dirty=true end
  if A.status_until>0 and now>=A.status_until and not A.job then A.status_until=0;A.warning=false;A.dirty=true end
  local flashing=false;for _,time in pairs(A.number_flash) do if now-time<1.2 then flashing=true;break end end
