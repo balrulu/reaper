@@ -1,8 +1,8 @@
-#NAME:日本語 [JP] - For v7.81 + SWS
+#NAME:日本語 [JP] - For v7.82 + SWS
 ; @description 日本語 [JP] - REAPER + SWS
 ; @author Balrulu
-; @version 7.81.1
-; @changelog Japanese translation for REAPER v7.81 + SWS
+; @version 7.82.0
+; @changelog Japanese translation for REAPER v7.82 + SWS
 
 ; NOTE: this is the best starting point for making a new langpack.
 ; As you translate a string, remove the ; from the beginning of the
@@ -332,6 +332,7 @@ A1C5EC4ACA9C56C0=フリーズ
 A2BF58A6DFD853DC=プロジェクト
 D2714B0ED9D27FB1=トラックマネージャー
 7A1E9510735905CF=オーディオデバイス:
+155268E8DDFB481C=カーブ:
 B503AC33C53D7361=フェード:
 1A8015E802ECC562=アイテムの重なりの処理:
 3868AB5EE29314B8=ロック
@@ -406,6 +407,7 @@ AD872C409758C3B5=ピークを整流
 50704E4412719D12=スペクトル peaks + LUFS-Sグラフ
 C5234E4AE7572FEF=スペクトル peaks + スペクトログラム
 3F520E4A87056BC8=スペクトログラム
+649EC8151A2B41EC=スライダー2
 8DBFE9B9FD06189F=振幅傾き:
 379E70DAD2144AB6=振幅:
 CB7776E9AD3CF57E=基準値:
@@ -1183,7 +1185,12 @@ C933854BDCBC14D0=プラグイン遅延補償 (PDC) (%d spls)
 798DD89E9CFD549B=プリセット名
 79FCD625803A6AD8=プリセットの名前を変更
 430CE5953D21E5CD=プリセットを保存
+DB927D2B0D27A97F=プライマリ
 ;FD8C66831553CF14=REAPER
+;F83661614F59514F=User 1
+;F83662614F595302=User 2
+;F83663614F5954B5=User 3
+;F8365C614F5948D0=User 4
 2430BBE52E3FC625=コンピング %d
 9A6E97866E0A5FC5=アクション
 30C7CFDF48505E4A=失敗
@@ -2122,13 +2129,6 @@ DDAB6253F0B71B7C=自動レンダー
 67DB0C104E15ABAD=開いているプロジェクトのリストを保存...
 75381D695414DB95=トラックを削除(s)
 14AB0E343C321037=すべてのトラックを表示
-155268E8DDFB481C=カーブ:
-649EC8151A2B41EC=スライダー2
-DB927D2B0D27A97F=プライマリ
-;F83661614F59514F=User 1
-;F83662614F595302=User 2
-;F83663614F5954B5=User 3
-;F8365C614F5948D0=User 4
 
 [DLG_102] ; IDD_MAIN
 246546A2AD3EB0B4=REAPER (初期化中)
@@ -3526,6 +3526,7 @@ C74D338BA30A325B=OSによるワーカースレッドの異なるCPUへの再配�
 7371F8477EDFA706=プロセスのワーキングセット最小サイズ値を設定:
 A32B63A4739D86CC=MB, 最大:
 264ECC6B098122C4=HiDPIモード（Windows 7+）:
+7AB2E2DB1C6A028B=ダークモード（試験的機能）:
 ;^0A6448A99C8A2834=Advanced UI/system settings
 ;^C4A83360D20BD06A=Custom splash screen image:
 ;^F685FB3A91025549=Browse...
@@ -3539,7 +3540,6 @@ A32B63A4739D86CC=MB, 最大:
 ;^D840E3186B2B9581=OK
 ;^F09E4B5C35AA14B9=Cancel
 ;^122368E92DE6E29F=Reset to defaults
-7AB2E2DB1C6A028B=ダークモード（試験的機能）:
 
 [DLG_255] ; IDD_SCREENSETS_AUTOSAVE
 E738ACD4B2B53409=スクリーンセット自動保存フィールド
@@ -4104,6 +4104,7 @@ CD40FE987B274220=デフォルトのFXラーン・マッピングは、現在選�
 5CA1E00000000000=1.1
 C0253B595D267AC2=MIDI入力の詳細設定
 271F89F0F16A09EA=このデバイスからの入力を有効化
+1D5EC91778A48F64=「全てのMIDI入力」での入力を有効化
 097D2F9B6F6EBFEC=高度なMIDIイベントタイムスタンプオプション
 441316D58AD8BC8C=REAPERがイベントにタイムスタンプを付与（初期値）
 925A502D9C92733D=高精度タイムスタンプ（QPC）
@@ -4115,7 +4116,6 @@ D0B425DFCB932550=精度はMIDI入力デバイスに合わせ設定する必要�
 ;^DDC15BF760606CC2=Do not warn if unable to open device
 ;^D840E3186B2B9581=OK
 ;^F09E4B5C35AA14B9=Cancel
-1D5EC91778A48F64=「全てのMIDI入力」での入力を有効化
 
 [DLG_426] ; IDD_WAITFORDEVICE
 1A03C3B8816A8581=デバイスが安定するのを待っています
@@ -4879,7 +4879,6 @@ A2A17DFF19E1ED33=常にこのプロジェクトを読み込む:
 ;^A5AE0B33DF6191F1=Pan mode:
 ;^8EA91D57270468E0=Pan law:
 ;^57CA523AA910C686=Gain compensation (boost pans)
-1243E33A71969287=内蔵ダークモードは無効（reaper_darkmode.dll読込済）
 
 [DLG_513] ; IDD_FREEZE
 0239235C001A2CD3=トラックのフリーズの詳細
@@ -5015,6 +5014,7 @@ AB160C292520C435=px（高）
 C069535E9D8BB671=マウス操作の対象:
 E85367ED12714CDB=フェード曲線
 0024BF3FBE427677=フェード開始/終了線
+F7354650ADF62548=全フェード形状でカーブの下半分をSカーブ調整に使用
 02506CF67F5A95F7=フェードハンドルを表示:
 55926D1FDB93890E=常に
 360B90677273925B=なし
@@ -5022,12 +5022,11 @@ E85367ED12714CDB=フェード曲線
 67A4D32224D1FE51=px 未満の時
 3DDA3762CA460144=クロスフェードハンドルを表示:
 E349443F1D989275=メディアアイテムが多段表示の時
-63EEAA4ED16C1D0B=マウスでクロスフェード編集時、クロスフェードエディターのテーマ色を使用
-FDA21E6CFE8F4FA5=アレンジビューでは、クロスフェード部にのみフェードエディターのテーマ色を適用
-F7354650ADF62548=全フェード形状でカーブの下半分をSカーブ調整に使用
 4BC4FA13A16F3D8F=フェードカーブハンドルを表示
 E9AD85E87063BB5D=全フェード形状でSカーブハンドルを表示
 060B8EF7D50208B7=フェードが次の長さ未満ならカーブハンドルを隠す:
+63EEAA4ED16C1D0B=マウスでクロスフェード編集時、クロスフェードエディターのテーマ色を使用
+FDA21E6CFE8F4FA5=アレンジビューでは、クロスフェード部にのみフェードエディターのテーマ色を適用
 
 [DLG_525] ; IDD_CHOOSEPROJVER
 2689E4AA66038151=(不明)
@@ -5220,6 +5219,8 @@ DC550AF3D8DE1D84=以後表示しない
 647F5086B66FDE9A=現在の画面中央
 8A21E6736F9C2FD6=マウスカーソル位置
 7BC1296313E80DF0=OSに従う
+6298602ED1180749=無効（推奨）
+8FEB39A275322DD7=強制オン
 2E8A1FE4EFD81398=大
 7B08AA30FDEE9648=特大
 D90DB889070F72DA=自動（推奨、10.11以降はMetal）
@@ -5237,6 +5238,7 @@ E29EA422680EA418=（Metalの有効化が必要です。適用するには終了�
 51657F41491C64FC=マウスイベントのスロットル:
 9DF68966B2A88DB6=ホイール
 B8AC798F77CEC1EF=スワイプ
+;^04CC1A2793006D9A=Automatic
 ;^BEA7703C415C702E=Small
 ;^AB2A3D4EF1C9D1A8=Default
 ;^0A6448A99C8A2834=Advanced UI/system settings
@@ -5253,9 +5255,7 @@ B8AC798F77CEC1EF=スワイプ
 ;^D840E3186B2B9581=OK
 ;^F09E4B5C35AA14B9=Cancel
 ;^122368E92DE6E29F=Reset to defaults
-6298602ED1180749=無効（推奨）
-8FEB39A275322DD7=強制オン
-;^04CC1A2793006D9A=Automatic
+1243E33A71969287=内蔵ダークモードは無効（reaper_darkmode.dll読込済）
 
 [DLG_578] ; IDD_PREFS_AUDIOCONFIG_LINUX
 FFAE57EC0BA56FE1=ブロックサイズ:
@@ -5345,6 +5345,7 @@ B3B2CE99002FAC62=不透明度:
 D84A9D186B337314=LU
 EC32FB41BB27423E=トランジション:
 649EC6151A2B3E86=スライダー4
+E872EEE6D828652E=ピークをスペクトログラムに重ねて表示―不透明度:
 ;^4E400355911F9138=Normal peaks
 3C92467A3AC5C95B=スペクトルピーク
 ;^6EDE2A4D22C68A2B=LUFS-M peaks (momentary loudness)
@@ -5368,7 +5369,6 @@ EC32FB41BB27423E=トランジション:
 ;^E99EBA7FF6970DBB=...
 ;^B1080718DBC22F94=Loudness
 ;^10A20B62A05CA417=Enable band
-E872EEE6D828652E=ピークをスペクトログラムに重ねて表示―不透明度:
 
 [DLG_582] ; IDD_FADECFG
 B6B54DA29F013E59=フェード形状をカスタマイズ
@@ -5457,7 +5457,7 @@ F6943164E79D3997=最大:
 ;^D840E3186B2B9581=OK
 ;^F09E4B5C35AA14B9=Cancel
 ;^122368E92DE6E29F=Reset to defaults
-EB731E1AE6EAB182=IMEサポートを有効化
+02C04180B38268E7=IMEサポートを有効化（完全なGTK+読込の為、不具合が生じる場合があります）
 
 [DLG_589] ; IDD_ITEMRULER_SETTINGS
 9035BAF65A56139D=メディアアイテムルーラー設定
@@ -5825,7 +5825,7 @@ D885201F4656EE59=拡張機能情報をコピー
 ;^BE34D1D1CA3FF8A8=Edit selected
 
 [DLG_630] ; IDD_COLORPICK
-BCBF050EC762EFD2=右クリックで適用/プレビュー。 
+BCBF050EC762EFD2=右クリックで適用/プレビュー。
 68D053006A0A1897=Shift+クリックで現在の色を保存
 2969369C3CA382FA=Opt+クリックで削除
 ADB54EAC375686DC=Alt+クリックで削除
@@ -7646,6 +7646,7 @@ A9344E96F9B31CB5=出力を有効化
 477300E83FE78CB0=低遅延出力モード（低精度）
 4521C78B4EF8A845=トラックの録音入力用に入力を有効化
 05865940D57926B3='全てのMIDI入力'に入力を含める
+42FABAFE24DDEA28=全てのMIDI: チャンネルを設定
 606B1B2C9FB4D674=チャンネルを設定: %d
 C516B094C5925A7D=コントロールメッセージ: チャンネルを設定
 C8D06DD5614C5E35=デバイスを無視
@@ -7659,7 +7660,6 @@ E5D80D1C40705421=ジョイスティックMIDIデバイスを追加
 ;^85AC5941ABA23E19=Source channel
 ;^4F32BF040299F0AA=Enable input for control messages
 ;^DDC15BF760606CC2=Do not warn if unable to open device
-42FABAFE24DDEA28=全てのMIDI: チャンネルを設定
 
 [MENU_324] ; IDR_CONTEXTS_24
 59BE268243412BB0=バーチャルMIDIキーボードをドッカーに配置する
@@ -8507,6 +8507,8 @@ D8BB57F7D0DA12AF=拍子（小節あたりの拍数）
 3D1532A93D800EC6=生成波形
 B53658EFB9EE1E8A=生成波形長（ミリ秒）
 6717FA4AEEC94415=検索設定
+708E6D4A259DBE1C=「全てのMIDI入力」のチャンネルを設定
+59B872E9F90FC500=コントロールメッセージのチャンネルを設定
 DCCF2D2F7B9D84A4=ガンマ
 B439AA405D79F1B7=シャドウ・ゲイン
 309B36E11242FEF7=ミッドトーン・ゲイン
@@ -8598,8 +8600,6 @@ FA465D03201B1AFB=アイテムの位相を揃える
 ;^7E1A7DBA9A84DCCB=Right
 ;^D82BC4186B1904CA=Up
 ;^9707B0A0A788F20B=Down
-708E6D4A259DBE1C=「全てのMIDI入力」のチャンネルを設定
-59B872E9F90FC500=コントロールメッセージのチャンネルを設定
 
 [actiondialog]
 38A196CB11DA0146=ここにアクションをドラッグ...
@@ -8938,8 +8938,34 @@ DDDDF98894B6A23A=オプション: 分割オプションをサイクル: 左に�
 354121A4FED95112=アイテム: アイテムを選択範囲でクロスフェード ▲▼ Item: Crossfade items within time selection
 6E3CDC23E9D8EEDE=アイテム: アイテムの背後にある内容を削除（トリム） ▲▼ Item: Remove content (trim) behind items
 B11A5953B349F955=アイテム: 重なっているアイテムをすべてクロスフェード ▲▼ Item: Crossfade any overlapping items
+7BFDE95B44A0DF14=アイテム: フェードイン長を既定値に設定 ▲▼ Item: Set fade-in length to default
+41FDF9D91162C08F=アイテム: フェードイン形状を既定に設定 ▲▼ Item: Set fade-in shape to default
+2BF54E6A8BFF60A3=アイテム: フェードイン形状をリニアに設定 ▲▼ Item: Set fade-in shape to linear
+E0D1689CB62BA9B4=アイテム: フェードイン形状を緩い凸に設定 ▲▼ Item: Set fade-in shape to slight convex
+7D9B12D972310BB8=アイテム: フェードイン形状を緩い凹に設定 ▲▼ Item: Set fade-in shape to slight concave
+C2C4CE6FD0A8C351=アイテム: フェードイン形状を鋭い凸に設定 ▲▼ Item: Set fade-in shape to sharp convex
+CE789C6BF981D197=アイテム: フェードイン形状を鋭い凹に設定 ▲▼ Item: Set fade-in shape to sharp concave
+0BDED02ABDC76EE2=アイテム: フェードイン形状を緩いSカーブに設定 ▲▼ Item: Set fade-in shape to slight S-curve
+6A2C8447729FBCA9=アイテム: フェードイン形状を鋭いSカーブに設定 ▲▼ Item: Set fade-in shape to sharp S-curve
 903EF5D17CEFC953=アイテム: フェードイン形状を順に切り替え ▲▼ Item: Cycle through fade-in shapes
+79D56D420E474765=アイテム: フェードアウト長を既定値に設定 ▲▼ Item: Set fade-out length to default
+253CE13E74FC50A8=アイテム: フェードアウト形状を既定に設定 ▲▼ Item: Set fade-out shape to default
+D5C59282E86DA92B=アイテム: フェードアウト形状を緩い凸に設定 ▲▼ Item: Set fade-out shape to slight convex
+88355212D301AF99=アイテム: フェードアウト形状を緩い凹に設定 ▲▼ Item: Set fade-out shape to slight concave
+3151169B3A4D608C=アイテム: フェードアウト形状を鋭い凸に設定 ▲▼ Item: Set fade-out shape to sharp convex
+929DF35FF8BC9150=アイテム: フェードアウト形状を鋭い凹に設定 ▲▼ Item: Set fade-out shape to sharp concave
+1F0A3B89924DC05F=アイテム: フェードアウト形状を緩いSカーブに設定 ▲▼ Item: Set fade-out shape to slight S-curve
+AEC4AA99D837598A=アイテム: フェードアウト形状を鋭いSカーブに設定 ▲▼ Item: Set fade-out shape to sharp S-curve
 9701ED149F85A77A=アイテム: フェードアウト形状を順に切り替え ▲▼ Item: Cycle through fade-out shapes
+BA70523CE7896390=アイテム: クロスフェード長を既定値に設定 ▲▼ Item: Set crossfade length to default
+D49890283C74A703=アイテム: クロスフェード形状を既定に設定 ▲▼ Item: Set crossfade shape to default
+6E0495CDDF4E3B64=アイテム: クロスフェード形状をリニア（等ゲイン）に設定 ▲▼ Item: Set crossfade shape to linear, equal gain
+94D819E1B6379E95=アイテム: クロスフェード形状を緩い凸（等電力）に設定 ▲▼ Item: Set crossfade shape to slight convex, equal power
+D1FFD1283DE7A4AC=アイテム: クロスフェード形状を緩い凹に設定 ▲▼ Item: Set crossfade shape to slight concave
+7784DE82C764C57D=アイテム: クロスフェード形状を鋭い凸に設定 ▲▼ Item: Set crossfade shape to sharp convex
+BF7007DF74F1E59B=アイテム: クロスフェード形状を鋭い凹に設定 ▲▼ Item: Set crossfade shape to sharp concave
+82AFBD49E0684CA6=アイテム: クロスフェード形状を緩いSカーブに設定 ▲▼ Item: Set crossfade shape to slight S-curve
+180BB841DBDD987D=アイテム: クロスフェード形状を鋭いSカーブに設定 ▲▼ Item: Set crossfade shape to sharp S-curve
 955BFB0835E65443=アイテム: クロスフェード形状を順に切り替え ▲▼ Item: Cycle through crossfade shapes
 40831096470AA156=アイテム: フェードイン終端でアイテムを分割（クロスフェード時を除く） ▲▼ Item: Split items at end of fade-in (unless crossfaded)
 B2427560073FEA18=アイテム: フェードアウト始端でアイテムを分割（クロスフェード時を除く） ▲▼ Item: Split items at start of fade-out (unless crossfaded)
@@ -9279,6 +9305,10 @@ CCE996E5344A8C9F=マーカー: 選択範囲内の全マーカーを削除 ▲▼
 28380529F4E4E79D=テンポエンベロープ: 編集カーソル位置にテンポ/拍子変更マーカーを挿入... ▲▼ Tempo envelope: Insert tempo/time signature change marker at edit cursor...
 A0FBF95C99674685=選択範囲から小節を作成（テンポ検出、小節数を検出） ▲▼ Create measure from time selection (detect tempo, detect number of measures)
 8CA575C0EE78F6B9=選択範囲から小節を作成（テンポ検出、単一小節化を試行） ▲▼ Create measure from time selection (detect tempo, try to create single measure)
+2DEF50C8BA79ADE9=マーカー: カーソル付近のマーカーにカスタムカラーを設定（結果を待つ）... ▲▼ Markers: Set custom color for marker near cursor (wait for result)...
+2F9CB4692B938CA3=マーカー: カーソル付近のリージョンにカスタムカラーを設定（結果を待つ）... ▲▼ Markers: Set custom color for region near cursor (wait for result)...
+C6DA30AE24F88E58=マーカー: 選択マーカーまたはカーソル付近のマーカーにカスタムカラーを設定... ▲▼ Markers: Set custom color for selected markers or marker near cursor...
+E1441672F470365F=マーカー: 選択リージョンまたはカーソル付近のリージョンにカスタムカラーを設定... ▲▼ Markers: Set custom color for selected region or region near cursor...
 BBBDCDD35B430B51=マーカー: カーソル付近のマーカーを既定色に設定 ▲▼ Markers: Set marker near cursor to default color
 5D1F9E0197764353=マーカー: カーソル付近のリージョンを既定色に設定 ▲▼ Markers: Set region near cursor to default color
 FA08AF19CC837741=選択範囲からプロジェクトテンポを設定（テンポ検出、アイテムとループポイントを小節先頭に整列） ▲▼ Set project tempo from time selection (detect tempo, align items and loop points to measure start)
@@ -9377,6 +9407,7 @@ CB01C5B07B8ABB70=スペクトログラム: 選択したスペクトル編集を�
 A79BF089BCEEB3DF=スペクトログラム: 選択したスペクトル編集のゲインを +0 dB にリセット ▲▼ Spectrogram: Reset gain of selected spectral edits to +0 dB
 1A14269420B3C7A9=スペクトログラム: 選択したスペクトル編集の設定メニューを表示 ▲▼ Spectrogram: Show selected spectral edit configuration menu
 1DE656ABA804E38E=スペクトログラム: ズームイン時に高解像度スペクトログラムを表示 ▲▼ Spectrogram: Show high resolution spectrogram when zoomed-in
+3F937FB77D221F6F=スペクトログラム: ピーク+スペクトログラムモードでピークとスペクトログラムを重ねて表示 ▲▼ Spectrogram: overlap peaks and spectrogram when in peaks+spectrogram mode
 2E056DE4069F2AAE=ピーク: スペクトログラムプリセット1をロード ▲▼ Peaks: Load spectrogram preset 1
 2E056CE4069F28FB=ピーク: スペクトログラムプリセット2をロード ▲▼ Peaks: Load spectrogram preset 2
 2E056BE4069F2748=ピーク: スペクトログラムプリセット3をロード ▲▼ Peaks: Load spectrogram preset 3
@@ -10477,14 +10508,17 @@ BD8FCFD8663749DC=トラック: 最後に触れたトラックのFX #5のUIを開
 48CA1E284D688E6D=トラック: 最後に触れたトラックのFX #6のUIを開く/閉じる ▲▼ Track: Open/close UI for FX #6 on last touched track
 1B106FB01D04C1EE=トラック: 最後に触れたトラックのFX #7のUIを開く/閉じる ▲▼ Track: Open/close UI for FX #7 on last touched track
 BB93B9871442E4FF=トラック: 最後に触れたトラックのFX #8のUIを開く/閉じる ▲▼ Track: Open/close UI for FX #8 on last touched track
+959058DEDDBB8371=トラック: カスタムカラーを設定（結果を待つ）... ▲▼ Track: Set to custom color (wait for result)...
 D3F7525A66DDBD2F=トラック: カスタムカラーを設定... ▲▼ Track: Set to custom color...
 E2F30C176963CA94=トラック: ランダムカラーを設定 ▲▼ Track: Set to random colors
 8734FF1F84F4FDC7=トラック: 単一のランダムカラーを設定 ▲▼ Track: Set to one random color
 27E2F99862BE7E47=トラック: デフォルトカラーに設定 ▲▼ Track: Set to default color
+BE3AE2CBE28DB857=アイテム: カスタムカラーを設定（結果を待つ）... ▲▼ Item: Set to custom color (wait for result)...
 9EE367320A535175=アイテム: カスタムカラーを設定... ▲▼ Item: Set to custom color...
 05FCD2100E82D87A=アイテム: ランダムカラーを設定 ▲▼ Item: Set to random colors
 13CDBA268851481D=アイテム: 単一のランダムカラーを設定 ▲▼ Item: Set to one random color
 F180198B761D7939=アイテム: デフォルトカラーに設定 ▲▼ Item: Set to default color
+804C36ADAE56F674=テイク: アクティブテイクにカスタムカラーを設定（結果を待つ）... ▲▼ Take: Set active take to custom color (wait for result)...
 F0A8CD41F6C3191E=テイク: アクティブテイクにカスタムカラーを設定... ▲▼ Take: Set active take to custom color...
 A67C5A9F2FA2AC88=テイク: アクティブテイクに単一のランダムカラーを設定 ▲▼ Take: Set active take to one random color
 3BAB80394D808F72=テイク: アクティブテイクをデフォルトカラーに設定 ▲▼ Take: Set active take to default color
@@ -11140,41 +11174,7 @@ A724F6AA892C6837=グリッド: 1/16に設定 ▲▼ Grid: Set to 1/16
 43BC6E6F21CDC3F8=グリッド: 4に設定 ▲▼ Grid: Set to 4
 322A7281794EFF1B=グリッド: アレンジビューとMIDIエディターで同じグリッドを使用 ▲▼ Grid: Use the same grid division in arrange view and MIDI editor
 F8E6A0B81A77C5E9=全MIDIデバイスリセット ▲▼ Reset all MIDI devices
-7BFDE95B44A0DF14=アイテム: フェードイン長を既定値に設定 ▲▼ Item: Set fade-in length to default
-41FDF9D91162C08F=アイテム: フェードイン形状を既定に設定 ▲▼ Item: Set fade-in shape to default
-2BF54E6A8BFF60A3=アイテム: フェードイン形状をリニアに設定 ▲▼ Item: Set fade-in shape to linear
-E0D1689CB62BA9B4=アイテム: フェードイン形状を緩い凸に設定 ▲▼ Item: Set fade-in shape to slight convex
-7D9B12D972310BB8=アイテム: フェードイン形状を緩い凹に設定 ▲▼ Item: Set fade-in shape to slight concave
-C2C4CE6FD0A8C351=アイテム: フェードイン形状を鋭い凸に設定 ▲▼ Item: Set fade-in shape to sharp convex
-CE789C6BF981D197=アイテム: フェードイン形状を鋭い凹に設定 ▲▼ Item: Set fade-in shape to sharp concave
-0BDED02ABDC76EE2=アイテム: フェードイン形状を緩いSカーブに設定 ▲▼ Item: Set fade-in shape to slight S-curve
-6A2C8447729FBCA9=アイテム: フェードイン形状を鋭いSカーブに設定 ▲▼ Item: Set fade-in shape to sharp S-curve
-79D56D420E474765=アイテム: フェードアウト長を既定値に設定 ▲▼ Item: Set fade-out length to default
-253CE13E74FC50A8=アイテム: フェードアウト形状を既定に設定 ▲▼ Item: Set fade-out shape to default
-2B84346B6670D2E1=アイテム: フェードアウト形状をリニアに設定 ▲▼ Item: Set fade-out shape to linear)
-D5C59282E86DA92B=アイテム: フェードアウト形状を緩い凸に設定 ▲▼ Item: Set fade-out shape to slight convex
-88355212D301AF99=アイテム: フェードアウト形状を緩い凹に設定 ▲▼ Item: Set fade-out shape to slight concave
-3151169B3A4D608C=アイテム: フェードアウト形状を鋭い凸に設定 ▲▼ Item: Set fade-out shape to sharp convex
-929DF35FF8BC9150=アイテム: フェードアウト形状を鋭い凹に設定 ▲▼ Item: Set fade-out shape to sharp concave
-1F0A3B89924DC05F=アイテム: フェードアウト形状を緩いSカーブに設定 ▲▼ Item: Set fade-out shape to slight S-curve
-AEC4AA99D837598A=アイテム: フェードアウト形状を鋭いSカーブに設定 ▲▼ Item: Set fade-out shape to sharp S-curve
-BA70523CE7896390=アイテム: クロスフェード長を既定値に設定 ▲▼ Item: Set crossfade length to default
-D49890283C74A703=アイテム: クロスフェード形状を既定に設定 ▲▼ Item: Set crossfade shape to default
-6E0495CDDF4E3B64=アイテム: クロスフェード形状をリニア（等ゲイン）に設定 ▲▼ Item: Set crossfade shape to linear, equal gain
-94D819E1B6379E95=アイテム: クロスフェード形状を緩い凸（等電力）に設定 ▲▼ Item: Set crossfade shape to slight convex, equal power
-D1FFD1283DE7A4AC=アイテム: クロスフェード形状を緩い凹に設定 ▲▼ Item: Set crossfade shape to slight concave
-7784DE82C764C57D=アイテム: クロスフェード形状を鋭い凸に設定 ▲▼ Item: Set crossfade shape to sharp convex
-BF7007DF74F1E59B=アイテム: クロスフェード形状を鋭い凹に設定 ▲▼ Item: Set crossfade shape to sharp concave
-82AFBD49E0684CA6=アイテム: クロスフェード形状を緩いSカーブに設定 ▲▼ Item: Set crossfade shape to slight S-curve
-180BB841DBDD987D=アイテム: クロスフェード形状を鋭いSカーブに設定 ▲▼ Item: Set crossfade shape to sharp S-curve
-2DEF50C8BA79ADE9=マーカー: カーソル付近のマーカーにカスタムカラーを設定（結果を待つ）... ▲▼ Markers: Set custom color for marker near cursor (wait for result)...
-2F9CB4692B938CA3=マーカー: カーソル付近のリージョンにカスタムカラーを設定（結果を待つ）... ▲▼ Markers: Set custom color for region near cursor (wait for result)...
-C6DA30AE24F88E58=マーカー: 選択マーカーまたはカーソル付近のマーカーにカスタムカラーを設定... ▲▼ Markers: Set custom color for selected markers or marker near cursor...
-E1441672F470365F=マーカー: 選択リージョンまたはカーソル付近のリージョンにカスタムカラーを設定... ▲▼ Markers: Set custom color for selected region or region near cursor...
-3F937FB77D221F6F=スペクトログラム: ピーク+スペクトログラムモードでピークとスペクトログラムを重ねて表示 ▲▼ Spectrogram: overlap peaks and spectrogram when in peaks+spectrogram mode
-959058DEDDBB8371=トラック: カスタムカラーを設定（結果を待つ）... ▲▼ Track: Set to custom color (wait for result)...
-BE3AE2CBE28DB857=アイテム: カスタムカラーを設定（結果を待つ）... ▲▼ Item: Set to custom color (wait for result)...
-804C36ADAE56F674=テイク: アクティブテイクにカスタムカラーを設定（結果を待つ）... ▲▼ Take: Set active take to custom color (wait for result)...
+55573D4356284732=アイテム: フェードアウト形状をリニアに設定 ▲▼ Item: Set fade-out shape to linear
 
 [actions_fmt]
 6A859719FE602A01=トラック: %s の音量を設定（MIDI CC/OSCのみ） ▲▼ Track: Set volume for %s (MIDI CC/OSC only)
@@ -11473,6 +11473,13 @@ F9E82361B7F92232=エンベロープの色を選択
 93FD124CB6B8C7C2=アイテムグループの色を選択
 FE13FA09B64BB8F0=クリックでアイテムグループに既定色を使用
 923E1B2C3425D329=テーマ要素の色を選択:
+;^A2BF58A6DFD853DC=Project
+;^FD8C66831553CF14=REAPER
+;^DB927D2B0D27A97F=Primary
+;^F83661614F59514F=User 1
+;^F83662614F595302=User 2
+;^F83663614F5954B5=User 3
+;^F8365C614F5948D0=User 4
 
 [comp]
 E63708A9651FBB9A=コンプ名
@@ -13078,11 +13085,11 @@ CBF3A4AD86D9CDEB=カスタムフェードイン
 
 [fadeedit]
 DB7F3C9CCFEEA3D6=ローパスフェード
+0EDE219A681782C2=フェードをカスタマイズ...
 650EBBDBBA5961BA=クロスフェードエディタ...
 CB9A6EBC228662D4= (+1 個のクロスフェード)
 0A424AF488C7235B= (+%d 個のクロスフェード)
 ;^DDFC41E99D604844=Crossfade Editor
-0EDE219A681782C2=フェードをカスタマイズ...
 
 [faultyproject]
 F63F949547590DE6=前回このプロジェクトの読み込みに失敗しました:\r\n\r\n\t%s
@@ -13762,9 +13769,11 @@ B1A936F97892FB24=複数選択テイクの確認
 A2AF12785417D694=アイテム長さ
 4C7578D252ECE03C=フェードイン長さ
 965A110E77EC0F1B=フェードインカーブ
+B98CF9B1DB366132=フェードインのSパラメータ
 DDF5B6B482BD0695=フェードイン形状
 0B95689C85CC74EF=フェードアウト長さ
 232BB95074F74BAE=フェードアウトカーブ
+54A1514D370EB7F3=フェードアウトのSパラメータ
 B161029E690659A8=フェードアウト形状
 FF4EC1FE8F6DFC6A=スナップオフセット
 B985EDD336258569=ソース内開始位置
@@ -13784,8 +13793,6 @@ BAB37ABDEC3FCC7A=ループ区間の長さ
 F3C02669213929A1=チャンネルモード
 DBD9C33FD1F21252=ピッチ調整
 ;^A1A721902449610D=Take media source
-B98CF9B1DB366132=フェードインのSパラメータ
-54A1514D370EB7F3=フェードアウトのSパラメータ
 
 [joystick]
 133B50C3D3FC7CF5=コンバーターがロードされていません
@@ -17868,6 +17875,8 @@ B970EB596D4A90D7=両フェード長を変更、交点を維持
 18BDFFA19172BACB=両フェード長を変更、交点を維持 （相対エッジ編集）
 55301732A19F0B2C=両フェードカーブを水平方向に調整
 A6D0CF262175BDFD=両フェードカーブを水平方向に調整、選択/グループを無視
+2484FC41AD82EDE9=両方のフェードカーブを調整
+A0C85C2CA640B524=選択/グループ化を無視して両方のフェードカーブを調整
 F5893778A4E81308=両フェードを前の形状に設定
 216AE7C5FB3062CC=両フェードを次の形状に設定
 6C89A5174A70DB43=両フェードを前の形状に設定、選択を無視
@@ -18441,8 +18450,6 @@ A5193527E6752A2E=アイテムのダブルクリック項目へパススルー
 ;^22F2CC2A38A97EDC=Event properties...
 ;^BE2BA41449E3678C=Add CC event
 ;^5ECA3B6DF8877E70=Adjust
-2484FC41AD82EDE9=両方のフェードカーブを調整
-A0C85C2CA640B524=選択/グループ化を無視して両方のフェードカーブを調整
 
 [mp3]
 C042633C475B9971=MP3（LAMEによるエンコーダー）
@@ -18633,7 +18640,6 @@ A6F5715C7DFDA0E9=OPUS 解析エラー: ファイルに9チャンネル以上含�
 6117CC4FE43AF7F2=+0.0 (デフォルト)
 C8DA9526030E326C=サインテーパー
 3EBBFB1914C8EB44=リニアテーパー
-9A17190E1103712F=ハイブリッドテーパー
 041B2B4496DA7859=[非推奨のレガシーテーパー]
 A7213830E12E367B=プロジェクトデフォルト (ステレオバランス/モノパン)
 82F7D1EB412DAF11=プロジェクトデフォルト (ステレオパン)
@@ -18646,6 +18652,7 @@ CC85814B7AF4CCED=REAPER 3.x バランス(非推奨)
 82578278D5231120=PAN補正:
 ;^94DEF1C233373209=Project default
 ;^F4944DF4957B0C53= (default)
+F1134D87C27DEC63=ハイブリッドテーパー（既定）
 
 [panlaw]
 ;^DDDBC4B59922776E=Master Track
@@ -19592,15 +19599,15 @@ DFF7B5859424545D=ラベルがメディアアイテムの上ではなく中に描
 [prefs_mediafades_help]
 80EBC8369EB04EC0=メディアアイテムの角にある三角形をつかんでメディアアイテムのフェードイン/フェードアウトを編集します。
 7248C9668CE010CF=フェードカーブの交点にあるダイヤモンドをつかんで、重なっているメディアアイテムのフェード（クロスフェード）を編集します。
-7499317A45AD899D=メディアアイテムが小さい場合に、誤ってフェードイン/フェードアウトを編集するのを防ぎます。
-028F1F8A53001AC3=マウスでフェードカーブ自体をターゲットにすることを許可します。フェード開始/終了線の上端（フェードハンドルが描かれる場所）は常にターゲットにできます。
-D15E84F1951DF3C9=マウスでフェード開始/終了線をターゲットにすることを許可します。フェード開始/終了線の上端（フェードハンドルが描かれる場所）は常にターゲットにできます。
-49CE054364B5D458=クロスフェードエディターを使用する際、クロスフェードはカスタムテーマカラーで描画されます。これらの色は、マウスでクロスフェードを編集する際にも使用できます。
-5B709E2FAD7AD249=クロスフェードエディタ使用時、アレンジビューに表示されるアイテムに対して、カスタムテーマカラーをアイテム全体に適用するか、クロスフェード領域のみに適用するかを指定します。
 AE047CAA93DB74DC=フェードカーブの上半分に表示されるひし形をドラッグして、メディアアイテムのフェード曲率を調整します。
 CFA6AB301BF011DF=フェードカーブの下半分に表示されるひし形をドラッグして、メディアアイテムのフェードのSカーブを調整します。
 9BC340D1C2283315=フェード（アイテムではなく）の表示が小さい場合はカーブハンドルを隠し、マウスで誤ってつかむのを防ぎます。
+7499317A45AD899D=メディアアイテムが小さい場合に、誤ってフェードイン/フェードアウトを編集するのを防ぎます。
+028F1F8A53001AC3=マウスでフェードカーブ自体をターゲットにすることを許可します。フェード開始/終了線の上端（フェードハンドルが描かれる場所）は常にターゲットにできます。
+D15E84F1951DF3C9=マウスでフェード開始/終了線をターゲットにすることを許可します。フェード開始/終了線の上端（フェードハンドルが描かれる場所）は常にターゲットにできます。
 F299A53A5FE469F1=マウスモディファイアが「フェードカーブを調整」の場合、すべてのフェード形状でカーブの下半分を操作してSカーブを調整できるようにします。
+49CE054364B5D458=クロスフェードエディターを使用する際、クロスフェードはカスタムテーマカラーで描画されます。これらの色は、マウスでクロスフェードを編集する際にも使用できます。
+5B709E2FAD7AD249=クロスフェードエディタ使用時、アレンジビューに表示されるアイテムに対して、カスタムテーマカラーをアイテム全体に適用するか、クロスフェード領域のみに適用するかを指定します。
 
 [prefs_medialanes_help]
 1A0A22AB7CF63BCB=重なっているメディアアイテムを垂直にオフセットする際、この量だけオフセットします。100以上に設定できます。
@@ -24162,6 +24169,7 @@ AD5757515F0FC801=.ReaperEnvColorListを追加:
 0C4385A315E74535=テーマ名を付けて保存:
 805B2FD8CB3CF2C5=デフォルトテーマは上書きできません
 B9E1C3CAD601A812=開くテーマを選択:
+BEA0C3700DE0C10A=既定色を読み込み
 823C90884A4B7B4A=テーマでメイン背景/文字/編集の通常Windows色を上書き:
 B67D70D4A3780314=メインウィンドウ/トランスポート背景
 212A27F36D591C07=メインウィンドウ/トランスポート文字
@@ -24577,6 +24585,7 @@ E1E7CECE4F2F45CE=グループ #9
 0C1966908D457B67=グループ #62
 0C1965908D4579B4=グループ #63
 0C1964908D457801=グループ #64
+5735A0D86E41D458=ダークモードではウィンドウテーマを使わない
 ;^C93417DD40352E1B=Error saving
 ;^F685FB3A91025549=Browse...
 ;^9F1CC771ED41C58F=Media item take marker
@@ -24585,8 +24594,61 @@ E1E7CECE4F2F45CE=グループ #9
 ;^ED0A4DAC9B52D14C=Region edge
 ;^D35AD13842A55DEA=Markers
 ;^A26238D0F1C0A72A=Tempo/time signature change marker
-BEA0C3700DE0C10A=既定色を読み込み
-5735A0D86E41D458=ダークモードではウィンドウテーマを使わない
+1FD2F202B3A9AEA3=<画像ファイル名>
+5F1A48697239A880=<色の説明>
+D83A87EBC7956AD1=Windowsダークモードのカスタマイズ（テーマ外） - クリックでオプション
+6C9FCAB5581D6E4F=ReaScript/JSFX/Video IDE（テーマ外）-- クリックでオプション
+88E09AF87790C0D9=通常の前景色
+378E5AD893AE605A=ステータス行の前景色
+BC9B196E076D1A2C=選択範囲の前景色
+B2CDE291CA241423=ハイライト1の前景色
+C55E12D7CA048F68=ハイライト2の前景色
+5CD5E2A5E9D3B3F9=コメントの前景色
+2EAEB152613B74C8=エラーの前景色
+59D9BD59B22BBA87=既知の関数の前景色
+75688133F84DD63A=登録済み変数の前景色
+21643768DD00C993=キーワードの前景色
+8E38229F6B512D6B=文字列の前景色
+313226EF7C75446B=文字列変数の前景色
+E970598C2009B2B7=メッセージの前景色
+61815190A705F749=最上行の前景色
+E5DC2B788E1713DC=暗黙の関数の前景色
+CBE0B9AE5E8C70EC=通常の背景色
+89A3E21F4AC5BE8F=ステータス行の背景色
+F8B02EF6F35C2711=選択範囲の背景色
+788B9661828CAECE=ハイライト1の背景色
+2A875F84BEE98C85=ハイライト2の背景色
+693F6E995D83DC0C=コメントの背景色
+FE2D5B93F11684E5=エラーの背景色
+CCD3A81FF55D53CA=既知の関数の背景色
+BEC410D0E23E9C6F=登録済み変数の背景色
+53625C3AB173A51E=キーワードの背景色
+6D1AAD83474B8A36=文字列の背景色
+1014B1D3586FA136=文字列変数の背景色
+53EC4026489B511A=メッセージの背景色
+9A114B2A2817C33C=最上行の背景色
+D093BB6F54940258=ダークモードのメニューバー背景色
+B6F066ADA1D4E4AE=ダークモードのメニューバーホバー色
+DA92675B710185BB=ダークモードのメニューテキスト色
+83BE966679E89A3C=ダークモードの無効メニューテキスト色
+19BB846E57D208FE=ダークモードのタイトルバー色
+C0E1D778BEDA8F9A=ダークモードのメイン色
+D8960E4D5FA890D3=ダークモードの子ウィンドウ色
+DB93FABB7FFF0AE7=ダークモードの編集欄色
+AB8F598FEB8AF82E=ダークモードのテキスト色
+98020C35926FDEF2=ダークモードの無効テキスト色
+85058C9757186C8C=ダークモードのウィンドウ境界
+8A35C35A32505763=ダークモードの境界色
+F41E3E9E0EF7B21B=ダークモードのグループボックス色
+C99AEE09A52557CD=ダークモードのヘッダー背景色
+840F3EF3BDF5F05D=ダークモードのヘッダーテキスト色
+0BF2ACF2E3E21DF0=ダークモードのツリー選択テキスト色
+91C3E87AE49031D3=ダークモードのタブ背景色
+A57D0DA63015268E=ダークモードの選択タブ色
+A08A617EFAA5F2B1=ダークモードのシステムウィンドウ色
+64D01A677661C73C=ダークモードのツリー選択背景色
+3DF18C5FD55C8B2C=ダークモードの非フォーカス時ツリー選択背景色
+085F2F060120A1E2=ダークモードのリストグリッド線色
 
 [themeblend]
 D64ABE7656056465=オーバーレイ
@@ -24816,6 +24878,8 @@ E0FDD8AB23CED804=サンプル編集:\n%.4f [-inf dB]（%.0f spls）
 5B976311408700D5=\n調整後: %+.2f%%
 F1B13E128583A378=、移動:
 CF4356C508B56CBC=\n移動:
+A092B6A02E6A9749=フェードインS:
+671A1C95C61DB513=フェードインカーブ:
 C90DC16506D83D94=エンベロープ: %s\n%s at %s\n調整後: -inf dB
 AF31B9CB74D74A00=エンベロープ: %s\n%s at %s\n調整後: %+.2fdB
 550A5B50FC0EE9A5=固定レーンコンプ範囲を変更
@@ -24898,8 +24962,6 @@ D2CE2628239999F1=翻訳前の原文:
 ;^A5D5B4E847F44008=Beats (position, length, rate)
 ;^BA7A79B4D3479176=Beats (position only)
 ;^B98A031D9BEEF64E=Time
-A092B6A02E6A9749=フェードインS:
-671A1C95C61DB513=フェードインカーブ:
 
 [track]
 DB621C961B01736A=サラウンドトラック
@@ -27049,6 +27111,9 @@ B48F768AC12583AC=編集: フェードインをフェードアウトに同期
 F6644A12575B1D23=編集: 左のアイテム内容を調整して位相の一致度を最大化
 29721D43FF6FC2A3=編集: 右のアイテム位置を調整して位相の一致度を最大化
 B610E594E4A07FE2=編集: 右のアイテム内容を調整して位相の一致度を最大化
+FB23CF072C9DE497=編集: フェードアウト形状を順に切り替え
+AC0414D81584351C=編集: フェードイン形状を順に切り替え
+AAAE3471D2CE16A0=編集: クロスフェード形状を順に切り替え
 732C71A59DACA688=オプション: リップル編集のオン/オフを切り替え
 C791E2B254BACB3D=オプション: フェードアウト/フェードインの編集を連動
 CBA0DC4A16F42B65=オプション: 左のアイテムの開始位置をロック
@@ -27089,18 +27154,6 @@ BD45EED5E3CDC8D8=編集: 左のアイテム内容を微調整（-10 ms）
 2E0752F56FBE42BA=編集: 左のアイテム内容を微調整（+10 ms）
 4D60C9D7F9F42F9D=編集: 右のアイテム内容を微調整（-10 ms）
 D6AA59E3861581C3=編集: 右のアイテム内容を微調整（+10 ms）
-9210E1E057760560=編集: 左のアイテム音量を微調整（+1 dB）
-DFF109EA101D6216=編集: 左のアイテム音量を微調整（-1 dB）
-9E6668A768A5EC51=編集: 右のアイテム音量を微調整（+1 dB）
-E32AEC08656CB22B=編集: 右のアイテム音量を微調整（-1 dB）
-5575D74D56065546=編集: 左のアイテム音量を微調整（+0.1 dB）
-9ADC3E4A927383A0=編集: 左のアイテム音量を微調整（-0.1 dB）
-B10540588324BC53=編集: 右のアイテム音量を微調整（+0.1 dB）
-9BE9B62BB7370949=編集: 右のアイテム音量を微調整（-0.1 dB）
-;^A0CB20A955DAF552=Show action list...
-FB23CF072C9DE497=編集: フェードアウト形状を順に切り替え
-AC0414D81584351C=編集: フェードイン形状を順に切り替え
-AAAE3471D2CE16A0=編集: クロスフェード形状を順に切り替え
 53C4F44D903EF43A=編集: 左のフェードアウト開始位置を微調整（-1 ms）
 3E2E783E1DD3556C=編集: 左のフェードアウト開始位置を微調整（+1 ms）
 C5A1F3CCC68D6D66=編集: 左のフェードアウト開始位置を微調整（-10 ms）
@@ -27125,6 +27178,15 @@ B8E3AFF69A6937F8=編集: 右のフェードイン幅を微調整（-10 ms）
 BF1738604B1547B4=編集: 左のフェードアウト幅を微調整（+1 ms）
 837BAA0A77FF959E=編集: 左のフェードアウト幅を微調整（-10 ms）
 826FCDA08E790914=編集: 左のフェードアウト幅を微調整（+10 ms）
+9210E1E057760560=編集: 左のアイテム音量を微調整（+1 dB）
+DFF109EA101D6216=編集: 左のアイテム音量を微調整（-1 dB）
+9E6668A768A5EC51=編集: 右のアイテム音量を微調整（+1 dB）
+E32AEC08656CB22B=編集: 右のアイテム音量を微調整（-1 dB）
+5575D74D56065546=編集: 左のアイテム音量を微調整（+0.1 dB）
+9ADC3E4A927383A0=編集: 左のアイテム音量を微調整（-0.1 dB）
+B10540588324BC53=編集: 右のアイテム音量を微調整（+0.1 dB）
+9BE9B62BB7370949=編集: 右のアイテム音量を微調整（-0.1 dB）
+;^A0CB20A955DAF552=Show action list...
 
 [actionlist_synonyms]
 0000000000000001=open,display,view,show,hide,ひらく,開く,展開,オープン
