@@ -1,5 +1,5 @@
 -- @description MARKER REGION DESK
--- @version 0.5.15
+-- @version 0.5.16
 -- @author Balrulu
 -- @provides
 --   . > ../
@@ -2892,7 +2892,7 @@ local function draw()
   small_button("copy_info","全情報をコピー",178,H-32,142,30,function() copy_information(false) end,#A.items>0,true)
   small_button("paste_all","名前を貼付（先頭から）",332,H-32,W-356,30,function() paste_names(false) end,#A.items>0,true)
 
-  BLT.footer(A.blt_status or (#A.items==0 and 'マーカー／リージョンがありません。' or string.format('%d件  選択 %d件',#A.items,A.selected_count)),A.blt_bad,W,H+22,'0.5.15')
+  BLT.footer(A.blt_status or (#A.items==0 and 'マーカー／リージョンがありません。' or string.format('%d件  選択 %d件',#A.items,A.selected_count)),A.blt_bad,W,H+22,'0.5.16')
   custom_titlebar()
   drawn_layout={w=gfx.w,h=gfx.h,generation=A.generation,offset=A.offset}
 end
@@ -3106,6 +3106,125 @@ function BLT.drawIcon()
 
  scale,ox,oy=bs,bx,by
 end
+
+-- BEGIN BLT SHORTCUTS 1.0.0 (generated from _shared/BLT_Shortcuts.lua)
+local BLTShortcuts=(function()
+local M={}
+local special={[8]=8,[9]=9,[13]=13,[27]=27,[32]=32,
+ [1752132965]=32804,[30064]=32806,[1885828464]=32801,[1818584692]=32805,
+ [1919379572]=32807,[6647396]=32803,[1685026670]=32808,[1885824110]=32802,
+ [6909555]=32813,[6579564]=32814}
+for i=1,12 do
+ local code=0;for c in ('f'..i):gmatch('.') do code=(code<<8)|c:byte() end
+ special[code]=111+i
+end
+function M.decode(k,cap)
+ local char=k;local mods=cap&60
+ if k>=257 and k<=282 then return k-192,mods|20,char
+ elseif k>=321 and k<=346 or k>=353 and k<=378 then k=k-256;mods=mods|16 end
+ if k>=1 and k<=26 and not special[k] then return k+64,mods|4,char end
+ if (k>>24)==117 then char=k&0xffffff;k=char end
+ if k>=97 and k<=122 then return k-32,mods,char end
+ if k>=65 and k<=90 or k>=48 and k<=57 then return k,mods,char end
+ return special[k],mods,char
+end
+function M.read(path)
+ local f=io.open(path,'rb');if not f then return {} end
+ local ok,raw=pcall(f.read,f,4*1024*1024+1);pcall(f.close,f)
+ if not ok or not raw or #raw>4*1024*1024 then return {} end
+ local bindings,scopes={},{}
+ for line in raw:gmatch('[^\r\n]+') do
+  local flags,key,command,section,tail=line:match('^KEY%s+(%d+)%s+(%d+)%s+(%S+)%s+(%d+)(.*)$')
+  flags,key,section=tonumber(flags),tonumber(key),tonumber(section)
+  if flags and flags<=63 and key<=65535 and (tail:match('^%s*$') or tail:match('^%s+#')) and (section==0 or section==100 or section==102 or section==103) then
+   local id=flags..':'..key
+   if section==102 or section==103 then
+    if command=='1' or command=='101' then scopes[#scopes+1]={id=id,flags=flags,key=key,section=section-102} end
+   else
+    bindings[section..':'..id]=command
+   end
+  end
+ end
+ local rows={}
+ for _,row in ipairs(scopes) do
+  row.command=bindings[(row.section==1 and 100 or 0)..':'..row.id]
+  if row.command and row.command~='0' then rows[#rows+1]=row end
+ end
+ return rows
+end
+function M.install(api,view,options)
+ local getchar=view.getchar
+ local state={rows={},reload_at=0,focus=nil}
+ local function forward(k)
+  local cap=view.mouse_cap or 0
+  if options.blocked() or options.localKey(k,cap) then return false end
+  local now=api.time_precise()
+  if now>=state.reload_at then
+   state.reload_at=now+2
+   state.rows=M.read(api.GetResourcePath()..'/reaper-kb.ini')
+  end
+  if #state.rows==0 then return false end
+  local vk,mods,char=M.decode(k,cap)
+  local flags=((mods&4)~=0 and 8 or 0)|((mods&8)~=0 and 4 or 0)|(mods&48)
+  local physical
+  -- Physical key state disambiguates numpad and layout-dependent virtual keys.
+  local ambiguous=vk and vk>=48 and vk<=57 or k==8 or k==9 or k==13
+  local needs_physical=not vk or ambiguous
+  if needs_physical and type(api.JS_VKeys_GetState)=='function' then
+   local ok,value=pcall(api.JS_VKeys_GetState,0)
+   if ok and type(value)=='string' and #value>=256 then physical=value end
+  end
+  local section=(api.GetPlayState()&4)~=0 and 1 or 0
+  local found,score=nil,-1
+  for _,row in ipairs(state.rows) do
+   if row.section<=section and (row.flags&62)==flags then
+    local virtual=(row.flags&1)~=0
+    local held=virtual and physical and (physical:byte((row.key&0x7fff)+1) or 0)~=0
+    local matched=virtual and vk and (row.key&0x7fff)==(vk&0x7fff) and (not ambiguous or held) or not virtual and row.key==char
+    local base=row.key&0x7fff
+    local layout_key=base>=96 and base<=111 or base>=186 and base<=226
+    local ctrl_letter=(mods&4)~=0 and (k==8 or k==9 or k==13) and base==k+64
+    if matched or held and (not vk and layout_key or vk and vk>=48 and vk<=57 and base>=96 and base<=105 or ctrl_letter) then
+     local rank=row.section*4+(held and 2 or 0)+(matched and 1 or 0)
+     if rank>score then found,score=row,rank
+     elseif rank==score and found and found.id~=row.id then found=nil end
+    end
+   end
+  end
+  if not found then return false end
+  if options.beforeGlobal then options.beforeGlobal(k) end
+  if (found.flags&1)~=0 and type(api.CF_SendActionShortcut)=='function' then
+   local ok,result=pcall(api.CF_SendActionShortcut,api.GetMainHwnd(),found.section*100,found.key,mods)
+   return ok and (result==true or result==1)
+  end
+  local command=tonumber(found.command) or api.NamedCommandLookup(found.command)
+  if not command or command<=0 then return false end
+  return pcall(api.Main_OnCommand,command,0)
+ end
+ view.getchar=function(query,...)
+  local k,unicode=getchar(query,...)
+  if query==65536 or query==65537 then
+   local focused=(k&2)~=0
+   if focused~=state.focus then state.focus=focused;state.reload_at=0 end
+  elseif (query==nil or query==0) and k>0 then
+   local ok,sent=pcall(forward,k)
+   if ok and sent then return 0,0 end
+  end
+  return k,unicode
+ end
+ return state
+end
+return M
+end)()
+-- END BLT SHORTCUTS
+
+BLTShortcuts.install(R,gfx,{
+ blocked=function() return BLT.presets.open or (BLT.host and (BLT.host.editing() or BLT.host.modal() or BLT.host.busy())) end,
+ beforeGlobal=function(k) if BLT.host and BLT.host.beforeKey then BLT.host.beforeKey(k) end end,
+ localKey=function(k,cap)
+  return k==27 or ((cap&24)==0 and (k==26 or (cap&4)~=0 and (k==90 or k==122))) or (k==1 or k==3 or k==22 or k==13 or k==6579564 or k==1752132965 or k==6647396 or k==1885828464 or k==1885824110 or k==30064 or k==1685026670)
+ end
+})
 
 if ...=='blt_test' then return {BLT=BLT,A=A,Core=Core,S=S} end
 local api_ok,api_err=pcall(Core.require_api)
