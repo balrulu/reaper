@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<index version="1" name="BLT ReaScripts" commit="dbaeced6e7ec223f7f6412c7a82b080089fb466e">
+<index version="1" name="BLT ReaScripts" commit="a04112583ae15370600b57a8e63a0d4786ba5cce">
   <category name="BLT">
     <reapack name="BLT_SPATIAL_FIELD.jsfx" type="effect" desc="BLT SPATIAL FIELD">
       <version name="0.5.0" author="Balrulu" time="2026-09-22T19:24:46Z">
@@ -48,7 +48,7 @@
         <source main="main" file="../BLT_ACTION_Hide_Video_Window_Under_Mouse.lua">https://github.com/balrulu/reaper/raw/dbaeced6e7ec223f7f6412c7a82b080089fb466e/BLT_ReaScripts/BLT_ACTION_Hide_Video_Window_Under_Mouse.lua</source>
       </version>
     </reapack>
-    <reapack name="BLT_ACTION_Move_Cursor_to_Selected_Item_Taking_playback_status.lua" type="script" desc="ACTION_Move_Cursor_to_Selected_Item_Taking_playback_status">
+    <reapack name="BLT_ACTION_Move_Cursor_to_Selected_Item_Taking_playback_status.lua" type="script" desc="ACTION - Move Cursor to Selected Item Taking playback status">
       <metadata>
         <description><![CDATA[{\rtf1\ansi\deff0{\fonttbl{\f0 \fswiss Helvetica;}{\f1 \fmodern Courier;}}
 {\colortbl;\red255\green0\blue0;\red0\green0\blue255;}
@@ -61,6 +61,10 @@
       <version name="1.0.0" author="Balrulu" time="2026-09-23T22:15:08Z">
         <changelog><![CDATA[BLT SERIES ACTIONS]]></changelog>
         <source main="main" file="../BLT_ACTION_Move_Cursor_to_Selected_Item_Taking_playback_status.lua">https://github.com/balrulu/reaper/raw/b7345ec365df7a36b1d6d152b9ecd42931eb30b4/BLT_ReaScripts/BLT_ACTION_Move_Cursor_to_Selected_Item_Taking_playback_status.lua</source>
+      </version>
+      <version name="1.0.1" author="Balrulu" time="2026-10-06T20:54:18Z">
+        <changelog><![CDATA[BLT SERIES ACTIONS]]></changelog>
+        <source main="main" file="../BLT_ACTION_Move_Cursor_to_Selected_Item_Taking_playback_status.lua">https://github.com/balrulu/reaper/raw/a04112583ae15370600b57a8e63a0d4786ba5cce/BLT_ReaScripts/BLT_ACTION_Move_Cursor_to_Selected_Item_Taking_playback_status.lua</source>
       </version>
     </reapack>
     <reapack name="BLT_ACTION_Open_Original_or_Glued_item_in_External_editor.lua" type="script" desc="ACTION - Open selected item in external editor (original or glued range)">
