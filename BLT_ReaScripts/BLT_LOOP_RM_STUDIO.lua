@@ -1,5 +1,5 @@
 -- @description LOOP RM STUDIO
--- @version 0.5.24
+-- @version 0.5.28
 -- @author Balrulu
 -- @provides
 --   . > ../
@@ -859,6 +859,12 @@ local LanguageCatalog={en={
  [" / Shiftで微調整"]=" / Shift: fine adjust",
  ["名前と番号を設定"]="NAME & NUMBER",
  ["名前"]="Name",
+ ["選択アイテム名を使用"]="Use selected item names",
+ ["拡張子を無視"]="Ignore extension",
+ ["アイテム名の末尾の拡張子を除いて使用"]="Use item names without the final extension",
+ ["挿入色を選択"]="Choose insertion color",
+ ["カラー選択を開けませんでした。"]="Could not open the color chooser.",
+ ["ONではアイテム名をそのまま使用（連番なし）"]="ON: use item names unchanged (no numbering)",
  ["番号を付与"]="Add numbers",
  ["OFFではすべて同じ名前で追加"]="OFF: add all with the same name",
  ["開始番号"]="Start number",
@@ -1898,7 +1904,7 @@ local function optional_number(fn,...)
  local ok,value=pcall(fn,...)
  return ok and finite(value) and value or nil
 end
-local Core={VERSION='0.5.24',SECTION='BLT_REGION_FORGE',MAX_METADATA=16*1024*1024,SEAM_SECONDS=.006,SEAM_DRAG_SECONDS=.250,
+local Core={VERSION='0.5.28',SECTION='BLT_REGION_FORGE',MAX_METADATA=16*1024*1024,SEAM_SECONDS=.006,SEAM_DRAG_SECONDS=.250,
  PERIOD_ANALYSIS_MIN=7,PERIOD_ANALYSIS_MAX=100,CROSSFADE_GUARD_FRAMES=1024}
 Core.PERIOD_FAILURE='[BLT:PERIOD_FAILURE]'
 -- REAPER's stock rate list (also verified in the installed executable).
@@ -1927,6 +1933,7 @@ function Core.field_allows_fine(key,spec)
 end
 Core.tags={sustain='[BLT:SUSTAIN]',region='[BLT:REGION]'}
 Core.names={sustain='サステイン',region='リージョン',marker='マーカー'}
+function Core.valid_insert_color(n) return finite(n) and n%1==0 and n>=-1 and n<=0xffffff end
 function Core.classify(isr,name)
  name=name or ''
  if not isr then return 'marker',name end
@@ -2132,6 +2139,12 @@ function Core.auto_insert_count(project,cursor,length,unit,interval,interval_uni
  return max(1,min(limit,count)),count>limit
 end
 
+function Core.item_order(a,b)
+ if a.start~=b.start then return a.start<b.start end
+ if a.track_index~=b.track_index then return a.track_index<b.track_index end
+ if a.finish~=b.finish then return a.finish<b.finish end
+ return a.order<b.order
+end
 function Core.add_ranges(project,mode,kind,length,unit,count,interval,interval_unit)
  local ranges={}
  if mode=='cursor' then
@@ -2159,13 +2172,21 @@ function Core.add_ranges(project,mode,kind,length,unit,count,interval,interval_u
    local item=R.GetSelectedMediaItem(project,i)
    local s=R.GetMediaItemInfo_Value(item,'D_POSITION');local len=R.GetMediaItemInfo_Value(item,'D_LENGTH')
    assert(finite(s) and finite(len) and len>0,'長さが不正なアイテムがあります。')
-   ranges[#ranges+1]={start=s,finish=s+len}
+   local take=R.GetActiveTake(item);local track=R.GetMediaItemTrack(item)
+   ranges[#ranges+1]={start=s,finish=s+len,item_name=take and R.GetTakeName(take) or '',
+    track_index=R.GetMediaTrackInfo_Value(track,'IP_TRACKNUMBER'),order=i}
   end
-  table.sort(ranges,function(a,b) return a.start==b.start and a.finish<b.finish or a.start<b.start end)
-  if mode=='itemblocks' then ranges=Core.overlap_blocks(ranges)
+  table.sort(ranges,Core.item_order)
+  if mode=='itemblocks' then
+   ranges=Core.overlap_blocks(ranges)
+   for _,g in ipairs(ranges) do
+    local first=g.members[1]
+    for _,r in ipairs(g.members) do if Core.item_order(r,first) then first=r end end
+    g.item_name=first.item_name
+   end
   elseif mode=='itemspan' then
    local finish=ranges[1].finish;for _,r in ipairs(ranges) do finish=max(finish,r.finish) end
-   ranges={{start=ranges[1].start,finish=finish}}
+   ranges={{start=ranges[1].start,finish=finish,item_name=ranges[1].item_name}}
   end
  else
   assert(mode=='selection','追加方法が不正です。')
@@ -2546,8 +2567,13 @@ function Core.native_format(project)
  assert(finite(channels) and channels>=1 and channels<=64 and channels%1==0,'REAPER本体のチャンネル数が不正です。')
  return {sr=sr,bits=bits,channels=channels}
 end
-function Core.add_names(kind,name,count,numbering,start)
+function Core.without_extension(name)
+ local base=name:match('^(.*)%.[^%.\\/]+$')
+ return base and base:match('[^\\/]+$') and base or name
+end
+function Core.add_names(kind,name,count,numbering,start,item_ranges,ignore_extension)
  assert(Core.names[kind],'追加する区間種類が不正です。')
+ if item_ranges then numbering=false end
  local first,width=1,1
  if numbering then
   assert(type(start)=='string' and start:match('^%d+$') and #start<=12,'開始番号は1〜12桁の数字で指定してください。')
@@ -2555,7 +2581,8 @@ function Core.add_names(kind,name,count,numbering,start)
  end
  local names={}
  for i=1,count do
-  local text=name
+  local text=item_ranges and item_ranges[i].item_name or name
+  if item_ranges and ignore_extension then text=Core.without_extension(text) end
   if numbering then text=text..string.format('%0'..width..'d',first+i-1) end
   local raw=(Core.tags[kind] and kind~='region') and (Core.tags[kind]..(text~='' and ' '..text or '')) or text
   if kind=='region' then local k=Core.classify(true,text);if k~='region' then raw=Core.tags.region..' '..text end end
@@ -3642,6 +3669,7 @@ local A={status='時間選択から区間を追加し、WAVへ書き出します
  rows={},selected=nil,selected_regions={},poll_at=0,active=true,sr=48000,bits=24,channels=2,encoding='UTF-8',
  directory='',filename='$region',busy=false,progress=0,use_default_directory=true,use_default_filename=false,use_format=false,
  embed_markers=true,embed_regions=true,exclude_selected_region=true,embed_loop_region=true,
+ marker_color=-1,region_color=-1,sustain_color=-1,
  add_mode='selection',length=1,length_values={seconds=1,beats=1,bars=1,grid=1},unit='seconds',
  interval=0,interval_values={seconds=0,beats=0,bars=0,grid=0},interval_unit='seconds',count=0,omit_name=true,
  xfade_seconds=3,relative_lock=false,auto_audition=false,wave_items={},audition=nil,period_notice=nil,
@@ -4291,6 +4319,35 @@ local function custom_titlebar() BLT.bar() end
 local function kind_color(kind)
  return kind=='sustain' and C.accent2 or kind=='marker' and C.muted or kind=='invalid' and C.red or C.focus
 end
+function UI.insert_color(kind)
+ local packed=A[kind..'_color']
+ if not Core.valid_insert_color(packed) or packed==-1 then return kind_color(kind) end
+ UI.insert_color_cache=UI.insert_color_cache or {}
+ local cached=UI.insert_color_cache[kind]
+ if not cached or cached.packed~=packed then
+  cached={packed=packed,rgb={((packed>>16)&255)/255,((packed>>8)&255)/255,(packed&255)/255}}
+  UI.insert_color_cache[kind]=cached
+ end
+ return cached.rgb
+end
+function UI.select_insert_color(kind)
+ if A.busy or not UI.commit_edit() then return end
+ local project=A.project;BLT.clearTooltip()
+ local ok,accepted,native=pcall(R.GR_SelectColor,gfx_window_handle())
+ pressed=nil;A.field_drag=nil;down_last=(gfx.mouse_cap&1)~=0;gfx.mouse_wheel=0
+ Chrome.mouseDown=false;Chrome.closePressed=false;Chrome.resetPressed=false;Chrome.chameleonPressed=false
+ UI.dirty()
+ if not ok then notice('カラー選択を開けませんでした。',true);return end
+ if not accepted or accepted==0 then return end
+ local decoded,r,g,b=pcall(R.ColorFromNative,native)
+ if not decoded then notice('カラー選択を開けませんでした。',true);return end
+ for _,v in ipairs({r,g,b}) do
+  if not finite(v) or v%1~=0 or v<0 or v>255 then notice('カラー選択を開けませんでした。',true);return end
+ end
+ if r==nil or g==nil or b==nil then notice('カラー選択を開けませんでした。',true);return end
+ assert(project==R.EnumProjects(-1,''),'プロジェクトが変わりました。追加をやり直してください。')
+ A[kind..'_color']=(r<<16)|(g<<8)|b;UI.refresh()
+end
 function UI.cleanup_raw()
  if not A.own_raw or not A.raw then A.raw=nil;A.own_raw=false;A.raw_delete_at=nil;return true end
  local path=A.raw
@@ -4454,6 +4511,10 @@ function UI.load_project(project)
  A.embed_regions=get('embed_regions','true')=='true'
  A.exclude_selected_region=get('exclude_selected_region','true')=='true'
  A.embed_loop_region=get('embed_loop_region','true')=='true'
+ for _,kind in ipairs({'marker','region','sustain'}) do
+  local key=kind..'_color';local packed=tonumber(get(key,'-1'))
+  A[key]=Core.valid_insert_color(packed) and packed or -1
+ end
  A.omit_name=get('omit_name','true')=='true'
  A.auto_audition=get('auto_audition','false')=='true'
  A.xfade_seconds=tonumber(get('xfade_seconds','3'))
@@ -4486,7 +4547,7 @@ function UI.save_settings()
  if not A.project or (R.ValidatePtr and not R.ValidatePtr(A.project,'ReaProject*')) then return end
  A.length_values[A.unit]=A.length
  A.interval_values[A.interval_unit]=A.interval
- for _,k in ipairs({'filename','directory','sr','bits','channels','encoding','use_default_directory','use_default_filename','use_format','embed_markers','embed_regions','exclude_selected_region','embed_loop_region','omit_name','xfade_seconds','add_mode','unit','interval_unit','count','relative_lock','auto_audition'}) do
+ for _,k in ipairs({'filename','directory','sr','bits','channels','encoding','use_default_directory','use_default_filename','use_format','embed_markers','embed_regions','exclude_selected_region','embed_loop_region','omit_name','xfade_seconds','add_mode','unit','interval_unit','count','relative_lock','auto_audition','marker_color','region_color','sustain_color'}) do
   local val=tostring(A[k]);local _,old=R.GetProjExtState(A.project,SECTION,k)
   if old~=val then R.SetProjExtState(A.project,SECTION,k,val) end
  end
@@ -4577,7 +4638,7 @@ end
 function UI.add_commit(kind,ranges,names,project)
  assert(project==R.EnumProjects(-1,''),'プロジェクトが変わりました。追加をやり直してください。')
  UI.undo(Core.names[kind]..'を追加',function()
-  local c=kind_color(kind);local native=R.ColorToNative(floor(c[1]*255),floor(c[2]*255),floor(c[3]*255))|0x1000000
+  local c=UI.insert_color(kind);local native=R.ColorToNative(floor(c[1]*255+.5),floor(c[2]*255+.5),floor(c[3]*255+.5))|0x1000000
   local added={}
   local ok,err=xpcall(function()
    for i,r in ipairs(ranges) do
@@ -4595,7 +4656,7 @@ function UI.add(kind)
  local project=A.project;local ranges=Core.add_ranges(project,A.add_mode,kind,A.length,A.unit,A.count,A.interval,A.interval_unit)
  if A.omit_name then UI.add_commit(kind,ranges,Core.add_names(kind,'',#ranges,false,'1'),project)
  else
-  A.popup=nil;A.name_dialog={project=project,kind=kind,ranges=ranges,name=Core.names[kind],numbering=#ranges>1,serial_start='001'};UI.dirty()
+  A.popup=nil;A.name_dialog={project=project,kind=kind,ranges=ranges,name=Core.names[kind],item_names_available=ranges[1].item_name~=nil,use_item_name=false,ignore_extension=false,numbering=#ranges>1,serial_start='001'};UI.dirty()
  end
 end
 local function repeat_state(project,value)
@@ -4984,7 +5045,7 @@ local function button(id,x,y,w,h,title,fn,hint,enabled,accent,content_pad,promin
  register(id,x,y-push,w,h,fn,hint,enabled)
 end
 local function insert_button(id,x,y,w,h,title,fn,hint,accent)
- button(id,x,y,w,h,title,fn,hint,true,accent,27,nil,nil,true,true)
+ button(id,x,y,w,h,title,fn,hint,true,accent,27,nil,nil,true,true,nil,34)
  y=y+(pressed==id and (gfx.mouse_cap&1)~=0 and 1.5 or 0)
  local cx,cy=x+15,y+h*.5
  -- Bold insert arrow and a short landing bar; no boxed plus decoration.
@@ -5288,7 +5349,7 @@ function UI.field_input(hit,down)
 end
 function UI.confirm_name()
  local d=A.name_dialog;if not d or not UI.commit_edit() then return end
- local ok,names=pcall(Core.add_names,d.kind,d.name,#d.ranges,d.numbering,d.serial_start)
+ local ok,names=pcall(Core.add_names,d.kind,d.name,#d.ranges,d.numbering,d.serial_start,d.use_item_name and d.ranges or nil,d.ignore_extension)
  if not ok then UI.flash('field_serial_start');notice(tostring(names),true);return end
  A.name_dialog=nil;UI.add_commit(d.kind,d.ranges,names,d.project)
 end
@@ -5296,16 +5357,23 @@ function UI.draw_name_dialog()
  local d=A.name_dialog;if not d then return end
  flush_text_queue();rect(0,0,W,H,C.bg,.87);widget_count=0
  local x,y=240,370
- rect(x,y,500,247,C.panel,1)
+ rect(x,y,500,280,C.panel,1)
  label('名前と番号を設定',x+22,y+18,19,C.text,1,456,30)
- label('名前',x+22,y+63,12,C.muted,1,80,23)
- UI.field('name',x+112,y+57,364,true,d,true)
- checkbox('serial',x+22,y+112,205,'番号を付与',d.numbering,function() d.numbering=not d.numbering;UI.dirty() end,'OFFではすべて同じ名前で追加')
- label('開始番号',x+254,y+117,12,C.muted,1,80,22)
- UI.field('serial_start',x+342,y+108,134,d.numbering,d,false)
- label('1 → 1, 2, 3    /    001 → 001, 002, 003',x+22,y+157,12,C.faint,1,456,22)
- button('name_cancel',x+220,y+198,112,30,'キャンセル',function() A.edit=nil;A.name_dialog=nil;UI.dirty() end,'追加を取り消す')
- button('name_ok',x+344,y+198,132,30,'追加',UI.confirm_name,'指定した名前で追加')
+ checkbox('use_item_name',x+22,y+58,272,'選択アイテム名を使用',d.use_item_name,function()
+  if not UI.commit_edit() then return end
+  d.use_item_name=not d.use_item_name;UI.dirty()
+ end,'ONではアイテム名をそのまま使用（連番なし）',d.item_names_available,12,true)
+ checkbox('ignore_extension',x+304,y+58,172,'拡張子を無視',d.ignore_extension,function()
+  d.ignore_extension=not d.ignore_extension;UI.dirty()
+ end,'アイテム名の末尾の拡張子を除いて使用',d.item_names_available and d.use_item_name,12,true)
+ label('名前',x+22,y+100,12,d.use_item_name and C.faint or C.muted,1,80,23)
+ UI.field('name',x+112,y+94,364,not d.use_item_name,d,true)
+ checkbox('serial',x+22,y+149,205,'番号を付与',d.numbering,function() d.numbering=not d.numbering;UI.dirty() end,'OFFではすべて同じ名前で追加',not d.use_item_name)
+ label('開始番号',x+254,y+154,12,d.use_item_name and C.faint or C.muted,1,80,22)
+ UI.field('serial_start',x+342,y+145,134,d.numbering and not d.use_item_name,d,false)
+ label('1 → 1, 2, 3    /    001 → 001, 002, 003',x+22,y+190,12,C.faint,1,456,22)
+ button('name_cancel',x+220,y+231,112,30,'キャンセル',function() A.edit=nil;A.name_dialog=nil;UI.dirty() end,'追加を取り消す')
+ button('name_ok',x+344,y+231,132,30,'追加',UI.confirm_name,'指定した名前で追加')
 end
 
 function UI.preview_signature_now()
@@ -5688,6 +5756,11 @@ function UI.draw(now)
  local add_flash=A.add_kind_flash and clamp(1-(now-A.add_kind_flash)/.65,0,1) or 0
  for _,k in ipairs(kinds) do
   insert_button('add_'..k[1],k[2],207,k[3],30,k[4],function() UI.add(k[1]) end,ADD_LABELS[A.add_mode]..' → '..k[4],kind_color(k[1]))
+  local cx=k[2]+k[3]-31;local enabled=not A.busy;local hot=enabled and inside(cx,210,24,24)
+  local cy=210+(pressed=='add_'..k[1] and (gfx.mouse_cap&1)~=0 and 1.5 or 0)
+  rect(cx,cy,24,24,C.field,1);rect(cx+3,cy+3,18,18,UI.insert_color(k[1]),enabled and 1 or .35)
+  finish_corners(cx,cy,24,24,3,false,hot and C.accent2 or C.edge2,enabled and .85 or .35)
+  register('insert_color_'..k[1],cx,210,24,24,function() UI.select_insert_color(k[1]) end,'挿入色を選択',enabled)
   if add_flash>0 then
    local pulse=add_flash*add_flash
    rect(k[2]-5,202,k[3]+10,40,C.focus,.045*pulse)
@@ -5802,7 +5875,7 @@ end,'ファイル名のみREAPER本体の設定を使用。ワイルドカード
   register('cancel',678,877,92,29,UI.cancel,A.render_batch and '書き出しを中止。完成済みのWAVは保持します。' or '埋め込みを中止。元のWAVは保持',true)
  end
 
- BLT.footer((A.warning or A.render_batch or completed) and A.status or (message~='' and message or A.status),A.warning or (not A.render_batch and A.problem),W,H+22,'0.5.24')
+ BLT.footer((A.warning or A.render_batch or completed) and A.status or (message~='' and message or A.status),A.warning or (not A.render_batch and A.problem),W,H+22,Core.VERSION)
  draw_hover_tooltip(hover_hint);UI.draw_name_dialog();UI.draw_popup();UI.draw_period_notice(now);flush_text_queue();custom_titlebar();gfx.update();A.content_dirty=false;redraw_dirty=false
  if A.render_batch then A.render_batch.presented=true end
 end
