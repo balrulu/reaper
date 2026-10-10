@@ -1,5 +1,5 @@
 -- @description ACTION - Move Cursor to Selected Item Taking playback status
--- @version 1.0.1
+-- @version 1.0.2
 -- @author Balrulu
 -- @provides
 --   . > ../
