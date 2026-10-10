@@ -44,7 +44,53 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
       - name: Update index.xml
-        run: reapack-index --commit
+        run: |
+          BEFORE_SHA="$(git rev-parse HEAD)"
+          reapack-index --commit
+          AFTER_SHA="$(git rev-parse HEAD)"
+
+          ruby <<'RUBY'
+          require "nokogiri"
+          require "metaheader"
+
+          path = "index.xml"
+          doc = Nokogiri::XML(File.read(path))
+          changed = 0
+
+          doc.xpath("/index/category").each do |category|
+            category_name = category["name"]
+
+            category.xpath("./reapack[@type='langpack']").each do |package|
+              langpack_path = File.join(category_name, package["name"])
+              next unless File.file?(langpack_path)
+
+              header = MetaHeader.from_file(langpack_path)
+              description = header[:description] || header[:desc]
+              next if description.nil? || description.to_s.empty?
+              next if package["desc"] == description
+
+              package["desc"] = description
+              changed += 1
+            end
+          end
+
+          if changed > 0
+            File.write(path, doc.to_xml)
+            puts "Updated #{changed} LangPack description(s) from @description"
+          else
+            puts "LangPack descriptions already up to date"
+          end
+          RUBY
+
+          git add index.xml
+
+          if ! git diff --cached --quiet; then
+            if [ "$BEFORE_SHA" != "$AFTER_SHA" ]; then
+              git commit --amend --no-edit
+            else
+              git commit -m "index: sync LangPack descriptions" -m "[ci skip]"
+            fi
+          fi
 
       - name: Push index.xml
         run: git push
