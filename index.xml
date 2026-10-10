@@ -1,11 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
-<index version="1" name="BLT ReaScripts" commit="e9874359cfccccdd4e3b266f37cd5b0f6e5df1bb">
+<index version="1" name="BLT ReaScripts" commit="6ac248bf73c90f98c1fd2b739d9180c11d82ac69">
   <category name="BLT">
     <reapack name="BLT_SPATIAL_FIELD.jsfx" type="effect" desc="BLT SPATIAL FIELD">
-      
-      
-      
-      
       <version name="0.5.4" author="Balrulu" time="2026-10-05T05:08:58Z">
         <changelog><![CDATA[BLT SERIES Beta TEST UPLOAD]]></changelog>
         <source>https://github.com/balrulu/reaper/raw/3907d65de03ecd6a81fa32d77ee925f027dd51f9/BLT/BLT_SPATIAL_FIELD.jsfx</source>
@@ -39,7 +35,6 @@
 }
 ]]></description>
       </metadata>
-      
       <version name="1.0.3" author="Balrulu" time="2026-10-06T20:26:10Z">
         <changelog><![CDATA[BLT SERIES ACTIONS]]></changelog>
         <source main="main" file="../BLT_ACTION_Hide_Video_Window_Under_Mouse.lua">https://github.com/balrulu/reaper/raw/dbaeced6e7ec223f7f6412c7a82b080089fb466e/BLT_ReaScripts/BLT_ACTION_Hide_Video_Window_Under_Mouse.lua</source>
@@ -55,8 +50,6 @@
 }
 ]]></description>
       </metadata>
-      
-      
       <version name="1.0.2" author="Balrulu" time="2026-10-10T19:24:57Z">
         <changelog><![CDATA[BLT SERIES ACTIONS]]></changelog>
         <source main="main" file="../BLT_ACTION_Move_Cursor_to_Selected_Item_Taking_playback_status.lua">https://github.com/balrulu/reaper/raw/33143e2532f492bc97d1658b1351c6f1fc44c23d/BLT_ReaScripts/BLT_ACTION_Move_Cursor_to_Selected_Item_Taking_playback_status.lua</source>
@@ -87,14 +80,6 @@
 }
 ]]></description>
       </metadata>
-      
-      
-      
-      
-      
-      
-      
-      
       <version name="0.5.12" author="Balrulu" time="2026-10-06T20:26:10Z">
         <changelog><![CDATA[BLT SERIES Beta TEST UPLOAD]]></changelog>
         <source main="main" file="../BLT_AUTO_TRIM_SPLIT.lua">https://github.com/balrulu/reaper/raw/dbaeced6e7ec223f7f6412c7a82b080089fb466e/BLT_ReaScripts/BLT_AUTO_TRIM_SPLIT.lua</source>
@@ -110,14 +95,6 @@
 }
 ]]></description>
       </metadata>
-      
-      
-      
-      
-      
-      
-      
-      
       <version name="0.5.11" author="Balrulu" time="2026-10-06T20:26:10Z">
         <changelog><![CDATA[BLT SERIES Beta TEST UPLOAD]]></changelog>
         <source main="main" file="../BLT_BATCH_RENAME.lua">https://github.com/balrulu/reaper/raw/dbaeced6e7ec223f7f6412c7a82b080089fb466e/BLT_ReaScripts/BLT_BATCH_RENAME.lua</source>
@@ -133,11 +110,6 @@
 }
 ]]></description>
       </metadata>
-      
-      
-      
-      
-      
       <version name="0.1.18" author="Balrulu" time="2026-10-06T20:26:10Z">
         <changelog><![CDATA[BLT SERIES Beta TEST UPLOAD]]></changelog>
         <source main="main" file="../BLT_COLOR_PALETTE.lua">https://github.com/balrulu/reaper/raw/dbaeced6e7ec223f7f6412c7a82b080089fb466e/BLT_ReaScripts/BLT_COLOR_PALETTE.lua</source>
@@ -153,14 +125,6 @@
 }
 ]]></description>
       </metadata>
-      
-      
-      
-      
-      
-      
-      
-      
       <version name="0.5.15" author="Balrulu" time="2026-10-06T20:26:10Z">
         <changelog><![CDATA[BLT SERIES Beta TEST UPLOAD]]></changelog>
         <source main="main" file="../BLT_CR_MINIM.lua">https://github.com/balrulu/reaper/raw/dbaeced6e7ec223f7f6412c7a82b080089fb466e/BLT_ReaScripts/BLT_CR_MINIM.lua</source>
@@ -176,11 +140,6 @@
 }
 ]]></description>
       </metadata>
-      
-      
-      
-      
-      
       <version name="0.5.26" author="Balrulu" time="2026-10-06T20:26:10Z">
         <changelog><![CDATA[BLT SERIES Beta TEST UPLOAD]]></changelog>
         <source main="main" file="../BLT_ENVELOPE_CANVAS_ITEM.lua">https://github.com/balrulu/reaper/raw/dbaeced6e7ec223f7f6412c7a82b080089fb466e/BLT_ReaScripts/BLT_ENVELOPE_CANVAS_ITEM.lua</source>
@@ -196,11 +155,6 @@
 }
 ]]></description>
       </metadata>
-      
-      
-      
-      
-      
       <version name="0.0.27" author="Balrulu" time="2026-10-06T20:26:10Z">
         <changelog><![CDATA[BLT SERIES Beta TEST UPLOAD]]></changelog>
         <source main="main" file="../BLT_ENVELOPE_CANVAS_TRACK.lua">https://github.com/balrulu/reaper/raw/dbaeced6e7ec223f7f6412c7a82b080089fb466e/BLT_ReaScripts/BLT_ENVELOPE_CANVAS_TRACK.lua</source>
@@ -216,14 +170,6 @@
 }
 ]]></description>
       </metadata>
-      
-      
-      
-      
-      
-      
-      
-      
       <version name="0.5.15" author="Balrulu" time="2026-10-06T20:26:10Z">
         <changelog><![CDATA[BLT SERIES Beta TEST UPLOAD]]></changelog>
         <source main="main" file="../BLT_INTERVAL.lua">https://github.com/balrulu/reaper/raw/dbaeced6e7ec223f7f6412c7a82b080089fb466e/BLT_ReaScripts/BLT_INTERVAL.lua</source>
@@ -239,15 +185,6 @@
 }
 ]]></description>
       </metadata>
-      
-      
-      
-      
-      
-      
-      
-      
-      
       <version name="0.5.30" author="Balrulu" time="2026-10-06T20:26:10Z">
         <changelog><![CDATA[BLT SERIES Beta TEST UPLOAD]]></changelog>
         <source main="main" file="../BLT_LOOP_RM_STUDIO.lua">https://github.com/balrulu/reaper/raw/dbaeced6e7ec223f7f6412c7a82b080089fb466e/BLT_ReaScripts/BLT_LOOP_RM_STUDIO.lua</source>
@@ -263,17 +200,6 @@
 }
 ]]></description>
       </metadata>
-      
-      
-      
-      
-      
-      
-      
-      
-      
-      
-      
       <version name="0.7.11" author="Balrulu" time="2026-10-06T20:26:10Z">
         <changelog><![CDATA[BLT SERIES Beta TEST UPLOAD]]></changelog>
         <source main="main" file="../BLT_LOUDNESS_TRACE.lua">https://github.com/balrulu/reaper/raw/dbaeced6e7ec223f7f6412c7a82b080089fb466e/BLT_ReaScripts/BLT_LOUDNESS_TRACE.lua</source>
@@ -289,16 +215,6 @@
 }
 ]]></description>
       </metadata>
-      
-      
-      
-      
-      
-      
-      
-      
-      
-      
       <version name="0.5.16" author="Balrulu" time="2026-10-06T20:26:10Z">
         <changelog><![CDATA[BLT SERIES Beta TEST UPLOAD]]></changelog>
         <source main="main" file="../BLT_MARKER_REGION_DESK.lua">https://github.com/balrulu/reaper/raw/dbaeced6e7ec223f7f6412c7a82b080089fb466e/BLT_ReaScripts/BLT_MARKER_REGION_DESK.lua</source>
@@ -314,16 +230,6 @@
 }
 ]]></description>
       </metadata>
-      
-      
-      
-      
-      
-      
-      
-      
-      
-      
       <version name="0.1.44" author="Balrulu" time="2026-10-06T20:26:10Z">
         <changelog><![CDATA[BLT SERIES Beta TEST UPLOAD]]></changelog>
         <source main="main" file="../BLT_MINIMAL_INFO_PANEL.lua">https://github.com/balrulu/reaper/raw/dbaeced6e7ec223f7f6412c7a82b080089fb466e/BLT_ReaScripts/BLT_MINIMAL_INFO_PANEL.lua</source>
@@ -339,14 +245,6 @@
 }
 ]]></description>
       </metadata>
-      
-      
-      
-      
-      
-      
-      
-      
       <version name="0.5.21" author="Balrulu" time="2026-10-06T20:26:10Z">
         <changelog><![CDATA[BLT SERIES Beta TEST UPLOAD]]></changelog>
         <source main="main" file="../BLT_SIMPLE_NORMALIZER.lua">https://github.com/balrulu/reaper/raw/dbaeced6e7ec223f7f6412c7a82b080089fb466e/BLT_ReaScripts/BLT_SIMPLE_NORMALIZER.lua</source>
@@ -362,13 +260,6 @@
 }
 ]]></description>
       </metadata>
-      
-      
-      
-      
-      
-      
-      
       <version name="0.2.15" author="Balrulu" time="2026-10-06T20:26:10Z">
         <changelog><![CDATA[BLT SERIES Beta TEST UPLOAD]]></changelog>
         <source main="main" file="../BLT_SPECTRAL NORMALIZER.lua">https://github.com/balrulu/reaper/raw/dbaeced6e7ec223f7f6412c7a82b080089fb466e/BLT_ReaScripts/BLT_SPECTRAL%20NORMALIZER.lua</source>
@@ -384,12 +275,6 @@
 }
 ]]></description>
       </metadata>
-      
-      
-      
-      
-      
-      
       <version name="0.2.18" author="Balrulu" time="2026-10-06T20:26:10Z">
         <changelog><![CDATA[BLT SERIES Beta TEST UPLOAD]]></changelog>
         <source main="main" file="../BLT_TRACK_TREE.lua">https://github.com/balrulu/reaper/raw/dbaeced6e7ec223f7f6412c7a82b080089fb466e/BLT_ReaScripts/BLT_TRACK_TREE.lua</source>
@@ -405,16 +290,6 @@
 }
 ]]></description>
       </metadata>
-      
-      
-      
-      
-      
-      
-      
-      
-      
-      
       <version name="0.5.41" author="Balrulu" time="2026-10-06T20:26:10Z">
         <changelog><![CDATA[BLT SERIES Beta TEST UPLOAD]]></changelog>
         <source main="main" file="../BLT_VARIANT_FORGE.lua">https://github.com/balrulu/reaper/raw/dbaeced6e7ec223f7f6412c7a82b080089fb466e/BLT_ReaScripts/BLT_VARIANT_FORGE.lua</source>
@@ -423,19 +298,17 @@
   </category>
   <category name="Extensions">
     <reapack name="BLT_EXTEND_MARQUEE_TO_MARKERS_REGIONS.ext" type="extension" desc="BLT EXTEND MARQUEE TO MARKERS / REGIONS">
-      <version name="0.2.3" author="Balrulu" time="2026-10-10T19:32:23Z">
+      
+      <version name="0.2.4" author="Balrulu" time="2026-10-10T20:12:17Z">
         <changelog><![CDATA[Initial public release]]></changelog>
-        <source platform="win64" file="reaper_blt_extend_marquee_to_markers_regions.dll">https://github.com/balrulu/reaper/raw/e9874359cfccccdd4e3b266f37cd5b0f6e5df1bb/Extensions/reaper_blt_extend_marquee_to_markers_regions.dll</source>
-        <source platform="darwin64" file="reaper_blt_extend_marquee_to_markers_regions.dylib">https://github.com/balrulu/reaper/raw/e9874359cfccccdd4e3b266f37cd5b0f6e5df1bb/Extensions/reaper_blt_extend_marquee_to_markers_regions.dylib</source>
-        <source platform="darwin-arm64" file="reaper_blt_extend_marquee_to_markers_regions.dylib">https://github.com/balrulu/reaper/raw/e9874359cfccccdd4e3b266f37cd5b0f6e5df1bb/Extensions/reaper_blt_extend_marquee_to_markers_regions.dylib</source>
+        <source platform="win64" file="reaper_blt_extend_marquee_to_markers_regions.dll">https://github.com/balrulu/reaper/raw/6ac248bf73c90f98c1fd2b739d9180c11d82ac69/Extensions/reaper_blt_extend_marquee_to_markers_regions.dll</source>
+        <source platform="darwin64" file="reaper_blt_extend_marquee_to_markers_regions.dylib">https://github.com/balrulu/reaper/raw/6ac248bf73c90f98c1fd2b739d9180c11d82ac69/Extensions/reaper_blt_extend_marquee_to_markers_regions.dylib</source>
+        <source platform="darwin-arm64" file="reaper_blt_extend_marquee_to_markers_regions.dylib">https://github.com/balrulu/reaper/raw/6ac248bf73c90f98c1fd2b739d9180c11d82ac69/Extensions/reaper_blt_extend_marquee_to_markers_regions.dylib</source>
       </version>
     </reapack>
   </category>
   <category name="LangPacks">
     <reapack name="Japanese_add_SWS_kb_edit.ReaperLangPack" type="langpack" desc="日本語 [JP] - REAPER + SWS">
-      
-      
-      
       <version name="7.82.0" author="Balrulu" time="2026-10-05T05:11:24Z">
         <changelog><![CDATA[Japanese translation for REAPER v7.82 + SWS]]></changelog>
         <source>https://github.com/balrulu/reaper/raw/3c71055205c282e47a1773277ade40564f582b9a/LangPacks/Japanese_add_SWS_kb_edit.ReaperLangPack</source>
