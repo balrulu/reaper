@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<index version="1" name="BLT ReaScripts" commit="4a7c042f1c4c7f9fac8cb64a14db76bc627d85af">
+<index version="1" name="BLT ReaScripts" commit="33143e2532f492bc97d1658b1351c6f1fc44c23d">
   <category name="BLT">
     <reapack name="BLT_SPATIAL_FIELD.jsfx" type="effect" desc="BLT SPATIAL FIELD">
       <version name="0.5.0" author="Balrulu" time="2026-09-22T19:24:46Z">
@@ -80,6 +80,10 @@
       <version name="1.0.1" author="Balrulu" time="2026-10-06T20:54:18Z">
         <changelog><![CDATA[BLT SERIES ACTIONS]]></changelog>
         <source main="main" file="../BLT_ACTION_Move_Cursor_to_Selected_Item_Taking_playback_status.lua">https://github.com/balrulu/reaper/raw/a04112583ae15370600b57a8e63a0d4786ba5cce/BLT_ReaScripts/BLT_ACTION_Move_Cursor_to_Selected_Item_Taking_playback_status.lua</source>
+      </version>
+      <version name="1.0.2" author="Balrulu" time="2026-10-10T19:24:57Z">
+        <changelog><![CDATA[BLT SERIES ACTIONS]]></changelog>
+        <source main="main" file="../BLT_ACTION_Move_Cursor_to_Selected_Item_Taking_playback_status.lua">https://github.com/balrulu/reaper/raw/33143e2532f492bc97d1658b1351c6f1fc44c23d/BLT_ReaScripts/BLT_ACTION_Move_Cursor_to_Selected_Item_Taking_playback_status.lua</source>
       </version>
     </reapack>
     <reapack name="BLT_ACTION_Open_Original_or_Glued_item_in_External_editor.lua" type="script" desc="ACTION - Open selected item in external editor (original or glued range)">
