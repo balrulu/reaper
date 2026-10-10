@@ -55,7 +55,8 @@ jobs:
 
           path = "index.xml"
           doc = Nokogiri::XML(File.read(path))
-          changed = 0
+          desc_changed = 0
+          old_versions_removed = 0
 
           doc.xpath("/index/category").each do |category|
             category_name = category["name"]
@@ -70,16 +71,24 @@ jobs:
               next if package["desc"] == description
 
               package["desc"] = description
-              changed += 1
+              desc_changed += 1
+            end
+
+            category.xpath("./reapack").each do |package|
+              versions = package.xpath("./version")
+              next if versions.length <= 1
+
+              versions[0...-1].each do |version|
+                version.remove
+                old_versions_removed += 1
+              end
             end
           end
 
-          if changed > 0
-            File.write(path, doc.to_xml)
-            puts "Updated #{changed} LangPack description(s) from @description"
-          else
-            puts "LangPack descriptions already up to date"
-          end
+          File.write(path, doc.to_xml)
+
+          puts "Updated #{desc_changed} LangPack description(s) from @description"
+          puts "Removed #{old_versions_removed} old package version(s)"
           RUBY
 
           git add index.xml
@@ -88,7 +97,7 @@ jobs:
             if [ "$BEFORE_SHA" != "$AFTER_SHA" ]; then
               git commit --amend --no-edit
             else
-              git commit -m "index: sync LangPack descriptions" -m "[ci skip]"
+              git commit -m "index: normalize package metadata" -m "[ci skip]"
             fi
           fi
 
