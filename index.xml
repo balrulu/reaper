@@ -797,7 +797,7 @@ Save texture references losslessly with a compact shared frequency grid.]]></cha
     </reapack>
   </category>
   <category name="LangPacks">
-    <reapack name="Japanese_add_SWS_kb_edit.ReaperLangPack" type="langpack" desc="日本語 [JP] - For v7.82 + SWS">
+    <reapack name="Japanese_add_SWS_kb_edit.ReaperLangPack" type="langpack" desc="日本語 [JP] - REAPER + SWS">
       <version name="7.80.1" author="Balrulu" time="2026-09-23T22:16:07Z">
         <changelog><![CDATA[Japanese translation for REAPER v7.80 + SWS]]></changelog>
         <source>https://github.com/balrulu/reaper/raw/eaf8627a99f3ed6f853e4da93347bbdcac789d03/LangPacks/Japanese_add_SWS_kb_edit.ReaperLangPack</source>
