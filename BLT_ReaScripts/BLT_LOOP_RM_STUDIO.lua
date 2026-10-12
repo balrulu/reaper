@@ -1,5 +1,5 @@
 -- @description LOOP RM STUDIO
--- @version 0.5.30
+-- @version 0.5.31
 -- @author Balrulu
 -- @provides
 --   . > ../
@@ -117,6 +117,106 @@ local gfx=(function(api,native)
   end})
 end)(reaper,gfx)
 -- END BLT RETINA
+
+-- BEGIN BLT WINDOW PLACEMENT 1.0.0 (generated from _shared/BLT_WindowPlacement.lua)
+local BLTWindowPlacement=(function()
+local M={}
+local function finite(v) return type(v)=='number' and v==v and math.abs(v)<math.huge end
+local function rectangle(l,t,r,b,mac)
+ if not (finite(l) and finite(t) and finite(r) and finite(b)) or r<=l or t==b then return end
+ if mac then t,b=-math.max(t,b),-math.min(t,b) else t,b=math.min(t,b),math.max(t,b) end
+ return {l,t,r,b}
+end
+function M.plan(rect,area,barHeight)
+ local l,t,r,b=table.unpack(rect);local al,at,ar,ab=table.unpack(area)
+ local w,h=r-l,b-t;local grip=math.min(120,w,ar-al);local bar=math.min(barHeight or 26,h,ab-at)
+ if l>=al and l+grip<=ar and t>=at and t+bar<=ab then return l,t,false end
+ local mx=math.min(8,math.max(0,(ar-al-w)*.5));local my=math.min(8,math.max(0,(ab-at-h)*.5))
+ local x=math.max(al+mx,math.min(l,ar-w-mx));local y=math.max(at+my,math.min(t,ab-h-my))
+ return math.floor(x+.5),math.floor(y+.5),true
+end
+function M.recover(api,view,hwnd)
+ if not hwnd or hwnd==0 then return nil end
+ for _,name in ipairs({'JS_Window_GetRect','JS_Window_SetPosition','my_getViewport'}) do
+  if type(api[name])~='function' then return false end
+ end
+ if type(api.JS_Window_IsWindow)=='function' then local valid=api.JS_Window_IsWindow(hwnd);if not valid or valid==0 then return nil end end
+ if type(api.JS_Window_IsVisible)=='function' then local visible=api.JS_Window_IsVisible(hwnd);if not visible or visible==0 then return nil end end
+ if type(api.JS_Window_GetLong)=='function' then
+  local style=api.JS_Window_GetLong(hwnd,'STYLE')
+  if finite(style) and (math.floor(style)&0x21000000)~=0 then return nil end
+ end
+ local ok,l,t,r,b=api.JS_Window_GetRect(hwnd)
+ if not ok or ok==0 then return nil end
+ local osname=api.GetOS() or '';local mac=osname:match('OSX') or osname:match('macOS')
+ local rect=rectangle(l,t,r,b,mac);if not rect then return nil end
+ local ql,qt,qr,qb=rect[1],rect[2],rect[1]+math.min(120,rect[3]-rect[1]),rect[2]+math.min(M.barHeight or 26,rect[4]-rect[2])
+ if mac then qt,qb=-qb,-qt end
+ local al,at,ar,ab=api.my_getViewport(0,0,0,0,math.floor(ql),math.floor(qt),math.ceil(qr),math.ceil(qb),true)
+ local area=rectangle(al,at,ar,ab,mac);if not area then return nil end
+ local x,y,move=M.plan(rect,area,M.barHeight)
+ if not move then return false end
+ local nativeY=mac and -y-(rect[4]-rect[2]) or y
+ local moved=api.JS_Window_SetPosition(hwnd,x,nativeY,0,0,'','NOSIZE,NOZORDER,NOACTIVATE')
+ if moved==false or moved==0 then return nil end
+ -- Confirm the move before changing saved positions or in-memory float state.
+ local valid,nl,nt,nr,nb=api.JS_Window_GetRect(hwnd)
+ local placed=valid and valid~=0 and rectangle(nl,nt,nr,nb,mac)
+ if not placed or math.abs(placed[1]-x)>1 or math.abs(placed[2]-y)>1 then return nil end
+ if M.section and type(api.SetExtState)=='function' then
+  local dock,wx,wy=view.dock(-1,0,0,0,0)
+  if (dock&1)==0 and finite(wx) and finite(wy) then
+   api.SetExtState(M.section,'window_x',tostring(wx),true)
+   api.SetExtState(M.section,'window_y',tostring(wy),true)
+  end
+ end
+ if M.onMoved then pcall(M.onMoved,hwnd) end
+ return true
+end
+function M.install(api,view)
+ local init,dock,getchar,quit=view.init,view.dock,view.getchar,view.quit
+ local state={pending=false,tries=0,next_at=0,title=nil,docked=nil}
+ M.state=state
+ local function arm() state.pending=true;state.tries=0;state.next_at=0 end
+ local function observe(value)
+  if type(value)~='number' then return end
+  local isDocked=(value&1)~=0
+  if state.docked~=nil and state.docked and not isDocked then arm() end
+  state.docked=isDocked
+ end
+ view.init=function(title,...)
+  local result=table.pack(init(title,...))
+  if type(title)=='string' and title~='' then state.title=title end
+  arm();return table.unpack(result,1,result.n)
+ end
+ view.dock=function(value,...)
+  local result=table.pack(dock(value,...))
+  observe(value and value>=0 and value or result[1])
+  return table.unpack(result,1,result.n)
+ end
+ view.getchar=function(...)
+  if state.pending and api.time_precise()>=state.next_at then
+   state.pending=false;state.tries=state.tries+1
+   local ok,result=pcall(function()
+    local actual=dock(-1)
+    if type(actual)=='number' then state.docked=(actual&1)~=0 end
+    if state.docked then return false end
+    if not state.title or type(api.JS_Window_Find)~='function' then return false end
+    return M.recover(api,view,api.JS_Window_Find(state.title,true))
+   end)
+   if (not ok or result==nil) and state.tries<3 then state.pending=true;state.next_at=api.time_precise()+.05 end
+  end
+  return getchar(...)
+ end
+ view.quit=function(...) state.pending=false;state.title=nil;return quit(...) end
+end
+return M
+end)()
+BLTWindowPlacement.install(reaper,gfx)
+-- END BLT WINDOW PLACEMENT
+
+BLTWindowPlacement.section='BLT_REGION_FORGE'
+
 
 -- BEGIN BLT COMMON CHROME 1.0.0 (generated from _shared/BLT_Chrome.lua)
 local BLTChrome=(function()
@@ -1904,7 +2004,7 @@ local function optional_number(fn,...)
  local ok,value=pcall(fn,...)
  return ok and finite(value) and value or nil
 end
-local Core={VERSION='0.5.30',SECTION='BLT_REGION_FORGE',MAX_METADATA=16*1024*1024,SEAM_SECONDS=.006,SEAM_DRAG_SECONDS=.250,
+local Core={VERSION='0.5.31',SECTION='BLT_REGION_FORGE',MAX_METADATA=16*1024*1024,SEAM_SECONDS=.006,SEAM_DRAG_SECONDS=.250,
  PERIOD_ANALYSIS_MIN=7,PERIOD_ANALYSIS_MAX=100,CROSSFADE_GUARD_FRAMES=1024}
 Core.PERIOD_FAILURE='[BLT:PERIOD_FAILURE]'
 -- REAPER's stock rate list (also verified in the installed executable).
@@ -5993,6 +6093,8 @@ BLT.attach({
 })
 if ...=='blt_test' then function BLT.testDraw(now) UI.draw(now or R.time_precise()) end end
 
+
+BLTWindowPlacement.onMoved=function() BLT.lastRect=nil end
 
 -- BEGIN BLT SHORTCUTS 1.0.0 (generated from _shared/BLT_Shortcuts.lua)
 local BLTShortcuts=(function()

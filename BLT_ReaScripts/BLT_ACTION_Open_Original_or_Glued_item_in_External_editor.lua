@@ -1,5 +1,5 @@
 -- @description ACTION - Open selected item in external editor (original or glued range)
--- @version 1.0.0
+-- @version 1.0.1
 -- @author Balrulu
 -- @provides
 --   . > ../
@@ -10,8 +10,17 @@
 
 local R = reaper
 local PLATFORM = R.GetOS()
+local LANGUAGE_CACHE = "BLT_ACTION_Open_Original_or_Glued_item_in_External_editor"
+local JAPANESE
 
 local function is_japanese()
+  if JAPANESE ~= nil then return JAPANESE end
+  local cached = R.GetExtState(LANGUAGE_CACHE, "ui_language")
+  if cached == "ja" or cached == "en" then
+    JAPANESE = cached == "ja"
+    return JAPANESE
+  end
+  JAPANESE = false
   local command
   if PLATFORM:match("^Win") then
     command = [[powershell.exe -NoLogo -NoProfile -NonInteractive -WindowStyle Hidden -Command "[Console]::Write((Get-UICulture).Name)"]]
@@ -30,16 +39,15 @@ local function is_japanese()
   else
     language = output:match('^%s*%(%s*"?([%a][%w_%-]*)')
   end
-  return language ~= nil and language:lower():match("^([%a]+)") == "ja"
+  if language then
+    JAPANESE = language:lower():match("^([%a]+)") == "ja"
+    R.SetExtState(LANGUAGE_CACHE, "ui_language", JAPANESE and "ja" or "en", false)
+  end
+  return JAPANESE
 end
 
-local JAPANESE = is_japanese()
-local FONT = PLATFORM:match("^Win")
-    and (JAPANESE and "Yu Gothic UI" or "Segoe UI")
-    or (JAPANESE and "Hiragino Sans" or "Helvetica")
-
 local function tr(ja, en)
-  return JAPANESE and ja or en
+  return is_japanese() and ja or en
 end
 
 local GLUE_ACTION = 40362 -- Item: Glue items, ignoring time selection
@@ -234,6 +242,13 @@ local function choose_mode(on_choice)
   local x, y = dialog_position(440, 86)
   gfx.init(tr("編集する範囲を選択", "Choose editing range"), 440, 86, 0, x, y)
   R.atexit(close)
+  local font = PLATFORM:match("^Win")
+      and (JAPANESE and "Yu Gothic UI" or "Segoe UI")
+      or (JAPANESE and "Hiragino Sans" or "Helvetica")
+  local buttons = {
+    {mode = "original", text = tr("元波形を編集", "Edit original audio"), x = 16, y = 18},
+    {mode = "glue", text = tr("表示範囲をグルー", "Glue visible range"), y = 18},
+  }
   local previous_left = (gfx.mouse_cap & 1) ~= 0
   local function poll()
     if closed then return end
@@ -244,14 +259,11 @@ local function choose_mode(on_choice)
     end
     local width = math.max(1, (gfx.w - 48) / 2)
     local height = math.max(1, gfx.h - 36)
-    local buttons = {
-      {mode = "original", text = tr("元波形を編集", "Edit original audio"), x = 16, y = 18, w = width, h = height},
-      {mode = "glue", text = tr("表示範囲をグルー", "Glue visible range"), x = 32 + width, y = 18, w = width, h = height},
-    }
+    buttons[2].x = 32 + width
     local hovered
     for _, b in ipairs(buttons) do
-      if gfx.mouse_x >= b.x and gfx.mouse_x < b.x + b.w and
-          gfx.mouse_y >= b.y and gfx.mouse_y < b.y + b.h then hovered = b.mode end
+      if gfx.mouse_x >= b.x and gfx.mouse_x < b.x + width and
+          gfx.mouse_y >= b.y and gfx.mouse_y < b.y + height then hovered = b.mode end
     end
     local left = (gfx.mouse_cap & 1) ~= 0
     if left and not previous_left then pressed = hovered end
@@ -267,13 +279,13 @@ local function choose_mode(on_choice)
     previous_left = left
     gfx.set(0.10, 0.11, 0.13, 1)
     gfx.rect(0, 0, gfx.w, gfx.h, 1)
-    gfx.setfont(1, FONT, 18)
+    gfx.setfont(1, font, 18)
     for _, b in ipairs(buttons) do
       if hovered == b.mode then gfx.set(0.24, 0.37, 0.53, 1) else gfx.set(0.18, 0.23, 0.30, 1) end
-      gfx.rect(b.x, b.y, b.w, b.h, 1)
+      gfx.rect(b.x, b.y, width, height, 1)
       gfx.set(0.95, 0.96, 0.98, 1)
       local tw, th = gfx.measurestr(b.text)
-      gfx.x, gfx.y = b.x + (b.w - tw) / 2, b.y + (b.h - th) / 2
+      gfx.x, gfx.y = b.x + (width - tw) / 2, b.y + (height - th) / 2
       gfx.drawstr(b.text)
     end
     gfx.update()
