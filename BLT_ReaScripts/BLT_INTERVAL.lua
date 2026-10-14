@@ -1,5 +1,5 @@
 -- @description INTERVAL
--- @version 0.5.16
+-- @version 0.5.18
 -- @author Balrulu
 -- @provides
 --   . > ../
@@ -9,6 +9,122 @@
 --   BLT SERIES Beta TEST UPLOAD
 
 -- BLT preset transfer limits 1.1.0. Embedded; no runtime dependency.
+local reaper=reaper
+do
+-- BEGIN BLT NATIVE DIALOGS 1.0.0 (generated from _shared/BLT_NativeDialogs.lua)
+local BLTNativeDialogs=(function()
+ local M={}
+ function M.install(api,view)
+  local P=setmetatable({}, {__index=api})
+  local title,depth=nil,0
+  local windowsOS=api.GetOS and (api.GetOS() or ''):match('Win')~=nil
+  if view and view.init then
+   local init=view.init
+   view.init=function(name,...)
+    title=name;return init(name,...)
+   end
+  end
+  local function valid(hwnd)
+   if not hwnd or hwnd==0 then return false end
+   local value=api.JS_Window_IsWindow(hwnd);return value==true or value==1
+  end
+  local function owned(hwnd,main)
+   if not main then return false end
+   local seen={}
+   for _=1,32 do
+    if hwnd==main then return true end
+    if not hwnd or seen[hwnd] then return false end;seen[hwnd]=true
+    local parent=api.JS_Window_GetParent and api.JS_Window_GetParent(hwnd)
+    if parent==0 or parent==hwnd then parent=nil end
+    hwnd=parent or (api.JS_Window_GetRelated and api.JS_Window_GetRelated(hwnd,'OWNER'))
+   end
+   return false
+  end
+  local function suspend(session)
+   if not api.JS_Window_Find or not api.JS_Window_IsWindow then return end
+   local own=title and api.JS_Window_Find(title,true)
+   local main=api.GetMainHwnd and api.GetMainHwnd()
+   local candidates,seen={},{}
+   local function add(hwnd)
+    if hwnd~=main and valid(hwnd) and not seen[hwnd] then candidates[#candidates+1]=hwnd;seen[hwnd]=true end
+   end
+   add(own)
+   if api.JS_Window_ListAllTop and api.JS_Window_HandleFromAddress and api.JS_Window_GetTitle then
+    local _,list=api.JS_Window_ListAllTop()
+    for address in (list or ''):gmatch('[^,]+') do
+     local n=tonumber(address) or tonumber(address,16)
+     local hwnd=n and api.JS_Window_HandleFromAddress(n)
+     if valid(hwnd) then
+      local caption=api.JS_Window_GetTitle(hwnd) or ''
+      if (caption:match('^BLT[%s_:]') or caption=='LOUDNESS TRACE') and owned(hwnd,main) then add(hwnd) end
+     end
+    end
+   end
+   if #candidates==0 then return end
+   assert(api.JS_Window_Enable and api.JS_Window_GetLong,'Native dialogs require JS_Window_Enable and JS_Window_GetLong (js_ReaScriptAPI).')
+   session.foreground=api.JS_Window_GetForeground and api.JS_Window_GetForeground()
+   session.main=main
+   for _,hwnd in ipairs(candidates) do
+    local style=api.JS_Window_GetLong(hwnd,'STYLE')
+    assert(type(style)=='number','Cannot read BLT window input state.')
+    local topmost=windowsOS and (math.floor(api.JS_Window_GetLong(hwnd,'EXSTYLE'))&8)~=0
+    local enabled=(math.floor(style)&0x08000000)==0
+    if enabled or topmost then
+     local entry={hwnd=hwnd,enabled=enabled,topmost=topmost};session.windows[#session.windows+1]=entry
+     if topmost then
+      assert(api.JS_Window_SetZOrder,'Native dialogs require JS_Window_SetZOrder (js_ReaScriptAPI).')
+      assert(api.JS_Window_SetZOrder(hwnd,'NOTOPMOST'),'Cannot suspend BLT always-on-top state.')
+     end
+     if enabled then
+      api.JS_Window_Enable(hwnd,false)
+      assert((math.floor(api.JS_Window_GetLong(hwnd,'STYLE'))&0x08000000)~=0,'Cannot suspend BLT window input.')
+     end
+    end
+   end
+  end
+  local function restore(session)
+   for i=#session.windows,1,-1 do
+    local entry=session.windows[i]
+    local checked,exists=pcall(valid,entry.hwnd)
+    if not checked or exists then
+     if entry.enabled then pcall(api.JS_Window_Enable,entry.hwnd,true) end
+     if entry.topmost then pcall(api.JS_Window_SetZOrder,entry.hwnd,'TOPMOST') end
+    end
+   end
+   -- Do not take focus back if the user switched to another application.
+   pcall(function()
+    local current=api.JS_Window_GetForeground and api.JS_Window_GetForeground()
+    if session.foreground and valid(session.foreground) and (current==session.main or owned(current,session.main)) then
+     for _,entry in ipairs(session.windows) do
+      if entry.enabled and (session.foreground==entry.hwnd or owned(session.foreground,entry.hwnd)) then
+       if api.JS_Window_SetForeground then api.JS_Window_SetForeground(entry.hwnd) end
+       break
+      end
+     end
+    end
+   end)
+  end
+  local function call(fn,...)
+   if depth>0 then return fn(...) end
+   local args=table.pack(...);local session={windows={}};depth=depth+1
+   local result=table.pack(xpcall(function() suspend(session);return fn(table.unpack(args,1,args.n)) end,debug.traceback))
+   depth=depth-1;restore(session)
+   if not result[1] then error(result[2],0) end
+   return table.unpack(result,2,result.n)
+  end
+  for _,name in ipairs({'GetUserInputs','MB','ShowMessageBox','GetUserFileNameForRead','JS_Dialog_BrowseForSaveFile','JS_Dialog_BrowseForOpenFiles','JS_Dialog_BrowseForFolder','GR_SelectColor'}) do
+   local fn=api[name]
+   if type(fn)=='function' then P[name]=function(...) return call(fn,...) end end
+  end
+  return P
+ end
+ return M
+end)()
+-- END BLT NATIVE DIALOGS
+
+reaper=BLTNativeDialogs.install(reaper,gfx)
+end
+
 -- BEGIN BLT RETINA 1.1.0 (generated from _shared/BLT_Retina.lua)
 -- Layout and pointer coordinates stay in window points on macOS.
 -- Drawing, font rasterization and generated image buffers use backing pixels.
@@ -1480,6 +1596,49 @@ do
     local p=Presets.decode(s); if p and p.name~="ファクトリーデフォルト" then Presets.items[#Presets.items+1]=p end
   end
 end
+do
+local PresetDelete={
+ busy=function() return false end,english=function() return Language.code=='EN' end,
+ confirm=function(prompt) return Language.mb(prompt,'PRESET',4) end,
+ visible=function() return Layout.popup.visiblePresets end,
+ notify=function(message) notice(message,true) end,changed=wake_visuals,
+ persist=function(oldCount)
+  Presets.flush();local key='preset_'..oldCount
+  R.DeleteExtState(SECTION,key,true);State.written[key]=nil
+ end,
+}
+-- BEGIN BLT PRESET DELETE 1.0.0 (generated from _shared/BLT_PresetDelete.lua)
+-- Embedded inside the common preset scope of each BLT application.
+function Presets.remove(p)
+ if PresetDelete.busy() or not p or Presets.isFactory(p) then return false end
+ local index
+ for i,item in ipairs(Presets.items) do if item.name==p.name then index=i;break end end
+ if not index then return false end
+ local english=PresetDelete.english()
+ local prompt=english and ('Delete preset "'..p.name..'"?') or ('プリセット「'..p.name..'」を削除しますか？')
+ if PresetDelete.confirm(prompt)~=6 then return false end
+ local oldCount=#Presets.items
+ table.remove(Presets.items,index)
+ if Presets.current and Presets.current.name==p.name then Presets.current=nil;Presets.dirtyCache=nil end
+ PresetDelete.persist(oldCount,p)
+ Presets.offset=math.min(Presets.offset or 0,math.max(0,#Presets.items-PresetDelete.visible()))
+ Presets.selected=nil;Presets.pressed=nil;Presets.hoverSince=nil
+ if #Presets.items==0 then Presets.page='main' end
+ PresetDelete.notify((english and 'Deleted preset: ' or 'プリセットを削除しました: ')..p.name)
+ PresetDelete.changed();return true
+end
+
+function Presets.context(p,x,y)
+ if not p or Presets.isFactory(p) or PresetDelete.busy() then return end
+ gfx.x=x;gfx.y=y
+ if gfx.showmenu(PresetDelete.english() and 'Delete' or '削除')==1 then Presets.remove(p) end
+ Presets.pressed=nil;Presets.hoverSince=nil
+ Presets.down=((gfx.mouse_cap or 0)&1)~=0
+ Presets.rightDown=((gfx.mouse_cap or 0)&2)~=0
+ PresetDelete.changed()
+end
+-- END BLT PRESET DELETE
+end
 function Presets.put(p)
   if Presets.isFactory(p) then notice("ファクトリーデフォルトは変更できません。別の名前で保存してください。",false);return false end
   for i,old in ipairs(Presets.items) do
@@ -2283,11 +2442,11 @@ end
 -- Modal popup in client coordinates (never scales with content).
 function Presets.menu(x,y)
   Presets.open=true;Presets.page="main";Presets.offset=0;Presets.selected=1
-  Presets.down=false;Presets.pressed=nil;Presets.mx=nil;Presets.my=nil;Presets.hoverSince=nil
+  Presets.down=false;Presets.rightDown=((gfx.mouse_cap or 0)&2)~=0;Presets.pressed=nil;Presets.mx=nil;Presets.my=nil;Presets.hoverSince=nil
   focused=false;pressed=nil;last_down=false;wake_visuals()
 end
 function Presets.dismiss()
-  Presets.swallow=((gfx.mouse_cap or 0)&1)~=0
+  Presets.swallow=((gfx.mouse_cap or 0)&3)~=0
   Presets.open=false;Presets.hoverSince=nil;Presets.pressed=nil;focused=false;pressed=nil;last_down=false;wake_visuals()
 end
 function Presets.buildRows()
@@ -2296,7 +2455,7 @@ function Presets.buildRows()
     local count=math.min(Layout.popup.visiblePresets,#Presets.items-Presets.offset)
     for i=1,count do
       local p=Presets.items[i+Presets.offset]
-      rows[#rows+1]={text=p.name,literal=true,icon=Presets.current and Presets.current.name==p.name and "check" or "cards",action=function() Presets.dismiss();Presets.apply(p) end}
+      rows[#rows+1]={text=p.name,literal=true,preset=p,icon=Presets.current and Presets.current.name==p.name and "check" or "cards",action=function() Presets.dismiss();Presets.apply(p) end}
     end
     return rows
   end
@@ -2350,7 +2509,7 @@ function Presets.key(k)
   wake_visuals()
 end
 function Presets.update(active)
-  if Presets.swallow and ((gfx.mouse_cap or 0)&1)==0 then Presets.swallow=false end
+  if Presets.swallow and ((gfx.mouse_cap or 0)&3)==0 then Presets.swallow=false end
   if not Presets.open then return end
   if not active then Presets.dismiss();return end
   local x,y,w,h,rows=Presets.layout()
@@ -2365,6 +2524,13 @@ function Presets.update(active)
     gfx.mouse_wheel=0
   end
   -- Hover only opens the preset list, never applies a preset automatically.
+  local rightDown=(gfx.mouse_cap&2)~=0
+  local rightPressed=rightDown and not Presets.rightDown
+  Presets.rightDown=rightDown
+  if rightPressed and hit and rows[hit].preset then
+    Presets.selected=hit;Presets.context(rows[hit].preset,mx,my);return
+  end
+  if rightDown then Presets.hoverSince=nil;return end
   if Presets.page=="main" and hit==2 and #Presets.items>0 and not down then
     Presets.hoverSince=Presets.hoverSince or R.time_precise()
     if R.time_precise()-Presets.hoverSince>=Layout.popup.hoverDelay then Presets.activate(2);Presets.down=down;return end
