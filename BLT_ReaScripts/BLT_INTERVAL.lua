@@ -1,5 +1,5 @@
 -- @description INTERVAL
--- @version 0.5.18
+-- @version 0.5.26
 -- @author Balrulu
 -- @provides
 --   . > ../
@@ -598,10 +598,13 @@ local PrimaryButton=(function()
    d.rect(x+4,y+h-5,w-8,2,C.edge,.45)
    if progress>0 then d.rect(x+4,y+h-5,(w-8)*progress,2,ice,.8) end
   end
-  -- Center the same two-line typography within each application's existing size.
-  local topY=y+(h-42)/2+3
-  d.label(top,x+10,topY,8,(enabled or busy) and ice or C.faint,3,w-20,12,5,false)
-  d.label(title,x+10,topY+14,15,(enabled or busy) and C.text or C.muted,1,w-20,21,5,gfx.mac==true)
+  if h<44 then
+   d.label(title,x+10,y+(h-21)/2,15,(enabled or busy) and C.text or C.muted,1,w-20,21,5,gfx.mac==true)
+  else
+   local topY=y+(h-42)/2+3
+   d.label(top,x+10,topY,8,(enabled or busy) and ice or C.faint,3,w-20,12,5,false)
+   d.label(title,x+10,topY+14,15,(enabled or busy) and C.text or C.muted,1,w-20,21,5,gfx.mac==true)
+  end
  end
  function P.tick(now,active,wake)
   local s=P.state
@@ -638,7 +641,7 @@ end
 -- BLT PORTING CONFIGURATION: shared chrome metrics, app identity and title.
 -- Keep this script self-contained; no external module loading is required.
 local App={
-  version="0.5.16",section="BLT_INTERVAL",windowTitle="BLT Interval",
+  version="0.5.26",section="BLT_INTERVAL",windowTitle="BLT Interval",
   chromeTitle="I N T E R V A L",title="INTERVAL",
   subtitle="ITEM SPACING  アイテム間隔を整列",
 }
@@ -707,6 +710,10 @@ LanguageCatalog.en={
  ['間隔のモードが無効です。']='Invalid spacing mode.',
  ['間隔の単位が無効です。']='Invalid spacing unit.',
  ['整列範囲のモードが無効です。']='Invalid alignment scope.',
+ ['選択マーカー/リージョンも対象にする']='Include selected markers/regions',
+ ['マーカー／リージョンの選択に対応したREAPERが必要です。']='This REAPER version does not support marker/region selection.',
+ ['マーカー／リージョンを取得できません。']='Could not read markers/regions.',
+ ['リージョンの長さを確認してください。']='Check the region length.',
  ['0以上のグリッド数を入力してください。']='Enter a grid count of 0 or more.',
  ['0以上の秒数を入力してください。']='Enter seconds of 0 or more.',
  ['アイテムを2つ以上選択してください。']='Select at least two items.',
@@ -759,17 +766,18 @@ LanguageCatalog.prefixes={'プリセットを保存しました: ','プリセッ
 
 local Language=create_language(R,App.section,LanguageCatalog)
 local Layout={
-  width=468,height=508,minWidth=320,minHeight=382,maxWidth=1200,maxHeight=1426,
+  width=402,height=486,minWidth=320,minHeight=382,maxWidth=1200,maxHeight=1426,
   bar={height=26,close=38,reset=34,theme=34,language=26,preset=84,arrow=20},
-  title={x=24,y=8,size=35,subtitleX=26,subtitleY=44,subtitleSize=10,dividerY=62,
-    iconX=366,iconY=9,iconScale=.78},
-  footer={inset=24,bottom=13,height=11,size=9,versionSize=8,versionGap=14,dividerBottom=16},
+  title={x=12,y=8,size=35,subtitleX=14,subtitleY=44,subtitleSize=10,dividerY=62,
+    iconX=312,iconY=7,iconScale=.70},
+  footer={inset=12,bottom=13,height=11,size=9,versionSize=8,versionGap=14,dividerBottom=16},
   popup={width=286,rowHeight=29,headerHeight=34,visiblePresets=7,hoverDelay=1},
   controls={
-    gap={30,150,198,44},start={240,150,198,44},
-    scope_all={30,206,128,30},scope_block={170,206,128,30},scope_track={310,206,128,30},input={30,266,408,82},
-    unit_sec={76,358,154,32},unit_grid={238,358,154,32},
-    close_after={30,408,202,28},remember_mode={238,408,200,28},apply={64,438,340,50},
+    include_ruler={187,128,200,24},
+    gap={15,174,181,44},start={206,174,181,44},
+    scope_all={15,230,118,30},scope_block={142,230,118,30},scope_track={269,230,118,30},input={15,290,372,50},
+    unit_sec={50,350,147,32},unit_grid={205,350,147,32},
+    close_after={15,390,187,28},remember_mode={210,390,177,28},apply={81,420,240,36},
   },
 }
 local UI={}
@@ -798,7 +806,35 @@ function Core.format(value,unit)
   return string.format("%."..spec.digits.."f",n):gsub("0+$",""):gsub("%.$","")
 end
 
-function Core.collect(project)
+function Core.collect_ruler(project)
+  for _,name in ipairs({'GetNumRegionsOrMarkers','GetRegionOrMarker','GetRegionOrMarkerInfo_Value',
+    'GetSetRegionOrMarkerInfo_String','SetProjectMarkerByIndex2'}) do
+    if type(R[name])~='function' then return nil,'マーカー／リージョンの選択に対応したREAPERが必要です。' end
+  end
+  local out={}
+  for i=0,R.GetNumRegionsOrMarkers(project)-1 do
+    local ptr=R.GetRegionOrMarker(project,i,'')
+    if not ptr then return nil,'マーカー／リージョンを取得できません。' end
+    if R.GetRegionOrMarkerInfo_Value(project,ptr,'B_UISEL')~=0 then
+      local ok,guid=R.GetSetRegionOrMarkerInfo_String(project,ptr,'GUID','',false)
+      if not ok or guid=='' then return nil,'マーカー／リージョンを取得できません。' end
+      local position=R.GetRegionOrMarkerInfo_Value(project,ptr,'D_STARTPOS')
+      local region=R.GetRegionOrMarkerInfo_Value(project,ptr,'B_ISREGION')~=0
+      local length=region and R.GetRegionOrMarkerInfo_Value(project,ptr,'D_ENDPOS')-position or 0
+      if length<0 then return nil,'リージョンの長さを確認してください。' end
+      local target={ruler_guid=guid,is_region=region,length=length}
+      out[#out+1]={item=target,position=position,length=length,track=0,index=i,locked=false,
+        ruler_lane=R.GetRegionOrMarkerInfo_Value(project,ptr,'I_LANENUMBER')}
+    end
+  end
+  return out
+end
+
+function Core.collect(project,include_ruler,ruler)
+  if include_ruler and not ruler then
+    local err;ruler,err=Core.collect_ruler(project)
+    if not ruler then return nil,err end
+  end
   local selected,records,folders={},{},{}
   local function read(item,track_index,item_index)
     if records[item] then return records[item] end
@@ -913,6 +949,7 @@ function Core.collect(project)
     end
   end
   for _,v in ipairs(selected) do if not claimed[v.item] then items[#items+1]=v end end
+  if include_ruler then for _,v in ipairs(ruler) do items[#items+1]=v end end
   table.sort(items,function(a,b)
     if a.position~=b.position then return a.position<b.position end
     if a.track~=b.track then return a.track<b.track end
@@ -1073,7 +1110,7 @@ function Core.plan(project, items, interval, mode, unit, scope)
   elseif scope == "track" then
     local blocks, order = {}, {}
     for _, item in ipairs(items) do
-      local key = item.track
+      local key = item.ruler_lane~=nil and ('ruler:'..item.ruler_lane) or item.track
       if not blocks[key] then
         blocks[key] = {}
         order[#order + 1] = key
@@ -1115,9 +1152,24 @@ function Core.plan(project, items, interval, mode, unit, scope)
   return changes
 end
 
-function Core.apply(project, interval, mode, unit, scope)
+-- Resolve marker identity again after every move: native indices change on sort.
+-- Update both region endpoints together without moving any contained media items.
+function Core.set_position(project,target,position)
+  if type(target)~='table' or not target.ruler_guid then return R.SetMediaItemPosition(target,position,false) end
+  local ptr=R.GetRegionOrMarker(project,-1,target.ruler_guid)
+  if not ptr then return false end
+  local index=R.GetRegionOrMarkerInfo_Value(project,ptr,'I_INDEX')
+  if not R.SetProjectMarkerByIndex2(project,index,target.is_region,position,position+target.length,-1,'',0,0) then return false end
+  ptr=R.GetRegionOrMarker(project,-1,target.ruler_guid)
+  if not ptr then return false end
+  return math.abs(R.GetRegionOrMarkerInfo_Value(project,ptr,'D_STARTPOS')-position)<=Core.TIME_EPSILON
+    and (not target.is_region or math.abs(R.GetRegionOrMarkerInfo_Value(project,ptr,'D_ENDPOS')-position-target.length)<=Core.TIME_EPSILON)
+end
+
+function Core.apply(project, interval, mode, unit, scope, include_ruler)
   -- Re-read at click time: selection and active project may change while GUI is open.
-  local items = Core.collect(project)
+  local items,collect_error = Core.collect(project,include_ruler)
+  if not items then return false,collect_error end
   local changes, err = Core.plan(project, items, interval, mode, unit, scope)
   if not changes then return false, err end
   if #changes == 0 then return true, "すでに指定した間隔で整列しています。" end
@@ -1127,8 +1179,8 @@ function Core.apply(project, interval, mode, unit, scope)
   local ok, detail = xpcall(function()
     for _, change in ipairs(changes) do
       touched[#touched + 1] = change
-      if not R.SetMediaItemPosition(change.item, change.after, false) then
-        error("SetMediaItemPosition failed")
+      if not Core.set_position(project,change.item,change.after) then
+        error("Could not move alignment target")
       end
     end
   end, debug.traceback)
@@ -1136,7 +1188,7 @@ function Core.apply(project, interval, mode, unit, scope)
   if not ok then
     for i = #touched, 1, -1 do
       local change = touched[i]
-      local called, result = pcall(R.SetMediaItemPosition, change.item, change.before, false)
+      local called, result = pcall(Core.set_position,project,change.item,change.before)
       if not called or not result then restored = false end
     end
   end
@@ -1146,7 +1198,7 @@ function Core.apply(project, interval, mode, unit, scope)
   local scope_name = scope == "track" and "by track" or scope == "block" and "overlap blocks" or "all items"
   local undo_name = mode == "gap" and ("Interval: space selected items by end-to-start gap (" .. unit_name .. ", " .. scope_name .. ")")
     or ("Interval: align selected item starts (" .. unit_name .. ", " .. scope_name .. ")")
-  R.Undo_EndBlock2(project, ok and undo_name or "Interval: failed alignment", 4)
+  R.Undo_EndBlock2(project, ok and undo_name or "Interval: failed alignment", include_ruler and -1 or 4)
   if not ok then
     R.ShowConsoleMsg("Interval error:\n" .. public_error(detail) .. "\n")
     return false, restored and "整列に失敗しました。元の位置に戻しました。"
@@ -1180,6 +1232,7 @@ local unit = remember_mode and (saved_unit == "grid" and "grid" or "sec") or "se
 local scope = remember_mode and (saved_scope == "track" and "track" or saved_scope == "block" and "block" or "all") or "all"
 local value = unit == "grid" and grid_value or seconds_value
 local close_after = R.GetExtState(SECTION, "close_after") == "1"
+local include_ruler = R.GetExtState(SECTION,"include_ruler")=="1"
 
 -- This branch returns before any gfx/js_ReaScriptAPI window code is initialized.
 if rawget(_G,"BLT_INTERVAL_INVOCATION")=="process_last" then
@@ -1195,7 +1248,9 @@ if rawget(_G,"BLT_INTERVAL_INVOCATION")=="process_last" then
   if not Core.parse(process_grid,"grid") then process_grid=grid_value end
   local process_value=process_unit=="grid" and process_grid or process_seconds
   local interval=Core.parse(process_value,process_unit)
-  local ok,message=Core.apply(R.EnumProjects(-1,""),interval,process_mode,process_unit,process_scope)
+  local saved_ruler=R.GetExtState(SECTION,"process_include_ruler")
+  local process_ruler=saved_ruler=="1" or saved_ruler=="" and include_ruler
+  local ok,message=Core.apply(R.EnumProjects(-1,""),interval,process_mode,process_unit,process_scope,process_ruler)
   if not ok then Language.mb(message or "処理できませんでした。","BLT: Interval - 前回設定で処理",0) end
   return
 end
@@ -1203,6 +1258,8 @@ local saved_window_x = tonumber(R.GetExtState(SECTION, "window_x"))
 local saved_window_y = tonumber(R.GetExtState(SECTION, "window_y"))
 local saved_window_w = tonumber(R.GetExtState(SECTION, "window_w"))
 local saved_window_h = tonumber(R.GetExtState(SECTION, "window_h"))
+-- Adopt the compact width when restoring the previous default size.
+if saved_window_w==468 then saved_window_w=Layout.width end
 local last_window_x, last_window_y = saved_window_x, saved_window_y
 local last_window_w, last_window_h = saved_window_w, saved_window_h
 local closing = false
@@ -1536,6 +1593,7 @@ local function persist_process_settings()
   State.set("process_mode",mode,true)
   State.set("process_unit",unit,true)
   State.set("process_scope",scope,true)
+  State.set("process_include_ruler",include_ruler and "1" or "0",true)
   local seconds=Core.normalize(seconds_value,"sec")
   local grids=Core.normalize(grid_value,"grid")
   if seconds then State.set("process_seconds",Core.format(seconds,"sec"),true) end
@@ -1551,34 +1609,34 @@ function Presets.name(s)
   return s
 end
 function Presets.encode(p)
-  return table.concat({Presets.header,p.name,p.mode,p.scope,p.unit,p.seconds,p.grid,p.close and "1" or "0",p.remember and "1" or "0"},"\n")
+  return table.concat({Presets.header,p.name,p.mode,p.scope,p.unit,p.seconds,p.grid,p.close and "1" or "0",p.remember and "1" or "0",p.include_ruler and "1" or "0"},"\n")
 end
 function Presets.decode(s)
   if type(s)~="string" or #s>BLTPresetLimits.stringBytes then return nil end
   s=s:gsub("\r\n","\n")
   local a={}; for line in (s.."\n"):gmatch("(.-)\n") do a[#a+1]=line end
-  if #a~=9 or a[1]~=Presets.header or not Presets.name(a[2]) then return nil end
+  if (#a~=9 and #a~=10) or a[1]~=Presets.header or not Presets.name(a[2]) then return nil end
   if (a[3]~="gap" and a[3]~="start") or (a[4]~="all" and a[4]~="track" and a[4]~="block") or (a[5]~="sec" and a[5]~="grid") then return nil end
   local sec,sc=Core.normalize(a[6],"sec"); local grid,gc=Core.normalize(a[7],"grid")
-  if not sec or sc or not grid or gc or (a[8]~="0" and a[8]~="1") or (a[9]~="0" and a[9]~="1") then return nil end
-  return {name=Presets.name(a[2]),mode=a[3],scope=a[4],unit=a[5],seconds=Core.format(sec,"sec"),grid=Core.format(grid,"grid"),close=a[8]=="1",remember=a[9]=="1"}
+  if not sec or sc or not grid or gc or (a[8]~="0" and a[8]~="1") or (a[9]~="0" and a[9]~="1") or (a[10] and a[10]~="0" and a[10]~="1") then return nil end
+  return {name=Presets.name(a[2]),mode=a[3],scope=a[4],unit=a[5],seconds=Core.format(sec,"sec"),grid=Core.format(grid,"grid"),close=a[8]=="1",remember=a[9]=="1",include_ruler=a[10]=="1"}
 end
 function Presets.capture(name)
   local n,clipped=Core.normalize(value,unit)
   if not n or clipped then return nil end
   local s=unit=="sec" and Core.format(n,"sec") or seconds_value
   local g=unit=="grid" and Core.format(n,"grid") or grid_value
-  return Presets.decode(Presets.encode({name=name,mode=mode,scope=scope,unit=unit,seconds=s,grid=g,close=close_after,remember=remember_mode}))
+  return Presets.decode(Presets.encode({name=name,mode=mode,scope=scope,unit=unit,seconds=s,grid=g,close=close_after,remember=remember_mode,include_ruler=include_ruler}))
 end
 function Presets.dirty()
   if not Presets.current then return false end
   local c=Presets.dirtyCache
   if c and c.current==Presets.current and c.value==value and c.seconds==seconds_value and c.grid==grid_value
-    and c.mode==mode and c.scope==scope and c.unit==unit and c.close==close_after and c.remember==remember_mode then return c.result end
+    and c.mode==mode and c.scope==scope and c.unit==unit and c.close==close_after and c.remember==remember_mode and c.include_ruler==include_ruler then return c.result end
   local snapshot=Presets.capture(Presets.current.name)
   local result=not snapshot or Presets.encode(snapshot)~=Presets.encode(Presets.current)
   Presets.dirtyCache={current=Presets.current,value=value,seconds=seconds_value,grid=grid_value,
-    mode=mode,scope=scope,unit=unit,close=close_after,remember=remember_mode,result=result}
+    mode=mode,scope=scope,unit=unit,close=close_after,remember=remember_mode,include_ruler=include_ruler,result=result}
   return result
 end
 function Presets.flush()
@@ -1671,14 +1729,15 @@ function Presets.apply(p)
   mode,scope,unit=p.mode,p.scope,p.unit
   seconds_value,grid_value=p.seconds,p.grid
   close_after,remember_mode=p.close,p.remember
+  include_ruler=p.include_ruler==true
   value=unit=="grid" and grid_value or seconds_value
   caret=#value;selected=true;focused=false;field_drag=nil
-  for k,v in pairs({seconds=seconds_value,grid_value=grid_value,last_mode=mode,last_unit=unit,last_scope=scope,close_after=close_after and "1" or "0",remember_mode=remember_mode and "1" or "0"}) do State.set(k,v,true) end
+  for k,v in pairs({seconds=seconds_value,grid_value=grid_value,last_mode=mode,last_unit=unit,last_scope=scope,close_after=close_after and "1" or "0",remember_mode=remember_mode and "1" or "0",include_ruler=include_ruler and "1" or "0"}) do State.set(k,v,true) end
   persist_process_settings();Presets.current=p;wake_visuals()
   notice("プリセットを読み込みました: "..p.name,true)
 end
 Presets.bundleHeader=App.section.."_PRESET_BUNDLE_V1"
-Presets.factory={name="ファクトリーデフォルト",mode="gap",scope="all",unit="sec",seconds="1",grid="1",close=false,remember=false,factory=true}
+Presets.factory={name="ファクトリーデフォルト",mode="gap",scope="all",unit="sec",seconds="1",grid="1",close=false,remember=false,include_ruler=false,factory=true}
 function Presets.isFactory(p)
   return p and (p.factory or p.name==Presets.factory.name)
 end
@@ -1705,10 +1764,11 @@ function Presets.decodeTransfer(data)
   if single then return not Presets.isFactory(single) and {single} or nil end
   local a={};for line in (data.."\n"):gmatch("(.-)\n") do a[#a+1]=line end
   if a[1]~=Presets.bundleHeader then return nil end
-  local n=tonumber(a[2]);if not n or n%1~=0 or n<1 or n>200 or #a~=2+n*9 then return nil end
+  local n=tonumber(a[2]);if not n or n%1~=0 or n<1 or n>200 then return nil end
+  local fields=(#a-2)/n;if fields~=9 and fields~=10 then return nil end
   local items,names={},{}
   for i=1,n do
-    local p=Presets.decode(table.concat(a,"\n",3+(i-1)*9,2+i*9))
+    local p=Presets.decode(table.concat(a,"\n",3+(i-1)*fields,2+i*fields))
     if not p or Presets.isFactory(p) or names[p.name] then return nil end
     names[p.name]=true;items[#items+1]=p
   end
@@ -1831,7 +1891,7 @@ local function execute()
     if clipped then field_flash_at=R.time_precise() end
     value=format_interval_value(interval);caret=#value;persist_process_settings()
   end
-  local ok,message=Core.apply(project,interval,mode,unit,scope)
+  local ok,message=Core.apply(project,interval,mode,unit,scope,include_ruler)
   notice(message,ok)
   if ok then
     stash_current_value()
@@ -1918,11 +1978,8 @@ local function draw_background()
   disc(W-26,42,125,C.accent,0.018)
   disc(16,H-46,105,C.bg2,0.030)
   gradient(0,0,W,Layout.title.dividerY,C.bg2,C.bg,0.22,0,true)
-  line(24,Layout.title.dividerY,W-24,Layout.title.dividerY,C.edge2,0.28)
-  line(24,H-Layout.footer.dividerBottom,W-24,H-Layout.footer.dividerBottom,C.edge2,0.16)
-  -- Sparse technical ticks on the left rail.
-  line(20,128,20,380,C.edge2,0.18)
-  for y=140,374,18 do line(20,y,25,y,C.edge2,0.14) end
+  line(12,Layout.title.dividerY,W-12,Layout.title.dividerY,C.edge2,0.28)
+  line(12,H-Layout.footer.dividerBottom,W-12,H-Layout.footer.dividerBottom,C.edge2,0.16)
 end
 
 local function draw_mode_card(key,x,y,w,title,code,active,hovered)
@@ -1937,8 +1994,8 @@ local function draw_mode_card(key,x,y,w,title,code,active,hovered)
   line(x,y,x+w,y,C.edge2,0.18+0.45*a)
   line(x,y+44,x+w,y+44,C.edge,0.32)
   finish_corners(x,y,w,44,8,true,C.edge2,0.26+0.38*a)
-  label(title,x+14,y+13,14,active and C.text or C.muted,1,w-28,23,0,true)
-  right_label(code,x+w-12,y+6,7,active and C.accent2 or C.faint,3,true)
+  label(title,x+14,y+17,14,active and C.text or C.muted,1,w-28,23,0,true)
+  right_label(code,x+w-12,y+3,7,active and C.accent2 or C.faint,3,true)
 end
 
 local function draw_scope_segment(x,y,w,title,active,hovered,left_side,key)
@@ -1960,8 +2017,17 @@ local function draw_unit_segment(x,y,w,label_text,active,hovered)
   label(label_text,x,y+4,11,active and C.text or C.muted,3,w,24,5,true)
 end
 
-function UI.toggle(x,y,label_text,on,label_w)
-  -- LOOP_RM_STUDIO slide-toggle design, fitted to INTERVAL's two-column row.
+function UI.ruler_toggle_layout()
+  local toggle=Layout.controls.include_ruler
+  font(11.5,1,true)
+  local jp_width=UI.textMetrics("選択マーカー/リージョンも対象にする")
+  local en_width=UI.textMetrics(LanguageCatalog.en["選択マーカー/リージョンも対象にする"])
+  toggle[3]=34+math.ceil(math.max(jp_width,en_width))/scale
+  toggle[1]=Layout.width-15-toggle[3]
+end
+
+function UI.toggle(x,y,label_text,on,label_w,right_align,text_size)
+  -- Shared slide-toggle style for the selection option and bottom settings.
   local state=animate("toggle_state_"..label_text,on and 1 or 0)
   line(x+3,y+12,x+23,y+12,C.edge2,.45)
   local knob_x=x+7+12*state
@@ -1970,7 +2036,8 @@ function UI.toggle(x,y,label_text,on,label_w)
     disc(knob_x,y+12,7,C.accent,.06*state)
     disc(knob_x,y+12,4.2,C.accent2,.94*state)
   end
-  label(label_text,x+34,y,11.5,C.text,1,label_w or 150,24,4,true)
+  local inset=text_size and 28 or 34
+  label(label_text,x+inset,y,text_size or 11.5,C.text,1,label_w or 150,24,right_align and 6 or 4,true)
 end
 
 local Chrome={window=nil,mouseDown=false,drag=nil,resize=nil,mouseActive=false,requestClose=false,requestReset=false,
@@ -2745,24 +2812,48 @@ end
 -- Cache selected-item metadata and the alignment plan. Rebuild only when
 -- the project state changes or a UI setting that affects the plan changes.
 local ui_cache = {project=nil, state_count=nil, settings_dirty=true, items=nil, plan=nil, reason=nil}
+local function poll_ruler_selection(project,now)
+  if not include_ruler then return false end
+  if ui_cache.ruler_project==project and now<(ui_cache.ruler_poll or 0) then return false end
+  local ruler,err=Core.collect_ruler(project)
+  local previous=ui_cache.ruler
+  local changed=ui_cache.ruler_project~=project or err~=ui_cache.ruler_error
+    or (ruler==nil)~=(previous==nil) or ruler and previous and #ruler~=#previous
+  if not changed and ruler and previous then
+    for i,v in ipairs(ruler) do
+      local old=previous[i]
+      if v.item.ruler_guid~=old.item.ruler_guid or v.position~=old.position or v.length~=old.length
+        or v.item.is_region~=old.item.is_region or v.ruler_lane~=old.ruler_lane or v.index~=old.index then changed=true;break end
+    end
+  end
+  ui_cache.ruler_project=project;ui_cache.ruler_poll=now+.35
+  ui_cache.ruler,ui_cache.ruler_error=ruler,err
+  if changed then ui_cache.items=nil;ui_cache.settings_dirty=true end
+  return changed
+end
 local function get_cached_ui_state(project,state_count)
   state_count=state_count or R.GetProjectStateChangeCount(project)
+  if ui_cache.include_ruler~=include_ruler then
+    ui_cache.include_ruler=include_ruler;ui_cache.ruler_poll=0;ui_cache.items=nil
+  end
+  poll_ruler_selection(project,R.time_precise())
   local project_changed=ui_cache.project~=project
   local items_dirty=project_changed or ui_cache.state_count~=state_count or ui_cache.items==nil
   if items_dirty then
-    ui_cache.project=project
-    ui_cache.state_count=state_count
-    ui_cache.items=Core.collect(project)
-    ui_cache.settings_dirty=true
+    ui_cache.project=project;ui_cache.state_count=state_count
+    local err
+    if include_ruler and ui_cache.ruler_error then ui_cache.items=nil;err=ui_cache.ruler_error
+    else ui_cache.items,err=Core.collect(project,include_ruler,ui_cache.ruler) end
+    ui_cache.collect_error=err;ui_cache.settings_dirty=true
   end
-
   if ui_cache.settings_dirty or ui_cache.value~=value or ui_cache.mode~=mode or ui_cache.unit~=unit or ui_cache.scope~=scope then
     local interval=Core.parse(value,unit)
-    ui_cache.plan,ui_cache.reason=Core.plan(project,ui_cache.items,interval,mode,unit,scope)
+    if ui_cache.items then ui_cache.plan,ui_cache.reason=Core.plan(project,ui_cache.items,interval,mode,unit,scope)
+    else ui_cache.plan=nil;ui_cache.reason=ui_cache.collect_error end
     ui_cache.value,ui_cache.mode,ui_cache.unit,ui_cache.scope=value,mode,unit,scope
     ui_cache.settings_dirty=false
   end
-  return ui_cache.items,ui_cache.plan,ui_cache.reason
+  return ui_cache.items or {},ui_cache.plan,ui_cache.reason
 end
 
 PrimaryButton.painter={C=C,gradient=gradient,line=line,rect=rect,corners=finish_corners,disc=disc,label=label}
@@ -2791,11 +2882,13 @@ local function draw(window_active)
   local project_state=UI.projectState or R.GetProjectStateChangeCount(project)
   local items,plan,reason=get_cached_ui_state(project,project_state)
   local enabled=plan~=nil
+  UI.ruler_toggle_layout()
   local content_active=window_active and not Chrome.mouseActive
   local down=content_active and ((gfx.mouse_cap & 1)~=0) or false
   local hit=nil
 
   if content_active then
+    if inside(table.unpack(Layout.controls.include_ruler)) then hit="include_ruler" end
     if inside(table.unpack(Layout.controls.gap)) then hit="gap" end
     if inside(table.unpack(Layout.controls.start)) then hit="start" end
     if inside(table.unpack(Layout.controls.scope_all)) then hit="scope_all" end
@@ -2847,6 +2940,10 @@ local function draw(window_active)
         persist_process_settings()
       elseif hit=="unit_sec" then select_unit("sec")
       elseif hit=="unit_grid" then select_unit("grid")
+      elseif hit=="include_ruler" then
+        include_ruler=not include_ruler
+        State.set("include_ruler",include_ruler and "1" or "0",true)
+        persist_process_settings();status_until=0
       elseif hit=="close_after" then
         close_after=not close_after
         State.set("close_after",close_after and "1" or "0",true)
@@ -2873,71 +2970,74 @@ local function draw(window_active)
   UI.title(window_active,particle_dt)
 
   -- Selection summary: one clean glass strip.
-  gradient(24,74,420,48,C.panel2,C.panel,0.42,0.12)
-  finish_corners(24,74,420,48,8,false,C.edge2,0.26)
-  label("SELECTED",38,82,8,C.muted,3,70,14,0,true)
-  label(tostring(#items),105,74,26,#items>=2 and C.text or C.warn,3,52,48,4,true)
+  gradient(12,74,W-24,48,C.panel2,C.panel,0.42,0.12)
+  finish_corners(12,74,W-24,48,8,false,C.edge2,0.26)
+  label("SELECTED",26,82,8,C.muted,3,70,14,0,true)
+  label(tostring(#items),93,74,26,#items>=2 and C.text or C.warn,3,52,48,4,true)
   local anchor_text=scope=="track" and "EACH TRACK"
     or (#items>0 and string.format("%.3f s",items[1].position) or "--")
-  right_label("ANCHOR",425,82,7,C.faint,3,true)
-  right_label(anchor_text,425,96,11,C.muted,3,true)
+  right_label("ANCHOR",W-31,82,7,C.faint,3,true)
+  right_label(anchor_text,W-31,96,11,C.muted,3,true)
 
-  label("間隔モード",30,130,10,C.accent2,1,105,16,0,true)
-  line(103,138,438,138,C.edge2,0.22)
-  draw_mode_card("gap",30,150,198,"終了点 → 開始点","END / START",mode=="gap",hit=="gap")
-  draw_mode_card("start",240,150,198,"開始点 → 開始点","START / START",mode=="start",hit=="start")
 
-  draw_scope_segment(30,206,128,"全体",scope=="all",hit=="scope_all",true)
-  draw_scope_segment(170,206,128,"ブロック",scope=="block",hit=="scope_block",true,"scope_block")
-  draw_scope_segment(310,206,128,"トラック毎",scope=="track",hit=="scope_track",false)
-  line(228,210,228,232,C.edge2,0.18)
+  local toggle=Layout.controls.include_ruler
+  UI.toggle(toggle[1],toggle[2],"選択マーカー/リージョンも対象にする",include_ruler,toggle[3]-34,true)
+
+  label("間隔モード",15,154,10,C.accent2,1,105,16,0,true)
+  line(88,162,W-15,162,C.edge2,0.22)
+  local c=Layout.controls
+  draw_mode_card("gap",c.gap[1],c.gap[2],c.gap[3],"終了点 → 開始点","END / START",mode=="gap",hit=="gap")
+  draw_mode_card("start",c.start[1],c.start[2],c.start[3],"開始点 → 開始点","START / START",mode=="start",hit=="start")
+
+  draw_scope_segment(c.scope_all[1],c.scope_all[2],c.scope_all[3],"全体",scope=="all",hit=="scope_all",true)
+  draw_scope_segment(c.scope_block[1],c.scope_block[2],c.scope_block[3],"ブロック",scope=="block",hit=="scope_block",true,"scope_block")
+  draw_scope_segment(c.scope_track[1],c.scope_track[2],c.scope_track[3],"トラック毎",scope=="track",hit=="scope_track",false)
 
   local focus_light=animate("input_focus",focused and 1 or (hit=="input" and 0.28 or 0))
   local field_flash=flash_value()
-  label(mode=="gap" and "終了点 → 開始点の間隔" or "開始点 → 開始点の間隔",30,247,10,C.muted,1,260,16,0,true)
-  gradient(30,266,408,82,C.field,C.panel,0.98,0.62)
-  if field_flash>0 then rect(25,261,418,92,C.red,.025*field_flash); gradient(30,266,408,82,C.red,C.field,.22*field_flash,.02*field_flash,true) end
-  line(30,266,438,266,field_flash>0 and C.red or C.edge2,0.22+0.38*focus_light+0.42*field_flash)
-  line(30,348,438,348,C.edge2,0.34+0.42*focus_light)
-  line(30,266,30,348,field_flash>0 and C.red or C.accent2,0.18+0.54*focus_light+0.40*field_flash)
+  local ix,iy,iw,ih=table.unpack(Layout.controls.input)
+  label(mode=="gap" and "終了点 → 開始点の間隔" or "開始点 → 開始点の間隔",15,271,10,C.muted,1,260,16,0,true)
+  gradient(ix,iy,iw,ih,C.field,C.panel,0.98,0.62)
+  if field_flash>0 then rect(ix-5,iy-5,iw+10,ih+10,C.red,.025*field_flash); gradient(ix,iy,iw,ih,C.red,C.field,.22*field_flash,.02*field_flash,true) end
+  line(ix,iy,ix+iw,iy,field_flash>0 and C.red or C.edge2,0.22+0.38*focus_light+0.42*field_flash)
+  line(ix,iy+ih,ix+iw,iy+ih,C.edge2,0.34+0.42*focus_light)
+  line(ix,iy,ix,iy+ih,field_flash>0 and C.red or C.accent2,0.18+0.54*focus_light+0.40*field_flash)
   if focus_light>0.02 then
-    glow_line(30,348,180,348,C.accent2,0.42*focus_light)
+    glow_line(ix,iy+ih,ix+150,iy+ih,C.accent2,0.42*focus_light)
     local glint=((anim_time*0.34)%1)
-    local gx=42+glint*360
-    glow_line(gx,266,math.min(gx+30,430),266,C.focus2,0.25*focus_light)
+    local gx=ix+12+glint*(iw-48)
+    glow_line(gx,iy,math.min(gx+30,ix+iw-8),iy,C.focus2,0.25*focus_light)
   end
-  finish_corners(30,266,408,82,10,false,field_flash>0 and C.red or C.accent2,0.30+0.36*focus_light+0.36*field_flash)
+  finish_corners(ix,iy,iw,ih,10,false,field_flash>0 and C.red or C.accent2,0.30+0.36*focus_light+0.36*field_flash)
 
   local unit_caption=unit=="grid" and "GRID UNITS" or "SECONDS"
   local unit_suffix=unit=="grid" and "GRID" or "SEC"
-  label(unit_caption,46,280,8,C.muted,3,100,12,0,true)
-  local value_size=42
+  label(unit_caption,ix+16,iy+(ih-12)/2,8,C.muted,3,100,12,0,true)
+  local value_size=36
   local tw=measure(value,value_size,3,true)
   local suffix_size=15
   local suffix_w=measure(unit_suffix,suffix_size,3,true)
-  local suffix_right=420
+  local suffix_right=ix+iw-18
   local suffix_x=suffix_right-suffix_w
   local value_right=suffix_x-8
-  local available=value_right-145
+  local available=value_right-(ix+115)
   while tw>available and value_size>13 do value_size=value_size-1; tw=measure(value,value_size,3,true) end
-  local text_x=math.max(145,value_right-tw)
-  local base_y=282
-  local base_h=52
-  label(unit_suffix,suffix_x,base_y-4,suffix_size,C.muted,3,suffix_w+2,base_h,8,true)
-  if focused and selected then rect(text_x-4,295,math.max(7,tw+8),38,C.accent3,0.40) end
-  label(value,text_x,base_y,value_size,C.text,3,math.max(1,value_right-text_x+3),base_h,8,true)
+  local text_x=math.max(ix+115,value_right-tw)
+  label(unit_suffix,suffix_x,iy,suffix_size,C.muted,3,suffix_w+2,ih,4,true)
+  if focused and selected then rect(text_x-4,iy+4,math.max(7,tw+8),ih-8,C.accent3,0.40) end
+  label(value,text_x,iy,value_size,C.text,3,math.max(1,value_right-text_x+3),ih,4,true)
   if focused and not selected and R.time_precise()%1<0.55 then
     font(value_size,3,true)
     local cw=UI.textMetrics(value:sub(1,caret))/scale
-    line(text_x+cw,294,text_x+cw,334,C.accent2,1)
+    line(text_x+cw,iy+6,text_x+cw,iy+ih-6,C.accent2,1)
   end
 
-  draw_unit_segment(76,358,154,"SEC",unit=="sec",hit=="unit_sec")
-  draw_unit_segment(238,358,154,"GRID",unit=="grid",hit=="unit_grid")
+  draw_unit_segment(c.unit_sec[1],c.unit_sec[2],c.unit_sec[3],"SEC",unit=="sec",hit=="unit_sec")
+  draw_unit_segment(c.unit_grid[1],c.unit_grid[2],c.unit_grid[3],"GRID",unit=="grid",hit=="unit_grid")
 
   -- Settings switches.
-  UI.toggle(30,408,"整列後にウィンドウを閉じる",close_after,166)
-  UI.toggle(238,408,"最後に使ったモードを記憶",remember_mode,164)
+  UI.toggle(c.close_after[1],c.close_after[2],"整列後にウィンドウを閉じる",close_after,c.close_after[3]-28,false,10)
+  UI.toggle(c.remember_mode[1],c.remember_mode[2],"最後に使ったモードを記憶",remember_mode,c.remember_mode[3]-28,false,10)
 
   -- Shared LOUDNESS TRACE style; selection validation and click behavior remain local.
   local ax,ay,aw,ah=table.unpack(Layout.controls.apply)
@@ -3050,6 +3150,7 @@ local function loop()
     last_state_poll=now
     local project=R.EnumProjects(-1,""); local state=R.GetProjectStateChangeCount(project)
     UI.project,UI.projectState=project,state
+    if poll_ruler_selection(project,now) then redraw_dirty=true end
     if last_seen_state~=state or last_seen_project~=project then
       last_seen_state,last_seen_project=state,project;redraw_dirty=true
     end
