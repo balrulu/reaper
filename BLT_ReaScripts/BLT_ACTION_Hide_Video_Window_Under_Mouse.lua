@@ -1,9 +1,10 @@
 -- @description ACTION - Auto-hide video window under mouse (toggle)
--- @version 1.0.3
+-- @version 1.0.4
 -- @author Balrulu
 -- @provides
 --   . > ../
 -- @changelog
+--   Suspend auto-hide while dragging/resizing with the left mouse button.
 --   BLT SERIES ACTIONS
 -- @about
 --   BLT SERIES Beta TEST UPLOAD
@@ -12,7 +13,7 @@ local R = reaper
 local required = {"JS_Window_GetParent", "JS_Window_GetRelated", "JS_Window_FromPoint", "JS_Window_IsChild",
   "JS_Localize", "JS_Window_GetClientRect", "JS_Window_Show",
   "JS_Window_IsVisible", "JS_Window_IsWindow", "JS_Window_GetTitle",
-  "JS_Window_GetLong"}
+  "JS_Window_GetLong", "JS_Mouse_GetState"}
 for _, name in ipairs(required) do
   if not R[name] then R.defer(function() end); return end
 end
@@ -138,6 +139,11 @@ local function update(now)
   local x, y = R.GetMousePosition()
   local refresh = now >= next_refresh
   if x == last_x and y == last_y and not refresh then return end
+  -- A resize drag can move the pointer into the video client area.
+  if (R.JS_Mouse_GetState(1) & 1) ~= 0 then
+    last_x, last_y = nil, nil
+    return
+  end
   last_x, last_y = x, y
   if refresh then next_refresh = now + 0.5 end
   local hovered = R.JS_Window_FromPoint(x, y)
