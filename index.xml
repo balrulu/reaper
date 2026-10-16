@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<index version="1" name="BLT ReaScripts" commit="5972a93f1a62bfc8ee40bb39b1a7711aa2fe329c">
+<index version="1" name="BLT ReaScripts" commit="dfdaa424a5407abcbd29ece712463818b7f76697">
   <category name="BLT">
     <reapack name="BLT_SPATIAL_FIELD.jsfx" type="effect" desc="BLT SPATIAL FIELD">
       <version name="0.5.4" author="Balrulu" time="2026-10-05T05:08:58Z">
@@ -171,7 +171,6 @@ BLT SERIES ACTIONS]]></changelog>
 }
 ]]></description>
       </metadata>
-      
       <version name="0.5.26" author="Balrulu" time="2026-10-15T18:37:01Z">
         <changelog><![CDATA[BLT SERIES Beta TEST UPLOAD]]></changelog>
         <source main="main" file="../BLT_INTERVAL.lua">https://github.com/balrulu/reaper/raw/5972a93f1a62bfc8ee40bb39b1a7711aa2fe329c/BLT_ReaScripts/BLT_INTERVAL.lua</source>
@@ -300,11 +299,12 @@ BLT SERIES ACTIONS]]></changelog>
   </category>
   <category name="Extensions">
     <reapack name="BLT_EXTEND_MARQUEE_TO_MARKERS_REGIONS.ext" type="extension" desc="BLT EXTEND MARQUEE TO MARKERS / REGIONS">
-      <version name="0.2.15" author="Balrulu" time="2026-10-10T21:27:29Z">
+      
+      <version name="0.2.16" author="Balrulu" time="2026-10-16T11:11:38Z">
         <changelog><![CDATA[Initial public release]]></changelog>
-        <source platform="win64" file="reaper_blt_extend_marquee_to_markers_regions.dll">https://github.com/balrulu/reaper/raw/510f103ee47ff7148c1c9274d28782ef949b3ebc/Extensions/reaper_blt_extend_marquee_to_markers_regions.dll</source>
-        <source platform="darwin64" file="reaper_blt_extend_marquee_to_markers_regions.dylib">https://github.com/balrulu/reaper/raw/510f103ee47ff7148c1c9274d28782ef949b3ebc/Extensions/reaper_blt_extend_marquee_to_markers_regions.dylib</source>
-        <source platform="darwin-arm64" file="reaper_blt_extend_marquee_to_markers_regions.dylib">https://github.com/balrulu/reaper/raw/510f103ee47ff7148c1c9274d28782ef949b3ebc/Extensions/reaper_blt_extend_marquee_to_markers_regions.dylib</source>
+        <source platform="win64" file="reaper_blt_extend_marquee_to_markers_regions.dll">https://github.com/balrulu/reaper/raw/dfdaa424a5407abcbd29ece712463818b7f76697/Extensions/reaper_blt_extend_marquee_to_markers_regions.dll</source>
+        <source platform="darwin64" file="reaper_blt_extend_marquee_to_markers_regions.dylib">https://github.com/balrulu/reaper/raw/dfdaa424a5407abcbd29ece712463818b7f76697/Extensions/reaper_blt_extend_marquee_to_markers_regions.dylib</source>
+        <source platform="darwin-arm64" file="reaper_blt_extend_marquee_to_markers_regions.dylib">https://github.com/balrulu/reaper/raw/dfdaa424a5407abcbd29ece712463818b7f76697/Extensions/reaper_blt_extend_marquee_to_markers_regions.dylib</source>
       </version>
     </reapack>
   </category>
