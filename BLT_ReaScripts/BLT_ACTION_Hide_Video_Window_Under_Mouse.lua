@@ -1,10 +1,9 @@
 -- @description ACTION - Auto-hide video window under mouse (toggle)
--- @version 1.0.4
+-- @version 1.0.5
 -- @author Balrulu
 -- @provides
 --   . > ../
 -- @changelog
---   Suspend auto-hide while dragging/resizing with the left mouse button.
 --   BLT SERIES ACTIONS
 -- @about
 --   BLT SERIES Beta TEST UPLOAD
@@ -41,10 +40,12 @@ local function video_at(hwnd)
   local hovered, count = hwnd, 0
   for _ = 1, 32 do
     if hwnd == main then break end
-    if not hwnd or not R.JS_Window_IsWindow(hwnd) then return end
+    if not hwnd or hwnd == 0 or not R.JS_Window_IsWindow(hwnd) then return end
     count = count + 1
     parent_chain[count] = hwnd
-    hwnd = R.JS_Window_GetParent(hwnd) or R.JS_Window_GetRelated(hwnd, "OWNER")
+    local parent = R.JS_Window_GetParent(hwnd)
+    if parent == 0 or parent == hwnd then parent = nil end
+    hwnd = parent or R.JS_Window_GetRelated(hwnd, "OWNER")
   end
   if hwnd ~= main then return end
   for i = count, 1, -1 do
@@ -147,9 +148,8 @@ local function update(now)
   last_x, last_y = x, y
   if refresh then next_refresh = now + 0.5 end
   local hovered = R.JS_Window_FromPoint(x, y)
-  if hovered ~= last_hover or refresh then
-    video, last_hover = video_at(hovered), hovered
-  end
+  local checked = hovered ~= last_hover or refresh
+  if checked then video, last_hover = video_at(hovered), hovered end
   if not video or not R.JS_Window_IsVisible(video) then return end
   local ok, left, top, right, bottom = R.JS_Window_GetClientRect(video)
   if not ok then return end
@@ -157,7 +157,7 @@ local function update(now)
   if top > bottom then top, bottom = bottom, top end
   if left >= right or top >= bottom
       or x < left or x >= right or y < top or y >= bottom then return end
-  if not valid(video) then video = nil; return end
+  if not checked and not valid(video) then video = nil; return end
   if not main_can_show() then return end
   bounds = {left, top, right, bottom}
   hidden = true

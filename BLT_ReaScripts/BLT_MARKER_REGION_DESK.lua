@@ -1,5 +1,5 @@
 -- @description MARKER REGION DESK
--- @version 0.5.19
+-- @version 0.6.9
 -- @author Balrulu
 -- @provides
 --   . > ../
@@ -8,10 +8,9 @@
 -- @about
 --   BLT SERIES Beta TEST UPLOAD
 
--- BLT preset transfer limits 1.1.0. Embedded; no runtime dependency.
 local reaper=reaper
 do
--- BEGIN BLT NATIVE DIALOGS 1.0.0 (generated from _shared/BLT_NativeDialogs.lua)
+-- BEGIN BLT NATIVE DIALOGS 1.1.0 (generated from _shared/BLT_NativeDialogs.lua)
 local BLTNativeDialogs=(function()
  local M={}
  function M.install(api,view)
@@ -116,6 +115,8 @@ local BLTNativeDialogs=(function()
    local fn=api[name]
    if type(fn)=='function' then P[name]=function(...) return call(fn,...) end end
   end
+  -- Native actions may also display modal progress or error windows.
+  P.BLT_WithNativeDialog=call
   return P
  end
  return M
@@ -125,244 +126,1731 @@ end)()
 reaper=BLTNativeDialogs.install(reaper,gfx)
 end
 
--- BEGIN BLT RETINA 1.1.0 (generated from _shared/BLT_Retina.lua)
--- Layout and pointer coordinates stay in window points on macOS.
--- Drawing, font rasterization and generated image buffers use backing pixels.
-local gfx=(function(api,native)
- local osname=api.GetOS() or ''
- if not osname:match('OSX') and not osname:match('macOS') then return native end
- local G={mac=true}
- local backing=1
- local fonts,selected={},nil
- local faces={['Hiragino Sans']={'HiraginoSans-W4','HiraginoSans-W6'},
-  ['Helvetica Neue']={'HelveticaNeue-Medium','HelveticaNeue-Bold'},['Menlo']={'Menlo-Regular','Menlo-Bold'}}
- faces['Yu Gothic UI'],faces['Segoe UI'],faces.Consolas=faces['Hiragino Sans'],faces['Helvetica Neue'],faces.Menlo
- faces['sans-serif'],faces.monospace=faces['Helvetica Neue'],faces.Menlo
- local function font_style(face,flags)
-  local family=faces[face];if not family then return face,flags end
-  local bold,style,shift=false,0,0
-  while flags>0 do
-   local byte=flags&255;flags=flags>>8
-   if byte==98 or byte==66 then bold=true else style=style|(byte<<shift);shift=shift+8 end
-  end
-  return family[bold and 2 or 1],style
- end
- local function refresh_scale()
-  local dpi=tonumber(native.ext_retina) or 1
-  if dpi~=dpi or dpi<1 or dpi==math.huge then dpi=1 end
-  if dpi==backing then return end
-  backing=dpi
-  for slot,f in pairs(fonts) do native.setfont(slot,f.face,f.size*backing,f.flags) end
-  if selected then native.setfont(selected) end
- end
- function G.init(...)
-  local result=native.init(...);refresh_scale();return result
- end
- function G.getchar(...)
-  local result,unicode=native.getchar(...);refresh_scale();return result,unicode
- end
- function G.update(...)
-  local result=native.update(...);refresh_scale();return result
- end
- function G.setfont(slot,face,size,flags)
-  selected=slot
-  if face~=nil then
-   size,flags=size or 10,flags or 0
-   local current=fonts[slot]
-   if current and current.input==face and current.size==size and current.style==flags then return native.setfont(slot) end
-   local f=fonts[slot] or {};fonts[slot]=f
-   f.input,f.size,f.style=face,size,flags
-   f.face,f.flags=font_style(face,flags)
-   return native.setfont(slot,f.face,f.size*backing,f.flags)
-  end
-  return native.setfont(slot)
- end
- function G.measurestr(text)
-  local w,h=native.measurestr(text);return w/backing,h/backing
- end
- function G.drawstr(text,flags,right,bottom)
-  if flags==nil then return native.drawstr(text) end
-  return native.drawstr(text,flags,right and right*backing,bottom and bottom*backing)
- end
- function G.rect(x,y,w,h,filled)
-  return native.rect(x*backing,y*backing,w*backing,h*backing,filled)
- end
- function G.line(x,y,xx,yy,aa)
-  return native.line(x*backing,y*backing,xx*backing,yy*backing,aa)
- end
- function G.circle(x,y,r,filled,aa)
-  return native.circle(x*backing,y*backing,r*backing,filled,aa)
- end
- function G.arc(x,y,r,start_angle,end_angle,aa)
-  return native.arc(x*backing,y*backing,r*backing,start_angle,end_angle,aa)
- end
- function G.roundrect(x,y,w,h,r,aa)
-  return native.roundrect(x*backing,y*backing,w*backing,h*backing,r*backing,aa)
- end
- function G.triangle(x,y,xx,yy,xxx,yyy)
-  return native.triangle(x*backing,y*backing,xx*backing,yy*backing,xxx*backing,yyy*backing)
- end
- function G.gradrect(x,y,w,h,r,g,b,a,rx,gx,bx,ax,ry,gy,by,ay)
-  return native.gradrect(x*backing,y*backing,w*backing,h*backing,r,g,b,a,
-   (rx or 0)/backing,(gx or 0)/backing,(bx or 0)/backing,(ax or 0)/backing,
-   (ry or 0)/backing,(gy or 0)/backing,(by or 0)/backing,(ay or 0)/backing)
- end
- function G.setimgdim(image,w,h)
-  return native.setimgdim(image,w>0 and math.floor(w*backing+.5) or w,h>0 and math.floor(h*backing+.5) or h)
- end
- function G.getimgdim(image)
-  local w,h=native.getimgdim(image);return w/backing,h/backing
- end
- function G.blit(image,...)
-  local args=table.pack(...)
-  for i=3,args.n do if args[i]~=nil then args[i]=args[i]*backing end end
-  return native.blit(image,table.unpack(args,1,args.n))
- end
- -- init/dock/clienttoscreen/screentoclient use native window points.
- -- showmenu reads native x/y and handles Retina conversion in REAPER.
- return setmetatable(G,{
-  __index=function(_,key)
-   local value=native[key]
-   if key=='w' or key=='h' or key=='x' or key=='y' or key=='mouse_x' or key=='mouse_y' or key=='texth' then
-    return value and value/backing
-   end
-   return value
-  end,
-  __newindex=function(_,key,value)
-   if key=='x' or key=='y' then native[key]=value*backing else native[key]=value end
-  end})
-end)(reaper,gfx)
--- END BLT RETINA
+local BLTPresetLimits={bytes=16777216,stringBytes=2097152,nodes=262144,entries=8192}
+function BLTPresetLimits.show(english)
+ reaper.MB(english and 'Preset capacity limit exceeded. Export presets individually instead of as a bundle.' or '容量上限オーバーです。一括ではなく個別に保存してください。','BLT PRESET',0)
+end
 
--- BEGIN BLT WINDOW PLACEMENT 1.0.0 (generated from _shared/BLT_WindowPlacement.lua)
-local BLTWindowPlacement=(function()
+local BLT={}
+
+BLT.Controls=(function()
 local M={}
-local function finite(v) return type(v)=='number' and v==v and math.abs(v)<math.huge end
-local function rectangle(l,t,r,b,mac)
- if not (finite(l) and finite(t) and finite(r) and finite(b)) or r<=l or t==b then return end
- if mac then t,b=-math.max(t,b),-math.min(t,b) else t,b=math.min(t,b),math.max(t,b) end
- return {l,t,r,b}
+M.compactScale=458/904
+M.palette={bg={.018,.030,.055},panel={.040,.068,.110},field={.018,.040,.080},
+ edge={.145,.285,.445},ice={.650,.895,1},accent={.120,.490,.980},
+ text={.955,.980,1},muted={.690,.780,.875},disabled={.43,.46,.51},red={1,.18,.26}}
+function M.number(raw,previous,lo,hi,step)
+ local n=tonumber(raw)
+ if not n or n~=n or math.abs(n)==math.huge then return previous,true end
+ local v=math.max(lo,math.min(hi,n))
+ if step and step>0 then v=math.max(lo,math.min(hi,lo+math.floor((v-lo)/step+.5)*step)) end
+ return v,math.abs(v-n)>1e-9
 end
-function M.plan(rect,area,barHeight)
- local l,t,r,b=table.unpack(rect);local al,at,ar,ab=table.unpack(area)
- local w,h=r-l,b-t;local grip=math.min(120,w,ar-al);local bar=math.min(barHeight or 26,h,ab-at)
- if l>=al and l+grip<=ar and t>=at and t+bar<=ab then return l,t,false end
- local mx=math.min(8,math.max(0,(ar-al-w)*.5));local my=math.min(8,math.max(0,(ab-at-h)*.5))
- local x=math.max(al+mx,math.min(l,ar-w-mx));local y=math.max(at+my,math.min(t,ab-h-my))
- return math.floor(x+.5),math.floor(y+.5),true
-end
-function M.recover(api,view,hwnd)
- if not hwnd or hwnd==0 then return nil end
- for _,name in ipairs({'JS_Window_GetRect','JS_Window_SetPosition','my_getViewport'}) do
-  if type(api[name])~='function' then return false end
+function M.new(g,clock,palette)
+ if not palette then
+  palette={};for key,c in pairs(M.palette) do palette[key]={c[1],c[2],c[3]} end
  end
- if type(api.JS_Window_IsWindow)=='function' then local valid=api.JS_Window_IsWindow(hwnd);if not valid or valid==0 then return nil end end
- if type(api.JS_Window_IsVisible)=='function' then local visible=api.JS_Window_IsVisible(hwnd);if not visible or visible==0 then return nil end end
- if type(api.JS_Window_GetLong)=='function' then
-  local style=api.JS_Window_GetLong(hwnd,'STYLE')
-  if finite(style) and (math.floor(style)&0x21000000)~=0 then return nil end
+ local U={C=palette,states={},order={},scale=1,ox=0,oy=0}
+ local min,max,sin,pi,floor,exp=math.min,math.max,math.sin,math.pi,math.floor,math.exp
+ local empty={}
+ local function approach(value,target,factor,epsilon)
+  if value==target then return value end
+  value=value+(target-value)*factor
+  return math.abs(target-value)<epsilon and target or value
  end
- local ok,l,t,r,b=api.JS_Window_GetRect(hwnd)
- if not ok or ok==0 then return nil end
- local osname=api.GetOS() or '';local mac=osname:match('OSX') or osname:match('macOS')
- local rect=rectangle(l,t,r,b,mac);if not rect then return nil end
- local ql,qt,qr,qb=rect[1],rect[2],rect[1]+math.min(120,rect[3]-rect[1]),rect[2]+math.min(M.barHeight or 26,rect[4]-rect[2])
- if mac then qt,qb=-qb,-qt end
- local al,at,ar,ab=api.my_getViewport(0,0,0,0,math.floor(ql),math.floor(qt),math.ceil(qr),math.ceil(qb),true)
- local area=rectangle(al,at,ar,ab,mac);if not area then return nil end
- local x,y,move=M.plan(rect,area,M.barHeight)
- if not move then return false end
- local nativeY=mac and -y-(rect[4]-rect[2]) or y
- local moved=api.JS_Window_SetPosition(hwnd,x,nativeY,0,0,'','NOSIZE,NOZORDER,NOACTIVATE')
- if moved==false or moved==0 then return nil end
- -- Confirm the move before changing saved positions or in-memory float state.
- local valid,nl,nt,nr,nb=api.JS_Window_GetRect(hwnd)
- local placed=valid and valid~=0 and rectangle(nl,nt,nr,nb,mac)
- if not placed or math.abs(placed[1]-x)>1 or math.abs(placed[2]-y)>1 then return nil end
- if M.section and type(api.SetExtState)=='function' then
-  local dock,wx,wy=view.dock(-1,0,0,0,0)
-  if (dock&1)==0 and finite(wx) and finite(wy) then
-   api.SetExtState(M.section,'window_x',tostring(wx),true)
-   api.SetExtState(M.section,'window_y',tostring(wy),true)
+ local mixed={}
+ local function fade(a)
+  local t=min(1,a/.12)
+  return t*t*(3-2*t)
+ end
+ local function blend(from,to,t,fromAlpha,toAlpha)
+  if t==0 then return from,fromAlpha or 1 end
+  if t==1 then return to,toAlpha or 1 end
+  local a,b=(fromAlpha or 1)*(1-t),(toAlpha or 1)*t
+  local alpha=a+b
+  for i=1,3 do mixed[i]=(from[i]*a+to[i]*b)/alpha end
+  return mixed,alpha
+ end
+ local points={{},{},{},{},{},{}}
+ local arrow={{},{},{},{},{},{},{}}
+ local arrowShape={{-1,-8},{1,-8},{1,-1},{6,-1},{0,5},{-6,-1},{-1,-1}}
+ local cornerWeights={1,.5625,.25,.0625,0}
+ local goldEdges={1,.85,.35,.24,.45,.90}
+ local gold={field={.025,.027,.030},edge={.38,.33,.23},ice={1,.92,.74},accent={.88,.66,.32},text={.98,.94,.84},rim={.94,.79,.51},gilded=true}
+ local chaos={field={.038,.014,.068},edge={.34,.14,.48},ice={.87,.69,1},accent={.62,.23,.94},text={.87,.69,1},ember={.92,.27,.65},spark={.97,.93,1}}
+ U.tones={gold=gold,chaos=chaos}
+ local faceCache,glowCache,colorCache={},{},{}
+ local idleLights={}
+ for band=0,4 do idleLights[band+1]=exp(-((band/4-.18)/.46)^2) end
+ local function surfaceColors(C,h,k,hover,selected,pressed,hotspot,field,themed)
+  if hotspot~=.18 or h>256 or (hover~=0 and hover~=1 and hover~=.4 and hover~=.85 and hover~=.24 and hover~=.82 and hover~=.12) then return end
+  selected,pressed=not not selected,not not pressed
+  local accent,ice=C.accent,C.ice
+  for _,entry in ipairs(colorCache) do
+   if entry.palette==C and entry.h==h and entry.k==k and entry.hover==hover and entry.selected==selected and entry.pressed==pressed and entry.themed==themed then
+    local signature=entry.signature
+    if signature[1]==field[1] and signature[2]==field[2] and signature[3]==field[3] and
+     signature[4]==accent[1] and signature[5]==accent[2] and signature[6]==accent[3] and
+     signature[7]==ice[1] and signature[8]==ice[2] and signature[9]==ice[3] and entry.gilded==(C.gilded==true) then return entry end
+   end
+  end
+  colorCache.next=(colorCache.next or 0)%16+1
+  local entry=colorCache[colorCache.next] or {colors={},packed={},signature={}}
+  colorCache[colorCache.next]=entry
+  entry.palette,entry.h,entry.k,entry.hover,entry.selected,entry.pressed,entry.gilded=C,h,k,hover,selected,pressed,C.gilded==true
+  entry.themed=themed
+  local signature=entry.signature
+  for i=1,3 do signature[i],signature[i+3],signature[i+6]=field[i],accent[i],ice[i] end
+  return entry,true
+ end
+ local function rows(cache,h,k,pressed)
+  for _,entry in ipairs(cache) do
+   if entry.h==h and entry.k==k and entry.pressed==pressed then return entry end
+  end
+  local entry={h=h,k=k,pressed=pressed}
+  if k then
+   for row=0,floor(h)-1 do
+    local v=row/max(1,h-1)
+    entry[row+1]={max(0,k-(h-1-row)),max(0,k-row),1-.08*exp(-((v-.72)/.30)^2),
+     .18+.82*(1-v)^1.5,exp(-((v-.04)/.43)^2),v,.72*(1-v)^2}
+   end
+  else
+   for row=-14,floor(h)+13 do
+    local edgeFade=min(1,(row+14)/12,(h+13-row)/12)
+    entry[row+15]=exp(-((row-h*pressed)/(h*.35+12))^2)*max(0,edgeFade)
+   end
+  end
+  cache.next=(cache.next or 0)%8+1;cache[cache.next]=entry
+  return entry
+ end
+ function U:state(id) self.states[id]=self.states[id] or {};return self.states[id] end
+ function U:rect(x,y,w,h,c,a,fill)
+  g.set(c[1],c[2],c[3],a or 1);g.rect(self.ox+x*self.scale,self.oy+y*self.scale,w*self.scale,h*self.scale,fill==false and 0 or 1)
+ end
+ function U:line(x,y,xx,yy,c,a,width)
+  g.set(c[1],c[2],c[3],a or 1);g.line(self.ox+x*self.scale,self.oy+y*self.scale,self.ox+xx*self.scale,self.oy+yy*self.scale,1,width and width*self.scale or nil)
+ end
+ function U:disc(x,y,r,c,a)
+  g.set(c[1],c[2],c[3],a or 1);g.circle(self.ox+x*self.scale,self.oy+y*self.scale,r*self.scale,1,1)
+ end
+ function U:glowParticle(x,y,r,a,glint)
+  local C=self.C
+  self:disc(x,y,r+6,C.accent,.008*a)
+  self:disc(x,y,r+4,C.accent,.030*a)
+  self:disc(x,y,r+2.2,C.ice,.10*a)
+  self:disc(x,y,r+(glint and .35 or 0),glint and C.text or C.ice,(glint and .65 or .74)*a)
+  if glint then
+   self:rect(x-.35,y-2.1,.7,4.2,C.ice,.33*a);self:rect(x-2.1,y-.35,4.2,.7,C.ice,.26*a)
   end
  end
- if M.onMoved then pcall(M.onMoved,hwnd) end
- return true
-end
-function M.install(api,view)
- local init,dock,getchar,quit=view.init,view.dock,view.getchar,view.quit
- local state={pending=false,tries=0,next_at=0,title=nil,docked=nil}
- M.state=state
- local function arm() state.pending=true;state.tries=0;state.next_at=0 end
- local function observe(value)
-  if type(value)~='number' then return end
-  local isDocked=(value&1)~=0
-  if state.docked~=nil and state.docked and not isDocked then arm() end
-  state.docked=isDocked
+ function U:text(t,x,y,w,h,size,c,center,bold,face,opticalCenter)
+  local px=max(self.minFontSize or 8,floor(size*self.scale+.5));local height=max(h*self.scale,px)
+  g.setfont(1,face or self.font or 'Yu Gothic UI',px,bold and 98 or 0)
+  g.set(c[1],c[2],c[3],1);g.x=self.ox+x*self.scale;g.y=self.oy+y*self.scale+(h*self.scale-height)/2
+  g.drawstr(tostring(t),center=='right' and 6 or center and 5 or 4,self.ox+(x+w)*self.scale,g.y+height,opticalCenter)
  end
- view.init=function(title,...)
-  local result=table.pack(init(title,...))
-  if type(title)=='string' and title~='' then state.title=title end
-  arm();return table.unpack(result,1,result.n)
- end
- view.dock=function(value,...)
-  local result=table.pack(dock(value,...))
-  observe(value and value>=0 and value or result[1])
-  return table.unpack(result,1,result.n)
- end
- view.getchar=function(...)
-  if state.pending and api.time_precise()>=state.next_at then
-   state.pending=false;state.tries=state.tries+1
-   local ok,result=pcall(function()
-    local actual=dock(-1)
-    if type(actual)=='number' then state.docked=(actual&1)~=0 end
-    if state.docked then return false end
-    if not state.title or type(api.JS_Window_Find)~='function' then return false end
-    return M.recover(api,view,api.JS_Window_Find(state.title,true))
-   end)
-   if (not ok or result==nil) and state.tries<3 then state.pending=true;state.next_at=api.time_precise()+.05 end
+ function U:inside(x,y,w,h) return self.mx>=x and self.mx<x+w and self.my>=y and self.my<y+h end
+ function U:begin(scale,ox,oy,key)
+  self.scale,self.ox,self.oy=scale or 1,ox or 0,oy or 0
+  local now=clock();self.dt=min(.1,max(0,now-(self.now or now)));self.now=now
+  self.hoverStep,self.lightStep,self.slideStep=min(1,self.dt*14),min(1,self.dt*12),min(1,self.dt*16)
+  self.frameSerial=(self.frameSerial or 0)+1
+  self.mx=(g.mouse_x-self.ox)/self.scale;self.my=(g.mouse_y-self.oy)/self.scale
+  self.speed=min(1,((self.mx-(self.lastX or self.mx))^2+(self.my-(self.lastY or self.my))^2)^.5/3)
+  self.lastX,self.lastY=self.mx,self.my
+  local down=(g.mouse_cap&1)==1
+  self.pressed=down and not self.down;self.released=not down and self.down;self.down=down
+  self.key=key or 0;self.wheel=g.mouse_wheel or 0;g.mouse_wheel=0
+  if self.editor and self.editor.edit then self.key=0;self.wheel=0 end
+  if self.key==9 and #self.order>0 then
+   local i=0;for j,id in ipairs(self.order) do if id==self.focus then i=j end end
+   local dir=(g.mouse_cap&8)~=0 and -1 or 1
+   if i==0 and dir<0 then i=1 end
+   self.focus=self.order[(i-1+dir)%#self.order+1]
   end
-  return getchar(...)
+  for i=#self.order,1,-1 do self.order[i]=nil end;self.hit=false
  end
- view.quit=function(...) state.pending=false;state.title=nil;return quit(...) end
+ function U:finish()
+  if self.pressed and not self.hit then self.focus=nil end
+  if self.editor then self.editor:frame() end
+  if self.released then self.capture=nil end
+ end
+ function U:interaction(id,x,y,w,h,enabled)
+  enabled=enabled~=false and not self.blocked and not (self.editor and self.editor.edit);local s=self:state(id);local hot=enabled and self:inside(x,y,w,h)
+  if enabled then self.order[#self.order+1]=id end
+  if hot and self.pressed then self.capture=id;self.focus=id;self.hit=true end
+  local held=enabled and self.capture==id and self.down
+  local click=enabled and ((self.capture==id and self.released and hot) or (self.focus==id and (self.key==13 or self.key==32)))
+  local targetX=hot and max(.12,min(.88,(self.mx-x)/w)) or .18
+  s.lightX=approach(s.lightX or targetX,targetX,self.lightStep,.0001)
+  s.hover=approach(s.hover or 0,hot and 1 or 0,self.hoverStep,.0001)
+  return click,hot,held,s
+ end
+ function U:shape(x,y,w,h,k,c,alpha,fill,weights)
+  alpha=alpha or 1
+  local right,bottom=x+w-1,y+h-1
+  k=min(k,math.floor((h-1)/3),math.floor((w-1)/3))
+  if fill then
+   if g.polygon then
+    local scale,ox,oy=self.scale,self.ox,self.oy
+    points[1][1],points[1][2]=ox+x*scale,oy+y*scale
+    points[2][1],points[2][2]=ox+(right-k)*scale,oy+y*scale
+    points[3][1],points[3][2]=ox+right*scale,oy+(y+k)*scale
+    points[4][1],points[4][2]=ox+right*scale,oy+bottom*scale
+    points[5][1],points[5][2]=ox+(x+k)*scale,oy+bottom*scale
+    points[6][1],points[6][2]=ox+x*scale,oy+(bottom-k)*scale
+    g.set(c[1],c[2],c[3],alpha or 1)
+    g.polygon(points)
+    return
+   end
+   for row=0,math.floor(h)-1 do
+    local leftCut=max(0,k-(h-1-row));local rightCut=max(0,k-row)
+    self:rect(x+leftCut,y+row,w-leftCut-rightCut,1,c,alpha)
+   end
+  else
+   self:line(x,y,right-k,y,c,alpha*(weights and weights[1] or 1));self:line(right-k,y,right,y+k,c,alpha*(weights and weights[2] or 1))
+   self:line(right,y+k,right,bottom,c,alpha*(weights and weights[3] or 1));self:line(right,bottom,x+k,bottom,c,alpha*(weights and weights[4] or 1))
+   self:line(x+k,bottom,x,bottom-k,c,alpha*(weights and weights[5] or 1));self:line(x,bottom-k,x,y,c,alpha*(weights and weights[6] or 1))
+  end
+ end
+ function U:surface(x,y,w,h,k,hover,selected,pressed,lightX,palette,background)
+  local C=palette or self.C;local hotspot=lightX or .18;local themed=self.themeEnabled==true
+  local field=themed and background or C.field
+  local cached=g.beginGradient and (hover==0 or hover==1 or hover==.4 or hover==.85 or hover==.24 or hover==.82 or hover==.12)
+  if cached and g.beginGradient(themed and 'themeSurface' or 'surface',self.ox+x*self.scale,self.oy+y*self.scale,w*self.scale,h*self.scale,
+   self.scale,h,k,hover,hotspot,not not selected,not not pressed,C.gilded==true,
+   field[1],field[2],field[3],C.accent[1],C.accent[2],C.accent[3],C.ice[1],C.ice[2],C.ice[3]) then return end
+  local bodyBase=.012+.18*hover+(selected and .14 or 0)
+  local reflectionBase=.003+.48*hover+.14*(selected and 1 or 0)
+  if pressed then bodyBase=bodyBase*.72;reflectionBase=reflectionBase*.64 end
+  local lights=idleLights
+  if hotspot~=.18 then
+   lights=self.lights or {};self.lights=lights
+   if self.lightSource~=hotspot then
+    for band=0,4 do lights[band+1]=exp(-((band/4-hotspot)/.46)^2) end
+    self.lightSource=hotspot
+   end
+  end
+  local geometry=rows(faceCache,h,k)
+  local entry,rebuild=surfaceColors(C,h,k,hover,selected,pressed,hotspot,field,themed)
+  local colors=entry and entry.colors
+  local packed=entry and g.gradcolors and g.packColor and entry.packed
+  local gilded=C.gilded==true
+  local scale,ox,oy=self.scale,self.ox,self.oy
+  local fr,fg,fb=field[1],field[2],field[3]
+  local ar,ag,ab=C.accent[1],C.accent[2],C.accent[3]
+  local ir,ig,ib=C.ice[1],C.ice[2],C.ice[3]
+  for row=0,floor(h)-1 do
+   local curve=geometry[row+1];local l=curve[1];local rw=w-l-curve[2]
+   local r,gc,b,previous
+   for band=0,4 do
+    local index=row*15+band*3+1
+    local nr,ng,nb
+    if entry and not rebuild then nr,ng,nb=colors[index],colors[index+1],colors[index+2]
+    else
+     local light=lights[band+1];local u=band/4
+     local body=bodyBase*(.12+.88*light)*curve[4]*curve[3]
+     local reflection=reflectionBase*curve[5]*(.18+.82*light)*(1-.68*u)
+     reflection=reflection*(1+cornerWeights[band+1]*curve[7])
+     if gilded then body=body*.55;reflection=reflection*.68 end
+     if themed then
+      local shade=.94+.06*(1-u)*(1-curve[6])
+      local keep=max(0,1-body-reflection);local weight=1/max(1,body+reflection)
+      nr,ng,nb=min(1,fr*shade*keep+(ar*body+ir*reflection)*weight),min(1,fg*shade*keep+(ag*body+ig*reflection)*weight),min(1,fb*shade*keep+(ab*body+ib*reflection)*weight)
+     else
+      local shade=.32+.68*(1-u)*(1-curve[6])
+      nr,ng,nb=min(1,fr*shade+ar*body+ir*reflection),min(1,fg*shade+ag*body+ig*reflection),min(1,fb*shade+ab*body+ib*reflection)
+     end
+     if colors then colors[index],colors[index+1],colors[index+2]=nr,ng,nb end
+    end
+    local encoded
+    if packed then
+     local at=row*5+band+1
+     if rebuild then packed[at]=g.packColor(nr,ng,nb,1) end
+     encoded=packed[at]
+    end
+    if band>0 then
+     local bx=x+l+rw*((band-1)/4);local width=rw/4
+     if packed then g.gradcolors(ox+bx*scale,oy+(y+row)*scale,width*scale,scale,previous,encoded)
+     else g.gradrect(ox+bx*scale,oy+(y+row)*scale,width*scale,scale,
+      r,gc,b,1,(nr-r)/(width*scale),(ng-gc)/(width*scale),(nb-b)/(width*scale),0) end
+    end
+    r,gc,b,previous=nr,ng,nb,encoded
+   end
+  end
+  if cached then g.endGradient() end
+ end
+ function U:bloom(x,y,w,h,strength,lightX,lightY,palette)
+  if strength<=.005 then return end
+  local hotspot=lightX or .18;local sourceY=lightY or .08
+  local C=palette or self.C
+  local mix=C.gilded==true and .55 or .80
+  local r,gc,b=C.ice[1]*mix+C.accent[1]*(1-mix),C.ice[2]*mix+C.accent[2]*(1-mix),C.ice[3]*mix+C.accent[3]*(1-mix)
+  local cached=g.beginGradient and (strength==1 or strength==.48 or strength==.30 or strength==.22 or strength==.12)
+  if cached and g.beginGradient('bloom',self.ox+x*self.scale,self.oy+y*self.scale,w*self.scale,h*self.scale,
+   self.scale,h,strength,hotspot,sourceY,r,gc,b) then return end
+  local geometry=rows(glowCache,h,nil,sourceY)
+  local spans=self.spans or {};self.spans=spans
+  local length=w+28;local width=length/8;local scale,ox,oy=self.scale,self.ox,self.oy
+  for band=0,7 do
+   local bx=x-14+length*band/8;local span=spans[band+1] or {};spans[band+1]=span;span[1]=ox+bx*scale
+   for side=0,1 do
+    local u=((side==0 and bx or bx+width)-x)/w
+    local sideFade=max(0,min(1,(u*w+14)/12,(w+14-u*w)/12))
+    span[side*2+2]=exp(-((u-hotspot)/.40)^2);span[side*2+3]=sideFade
+   end
+  end
+  for row=-14,floor(h)+13 do
+   local base=.34*strength*geometry[row+15]
+   for band=0,7 do
+    local span=spans[band+1];local a=base*span[2]*span[3];local alpha=base*span[4]*span[5]
+    if max(a,alpha)>=.5/255 then
+     g.gradrect(span[1],oy+(y+row)*scale,width*scale,scale,r,gc,b,a,0,0,0,(alpha-a)/(width*scale))
+    end
+   end
+  end
+  if cached then g.endGradient() end
+ end
+ function U:frame(x,y,w,h,opt)
+  opt=opt or empty;local C=opt.palette or self.C;local disabled=opt.disabled;local a=opt.hot or 0
+  local k=min(10,math.floor(h*.21))
+  if not disabled and opt.glow~=false then
+   local strength=max(a,opt.selected and .48 or 0,opt.focus and .30 or 0)
+   self:bloom(x,y,w,h,strength,opt.lightX,.08,C)
+  end
+  if disabled then self:shape(x,y,w,h,k,self.C.field,1,true)
+  else self:surface(x,y,w,h,k,a,opt.selected,opt.pressed,opt.lightX,C,opt.panel and C.panel) end
+  local color,alpha=C.rim or C.ice,.26+.18*a
+  if disabled then color,alpha=self.C.disabled,.27
+  elseif opt.selected or opt.focus then alpha=.65
+  elseif a<.12 then color,alpha=blend(C.edge,color,fade(a),.50,alpha) end
+  self:shape(x,y,w,h,k,color,alpha,false,not disabled and C.gilded==true and goldEdges or nil)
+ end
+ function U:led(x,y,w,h,placement,on,enabled,palette,scale)
+  local C=palette or self.C;local color=enabled==false and self.C.disabled or (on and C.text or C.edge)
+  local lx,ly,lw,lh;scale=scale or 1
+  if placement=='top' then lw=min(30*scale,w*.24);lh=3*scale;lx=x+(w-lw)/2;ly=y+3*scale
+  else lw=3*scale;lh=min(18*scale,h-14*scale);lx=x+7*scale;ly=y+(h-lh)/2 end
+  self:rect(lx-scale,ly-scale,lw+2*scale,lh+2*scale,self.C.bg,1)
+  if on and enabled~=false then
+   self:rect(lx-4*scale,ly-4*scale,lw+8*scale,lh+8*scale,C.accent,.12)
+   self:rect(lx-2*scale,ly-2*scale,lw+4*scale,lh+4*scale,C.ice,.22)
+  end
+  self:rect(lx,ly,lw,lh,color,on and enabled~=false and 1 or .32)
+ end
+ function U:attention(id,enabled,low,high,speed,linear)
+  local states=self.attentionStates
+  if not enabled then if states then states[id]=nil end;return end
+  if not states then states={};self.attentionStates=states end
+  local s=states[id]
+  local now=self.now;speed=speed or 2.5
+  if not s then s={phase=(now*speed)%(2*pi),time=now};states[id]=s end
+  local active=self.focused;if active==nil then active=self.active~=false end
+  local phase=s.phase+max(0,now-s.time)*speed
+  if s.active==false and s.stop then phase=min(phase,s.stop)end
+  if not active then
+   if s.active~=false then
+    s.stop=pi/2+(floor((phase-pi/2)/(2*pi))+2)*2*pi
+   end
+   phase=min(phase,s.stop)
+  else s.stop=nil end
+  s.phase,s.time,s.active,s.seen=phase,now,active,self.frameSerial
+  local v=s.stop and phase==s.stop and 1 or .5+.5*sin(phase)
+  s.level=(low or .08)+((high or .90)-(low or .08))*(linear and v or v*v)
+  return s.level
+ end
+ function U:attentionAnimating()
+  if not self.attentionStates then return false end
+  for id,s in pairs(self.attentionStates)do
+   if s.seen~=self.frameSerial then self.attentionStates[id]=nil
+   elseif s.active or s.stop and s.phase<s.stop then return true end
+  end
+  return false
+ end
+ function U:button(id,label,x,y,w,h,opt)
+  opt=opt or empty;local enabled=opt.enabled~=false
+  local trailing=opt.trailing
+  local slot=trailing=='color' and (opt.colorSize or min(24,h-12))+20 or (trailing=='menu' and 30 or (trailing=='value' and 80 or 0))
+  local click,_,held,s=self:interaction(id,x,y,w-(trailing=='color' and slot or 0),h,enabled)
+  local colorClick,colorHot,colorHeld
+  if trailing=='color' then
+   s.colorID=s.colorID or id..':color'
+   colorClick,colorHot,colorHeld=self:interaction(s.colorID,x+w-slot,y,slot,h,enabled)
+  end
+  held=held or opt.preview=='pressed';local a=(opt.preview=='hover' or held) and 1 or s.hover
+  local attention=self:attention(id,enabled and opt.attention)
+  if attention then a=max(a,attention)end
+  local frame=s.frame or {};s.frame=frame
+  frame.disabled,frame.hot,frame.pressed,frame.selected=not enabled,a,held,opt.selected
+  frame.palette=nil
+  frame.focus,frame.glow,frame.lightX=(self.focus==id or (s.colorID and self.focus==s.colorID)) and enabled,opt.glow,s.lightX
+  if opt.variant=='clear' then
+   local C=self.C;local k=min(4,floor(h*.12))
+   if enabled then
+    self:bloom(x,y,w,h,.22+.50*a,s.lightX,.08,C)
+    self:surface(x,y,w,h,k,.24+.58*a,false,held,s.lightX,C)
+   else self:shape(x,y,w,h,k,C.field,1,true) end
+   self:shape(x,y,w,h,k,enabled and C.ice or C.disabled,enabled and (.58+.30*a) or .24,false)
+   if enabled then self:line(x+1,y,x+w-1-k,y,C.ice,.70+.30*a,2) end
+  else self:frame(x,y,w,h,frame) end
+  local ledScale=opt.ledScale or 1
+  if opt.led then self:led(x,y,w,h,opt.led,opt.selected,enabled,nil,ledScale) end
+  local C=self.C;local pad=opt.leading and (opt.leadingWidth or 28) or (opt.led=='left' and 12+10*(ledScale-1) or 0)
+  local accent=enabled and (not self.themeEnabled and opt.accent or C.ice) or C.disabled
+  if opt.leading=='insert' then
+   local cx,cy=x+(opt.leadingInset or 20),y+h/2+(held and 1 or 0)
+   self:insertIcon(cx,cy,h,accent,enabled,opt.leadingScale)
+  end
+  local labelColor=not enabled and C.disabled or C.text
+  if enabled and opt.led and not opt.selected then labelColor=blend(C.muted,C.text,fade(a)) end
+  local ty=y+(held and 1 or 0)
+  local inset=opt.labelInset or 14
+  if opt.secondaryText then
+   self:text(opt.secondaryText,x+inset+pad,ty+(opt.captionY or 3),max(0,w-2*inset-pad-slot),opt.captionHeight or 12,opt.captionSize or 9,C.muted,opt.captionAlign or opt.center~=false,false,opt.captionFace)
+   ty=ty+(opt.labelY or h*.36)
+  end
+  local align=opt.center~=false and not opt.leading and trailing~='value'
+  if opt.labelAlign then align=opt.labelAlign=='center' or opt.labelAlign=='right' and 'right' end
+  self:text(label,x+inset+pad,ty,max(0,w-2*inset-pad-slot),opt.labelHeight or h,opt.size or 14,labelColor,align,opt.bold)
+  if trailing=='color' then
+   local size=slot-20;local xx,yy=x+w-slot+8,y+(h-size)/2+(colorHeld and 1 or 0)
+   self:rect(xx-2,yy-2,size+4,size+4,C.bg,1)
+   self:rect(xx,yy,size,size,opt.color or C.accent,enabled and 1 or .25)
+   self:rect(xx-2,yy-2,size+4,size+4,colorHot and C.ice or C.edge,enabled and .7 or .25,false)
+  elseif trailing=='menu' then
+   local cx,cy=x+w-18,y+h/2
+   self:line(cx-4,cy-2,cx,cy+2,accent,.8);self:line(cx,cy+2,cx+4,cy-2,accent,.8)
+  elseif trailing=='value' then self:text(opt.value or '',x+w-slot,y,slot-14,h,opt.valueSize or 11,accent,true) end
+  return click,colorClick
+ end
+ function U:insertIcon(cx,cy,h,c,enabled,scale)
+  local unit=scale or min(1,h/32);local alpha=enabled and 1 or .3
+  if g.polygon then
+   local ox,oy,scale=self.ox,self.oy,self.scale
+   for i,v in ipairs(arrowShape) do arrow[i][1],arrow[i][2]=ox+(cx+v[1]*unit)*scale,oy+(cy+v[2]*unit)*scale end
+   g.set(c[1],c[2],c[3],alpha);g.polygon(arrow,true)
+  else
+   self:rect(cx-unit,cy-8*unit,2*unit,7*unit,c,alpha)
+   for row=0,5 do self:rect(cx-(6-row)*unit,cy+(row-1)*unit,(12-row*2)*unit,unit,c,alpha) end
+  end
+  self:rect(cx-6*unit,cy+8*unit,12*unit,2*unit,c,alpha)
+ end
+ function U:toggleWidth(id,label,w,h,opt)
+  opt=opt or empty;local s=self:state(id)
+  local unit=opt.switchScale or 1;local sw=min(32*unit,w*.25)
+  local offset=opt.labelOffset or sw+24*unit
+  local text=tostring(opt.hitLabel or label)
+  local size=max(self.minFontSize or 8,floor((opt.size or 13)*self.scale+.5))
+  local face=opt.face or self.font or 'Yu Gothic UI';local bold=opt.bold and 98 or 0
+  local cache=s.toggleMeasure
+  if not cache or cache.text~=text or cache.size~=size or cache.face~=face or cache.bold~=bold or cache.scale~=self.scale or cache.dpi~=g.ext_retina then
+   g.setfont(1,face,size,bold)
+   cache={text=text,size=size,face=face,bold=bold,scale=self.scale,dpi=g.ext_retina,width=g.measurestr(text)/self.scale}
+   s.toggleMeasure=cache
+  end
+  if opt.showState~=false and not cache.stateWidth then
+   local stateSize=max(self.minFontSize or 8,floor(10*self.scale+.5))
+   g.setfont(1,self.font or 'Yu Gothic UI',stateSize,0);cache.stateWidth=g.measurestr('OFF')/self.scale
+  end
+  local room=max(0,w-offset-5*unit-(opt.showState==false and 0 or 10*unit+cache.stateWidth))
+  s.toggleLabelWidth=min(room,cache.width);s.toggleLabelX=offset
+  local right=max(12*unit+sw,offset+s.toggleLabelWidth)
+  if opt.showState~=false then s.toggleStateX=right+10*unit;s.toggleStateWidth=cache.stateWidth;right=s.toggleStateX+s.toggleStateWidth end
+  s.toggleWidth=min(w,opt.hitWidth or right+5*unit)
+  return s.toggleWidth
+ end
+ function U:toggleColor(value,enabled)
+  if enabled==false then return self.C.disabled end
+  return value and self.C.text or blend(self.C.disabled,self.C.muted,.45)
+ end
+ function U:toggle(id,label,value,x,y,w,h,enabled,opt)
+  opt=opt or empty
+  local hitWidth=self:toggleWidth(id,label,w,h,opt)
+  local click,_,_,s=self:interaction(id,x,y,hitWidth,h,enabled)
+  if click then value=not value end
+  if s.slide==nil then s.slide=value and 1 or 0 end
+  local target=value and 1 or 0
+  s.slide=approach(s.slide,target,self.slideStep,1e-12)
+  local C=self.C;local c=enabled==false and C.disabled or C.ice
+  local background=opt.background~=false;local unit=opt.switchScale or 1
+  if background then
+   self:rect(x,y,w,h,C.panel,enabled==false and .3 or .65)
+   if self.focus==id and enabled~=false then self:rect(x,y,w,h,C.accent,.10) end
+  end
+  local sw=min(32*unit,w*.25);local sx=x+12*unit;local cy=y+h/2
+  local radius=min(6.5*unit,h*.19)
+  local thumb=sx+radius+(sw-2*radius)*s.slide
+  local railH=max(1.5*unit,1/(self.scale*(g.ext_retina or 1)));local railY=cy-railH/2
+  self:rect(sx,railY,sw,railH,enabled==false and C.disabled or (background and C.edge or C.muted),enabled==false and .28 or (background and .85 or .55))
+  if s.slide>.005 and enabled~=false then
+   self:rect(sx,railY,thumb-sx,railH,C.ice,.95*s.slide)
+   self:disc(thumb,cy,radius+3*unit,C.accent,.11*s.slide)
+   self:disc(thumb,cy,radius+1.7*unit,C.ice,.10*s.slide)
+  end
+  if not background and self.focus==id and enabled~=false then self:disc(thumb,cy,radius+3*unit,C.accent,.14)end
+  self:disc(thumb,cy,radius+unit,C.bg,.8)
+  self:disc(thumb,cy,radius,c,enabled==false and .30 or .48+.52*s.slide)
+  self:text(label,x+s.toggleLabelX,y,s.toggleLabelWidth,h,opt.size or 13,self:toggleColor(value,enabled),false,opt.bold,opt.face)
+  if opt.showState~=false then self:text(value and 'ON' or 'OFF',x+s.toggleStateX,y,s.toggleStateWidth,h,10,c,false)end
+  return value,click,hitWidth
+ end
+ function U:assign(id,raw,value,opt)
+  local v,corrected
+  if opt.normalize then v,corrected=opt.normalize(raw);if v==nil then v,corrected=value,true end
+  else v,corrected=M.number(raw,value,opt.min or 0,opt.max or 100,opt.step or 1) end
+  if corrected then self:flash(id) end
+  return v
+ end
+ function U:flash(id)
+  local s=self:state(id);s.flashPending,s.flashFrame=self.now,self.frameSerial
+ end
+ function U:fieldFrame(id,x,y,w,h,enabled,active)
+  local s=self:state(id)
+  local flash,focusReturn=0,1
+  if s.flashPending and s.flashFrame~=self.frameSerial then s.flash=s.flashPending;s.flashPending=nil end
+  if s.flash then
+   local age=max(0,self.now-s.flash);local q=min(1,age/.9)
+   flash=.7*max(0,1-age/.045)^3+.3*(1-q)^2
+   local t=min(1,max(0,(age-.65)/.25));focusReturn=t*t*(3-2*t)
+   if q==1 then s.flash=nil end
+  end
+  self:rect(x,y,w,h,self.C.field,1)
+  self:rect(x,y,w,h,enabled and self.C.edge or self.C.disabled,enabled and .7 or .25,false)
+  self:rect(x+1,y+h-3,w-2,2,self.C.ice,.18+(active and enabled and .72*focusReturn or 0))
+  if flash>0 then
+   self:rect(x+1,y+h-3,w-2,2,self.C.red,flash)
+   self:rect(x+1,y+1,w-2,h-4,self.C.red,.50*flash)
+  end
+  return flash
+ end
+ function U:field(id,value,x,y,w,h,opt)
+  opt=opt or empty;local enabled=opt.enabled~=false;local number=opt.kind=='number'
+  local dragDistance=opt.dragDistance or 3
+  local clicked,hot,held,s=self:interaction(id,x,y,w,h,enabled)
+  if hot and self.pressed then s.startY=self.my;s.startValue=value;s.dragged=false;s.clipped=false;s.dragStep=nil end
+  local lo,hi=opt.min or 0,opt.max or 100
+  if number and held and math.abs(self.my-(s.startY or self.my))>=dragDistance-1e-9 then
+   s.dragged=true
+   local step=(opt.step or 1)*((g.mouse_cap&8)~=0 and (opt.fineStep or .1) or 1)
+   if opt.rebaseDrag and s.dragStep and s.dragStep~=step then s.startY,s.startValue=self.my,value end
+   s.dragStep=step
+   local q=(s.startY-self.my)/dragDistance
+   local raw=s.startValue+(q<0 and -floor(-q+.5) or floor(q+.5))*step
+   local v,clipped
+   if opt.normalize then v,clipped=opt.normalize(raw) else v,clipped=M.number(raw,value,lo,hi,step) end
+   v=v or value;local boundary=v==lo or v==hi
+   if (clipped or (boundary and v~=value)) and not s.clipped then self:flash(id) end
+   s.clipped=clipped or boundary;value=v
+  end
+  if s.pending~=nil then value=number and self:assign(id,s.pending,value,opt) or s.pending;s.pending=nil end
+  local bounds=s.bounds or {hit={}};s.bounds=bounds
+  bounds.x,bounds.y=self.ox+(x+12)*self.scale,self.oy+(y+3)*self.scale
+  bounds.w,bounds.h,bounds.size=(w-24)*self.scale,(h-6)*self.scale,max(self.minFontSize or 8,(opt.size or 15)*self.scale)
+  bounds.number,bounds.face,bounds.bold,bounds.align,bounds.calibrate=number,opt.face,opt.bold,opt.align,opt.calibrate
+  bounds.opticalCenter=opt.opticalCenter
+  local suffixX,suffixWidth,suffixSize
+  if opt.prefix or opt.suffix then
+   local inset=opt.inset or 16;local suffix=opt.suffix or ''
+   suffixSize=opt.suffixSize or 15
+   g.setfont(1,opt.face or self.font,max(self.minFontSize or 8,floor(suffixSize*self.scale+.5)),opt.bold and 98 or 0)
+   suffixWidth=g.measurestr(suffix)/self.scale
+   local right=x+w-inset-suffixWidth
+   suffixX=right
+   bounds.x=self.ox+(x+(opt.valueInset or 115))*self.scale
+   bounds.w=max(1,(right-(opt.gap or 8))*self.scale+self.ox-bounds.x)
+   bounds.y,bounds.h=self.oy+y*self.scale,h*self.scale
+   local requested=max(self.minFontSize or 8,floor((opt.size or 15)*self.scale+.5))
+   bounds.size=requested
+   if opt.autoSize~=false then
+    local text=self.editor and self.editor.edit and self.editor.edit.id==id and self.editor.edit.text or (opt.format and opt.format(value) or tostring(value))
+    local minimum=max(self.minFontSize or 8,(opt.minSize or 13)*self.scale)
+    local fit=s.valueFit or {};s.valueFit=fit
+    if fit.text~=text or fit.width~=bounds.w or fit.requested~=requested or fit.minimum~=minimum or
+     fit.face~=opt.face or fit.bold~=opt.bold or fit.dpi~=g.ext_retina then
+     local size=requested
+     g.setfont(1,opt.face or self.font,size,opt.bold and 98 or 0)
+     while g.measurestr(text)>bounds.w-2 and size>minimum do
+      size=size-1;g.setfont(1,opt.face or self.font,size,opt.bold and 98 or 0)
+     end
+     fit.text,fit.width,fit.requested,fit.minimum=text,bounds.w,requested,minimum
+     fit.face,fit.bold,fit.dpi,fit.size=opt.face,opt.bold,g.ext_retina,size
+    end
+    bounds.size=fit.size
+   end
+  end
+  local hit=bounds.hit;hit.x,hit.y,hit.w,hit.h=self.ox+x*self.scale,self.oy+y*self.scale,w*self.scale,h*self.scale
+  local opening=enabled and ((clicked and self.released and not s.dragged) or (self.focus==id and self.key==13))
+  if opening then
+   if self.editor then
+    s.done=s.done or function(text) s.pending=text end
+    self.editor:open(id,opt.format and opt.format(value) or value,s.done)
+   else self.inputError='日本語入力にはReaImGui 0.10以降の入力アダプターが必要です。' end
+   self.key=0
+  end
+  if number and hot and self.wheel~=0 then
+   local step=(opt.step or 1)*((g.mouse_cap&8)~=0 and opt.fineStep or 1)
+   local raw=value+(self.wheel/120)*step;local v,corrected
+   if opt.normalize then v,corrected=opt.normalize(raw) else v,corrected=M.number(raw,value,lo,hi,opt.step or 1) end
+   v=v or value
+   local boundary=v==lo or v==hi
+   local repeated=boundary and s.wheelLimit==v and s.wheelAt and self.now-s.wheelAt<.20
+   if (corrected or (boundary and v~=value)) and not repeated then self:flash(id) end
+   s.wheelLimit,s.wheelAt=boundary and v or nil,self.now;value=v
+  end
+  local flash=self:fieldFrame(id,x,y,w,h,enabled,self.focus==id)
+  if opt.suffix then self:text(opt.suffix,suffixX,y,suffixWidth+2,h,suffixSize,enabled and self.C.muted or self.C.disabled,false,opt.bold,opt.face) end
+  if opt.prefix then self:text(opt.prefix,x+(opt.prefixInset or opt.inset or 16),y,opt.prefixWidth or 100,h,opt.prefixSize or 8,enabled and self.C.muted or self.C.disabled,false,opt.bold,opt.face) end
+  if self.editor and self.editor.queue then
+   self.editor:queue(id,opt.format and opt.format(value) or value,bounds,enabled)
+  else
+   local suffix=opt.unit and (' '..opt.unit) or ''
+   self:text(tostring(value)..suffix,x+12,y,w-24,h,opt.size or 15,enabled and self.C.text or self.C.disabled)
+  end
+  return value,flash
+ end
+ return U
 end
 return M
 end)()
-BLTWindowPlacement.install(reaper,gfx)
--- END BLT WINDOW PLACEMENT
 
-BLTWindowPlacement.section='BLT_MARKER_REGION_DESK'
+BLT.CanvasHost=(function()
+local M={}
+local floor,ceil,min,max=math.floor,math.ceil,math.min,math.max
+local function finite(v) return type(v)=='number' and v==v and math.abs(v)<math.huge end
+local function byte(v) return floor(max(0,min(1,v))*255+.5) end
+local function rgba(r,g,b,a)
+ return (byte(r)<<24)|(byte(g)<<16)|(byte(b)<<8)|byte(a or 1)
+end
+local function numberMetrics(path)
+ local f=io.open(path,'rb');if not f then return end
+ local ok,ascent,cap=pcall(function()
+  local header=f:read(16);local base=header:sub(1,4)=='ttcf' and string.unpack('>I4',header,13) or 0
+  f:seek('set',base);header=f:read(12)
+  local count=string.unpack('>I2',header,5);if count<1 or count>256 then return end
+  local tables={}
+  for _=1,count do
+   local entry=f:read(16);local tag=entry:sub(1,4)
+   if tag=='hhea' or tag=='OS/2' then tables[tag]=string.unpack('>I4',entry,9) end
+  end
+  if not tables.hhea or not tables['OS/2'] then return end
+  f:seek('set',tables.hhea);local hhea=f:read(10)
+  f:seek('set',tables['OS/2']);local os2=f:read(90)
+  if string.unpack('>I2',os2)<2 then return end
+  local a,d=string.unpack('>i2i2',hhea,5)
+  if (string.unpack('>I2',os2,63)&128)~=0 then a,d=string.unpack('>i2i2',os2,69) end
+  local c=string.unpack('>i2',os2,89);local height=a-d
+  if height>0 and c>0 and c<=height then return a/height,c/height end
+ end)
+ f:close()
+ if ok then return ascent,cap end
+end
+function M.new(api,title,width,height,section)
+ local I=dofile(api.ImGui_GetBuiltinPath()..'/imgui.lua')('0.10')
+ local H={I=I,title=title,width=width,height=height,rgba=rgba,section=section}
+ H.ctx=I.CreateContext(title,I.ConfigFlags_NoSavedSettings)
+ local osName=api.GetOS()
+ H.mac=not not (osName:match('OSX') or osName:match('macOS'))
+ H.faces=osName:match('Win') and {'Yu Gothic UI','Segoe UI','Consolas'} or
+  (H.mac and {'Hiragino Sans','Helvetica Neue','Menlo'} or {'sans-serif','sans-serif','monospace'})
+ local numberAscent,numberCap
+ function H:numberOffset(size)
+  if not numberAscent then
+   local path=osName:match('Win') and ((os.getenv('WINDIR') or 'C:/Windows')..'/Fonts/consolab.ttf') or
+    (self.mac and '/System/Library/Fonts/Menlo.ttc' or '')
+   numberAscent,numberCap=numberMetrics(path)
+   if not numberAscent then
+    numberAscent,numberCap=self.mac and 1901/2384 or 1521/2048,self.mac and 1493/2384 or 1307/2048
+   end
+  end
+  local dpi=self.dpi or 1;local pixels=size*dpi
+  return (pixels*.5-math.ceil(pixels*numberAscent)+math.ceil(pixels*numberCap)*.5)/dpi
+ end
+ local families,records={},{}
+ local function register(face,bold)
+  families[face]=families[face] or {};local family=families[face];local key=bold and 98 or 0
+  if not family[key] then
+   local font=I.CreateFont(face,bold and I.FontFlags_Bold or 0);I.Attach(H.ctx,font)
+   family[key]={font=font,sizes={},retainSize=15};records[#records+1]=family[key]
+  end
+  return family[key]
+ end
+ local currentFont=register(H.faces[1],false)
+ H.font=currentFont.font
+ function H:fontFor(face,bold) return register(face or self.faces[1],bold).font end
+ register(H.faces[1],true)
+ local ctx=H.ctx;local G={mouse_x=0,mouse_y=0,mouse_cap=0,mouse_wheel=0,w=width,h=height}
+ local imageCache,retiredImages={},{}
+ local gradientFrame=0
+ local retireEpoch,retireFrame=floor(api.time_precise()*10),0
+ function H:attachImage(image)
+  I.Attach(ctx,image);imageCache[image]=true
+ end
+ function H:releaseImage(image,batched)
+  if self.closing or batched then retiredImages[image]=nil;imageCache[image]=nil;I.Detach(ctx,image)
+  elseif not retiredImages[image] then retiredImages[image]={frame=gradientFrame,time=api.time_precise()} end
+ end
+ function H:retainImages()
+  if not next(imageCache) then return end
+  local draw=I.GetForegroundDrawList(ctx)
+  for image in pairs(imageCache) do I.DrawList_AddImage(draw,image,0,0,0,0,0,0,1,1,0) end
+ end
+ function H:retainResources()
+  self:retainImages()
+  for _,record in ipairs(records) do I.PushFont(ctx,record.font,record.retainSize);I.PopFont(ctx) end
+ end
+ function H:releaseRetiredImages()
+  if not next(retiredImages) then return end
+  if not self.closing then
+   if gradientFrame-retireFrame<2 then return end
+   if api.SNM_GetIntConfigVar then
+    local tick=api.SNM_GetIntConfigVar('__reascript_runcnt',-1)
+    if tick and tick>=0 and tick%4~=0 then return end
+   end
+   local epoch=floor(api.time_precise()*10)
+   if epoch==retireEpoch then return end
+   retireEpoch,retireFrame=epoch,gradientFrame
+  end
+  local now=api.time_precise()
+  for image,retired in pairs(retiredImages) do
+   if self.closing or gradientFrame-retired.frame>=2 and now-retired.time>=.1 then
+    imageCache[image]=nil;retiredImages[image]=nil;I.Detach(ctx,image)
+   end
+  end
+ end
+ if section and api.GetExtState then
+  local x,y=tonumber(api.GetExtState(section,'window_x')),tonumber(api.GetExtState(section,'window_y'))
+  if finite(x) and finite(y) then H.restoreX,H.restoreY=x,y;H.savedX,H.savedY=x,y end
+ end
+ local _,maxWindowSize=I.NumericLimits_Float()
+ H.g=G
+ local wheelRegions,wheelCount={},0
+ function G.wheelRegion(x,y,w,h)
+  wheelCount=wheelCount+1
+  local r=wheelRegions[wheelCount]or {};wheelRegions[wheelCount]=r
+  r.x,r.y,r.w,r.h=x,y,w,h
+ end
+ local color=0xffffffff;local fontSize=15
+ G.packColor=rgba
+ local lastR,lastG,lastB,lastA
+ local colors,colorCount={},0
+ local function packed(r,g,b,a)
+  local green=colors[r]
+  if not green then green={};colors[r]=green end
+  local blue=green[g]
+  if not blue then blue={};green[g]=blue end
+  local alphas=blue[b]
+  if not alphas then alphas={};blue[b]=alphas end
+  local value=alphas[a]
+  if value then return value end
+  value=rgba(r,g,b,a);alphas[a]=value;colorCount=colorCount+1
+  if colorCount>=512 then colors={};colorCount=0 end
+  return value
+ end
+ G.packedColor=packed
+ local gradientR,gradientG,gradientB,gradientRGB
+ local fontCount,epoch=0,0
+ local gradients,gradientSlots,gradientNext={},{},0
+ local recording,gradientPixels=nil,0
+ local gradientImages,gradientTrimFrame={},-60
+ local function releaseGradient(entry)
+  if entry.image then entry.image.owner=nil;entry.image=nil end
+ end
+ local function clearGradients()
+  for _,entry in pairs(gradients) do releaseGradient(entry) end
+  gradients,gradientSlots,gradientNext={},{},0
+ end
+ local function cacheGradient(entry)
+  if entry.count==0 or entry.vectorOnly or not api.new_array or not I.CreateImageFromSize or (H.gradientBuilds or 0)>0 or entry.hits<2 then return end
+  local dpi=entry.dpi;local ox,oy=H.originX,H.originY
+  local left,top,right,bottom=math.huge,math.huge,-math.huge,-math.huge
+  for i=1,entry.count do
+   local r=entry.runs[i]
+   left,top=min(left,floor((ox+r.x)*dpi)),min(top,floor((oy+r.y)*dpi))
+   right,bottom=max(right,ceil((ox+r.x+r.w)*dpi)),max(bottom,ceil((oy+r.y+r.h)*dpi))
+  end
+  local w,h=right-left,bottom-top
+  if w<1 or h<1 or w*h>262144 then return end
+  local slot
+  for _,image in ipairs(gradientImages) do
+   if not H.resourceHold and not image.owner and image.frame<gradientFrame-1 and image.w>=w and image.h>=h and
+    (not slot or image.w*image.h<slot.w*slot.h) then slot=image end
+  end
+  local iw,ih=ceil(w/16)*16,ceil(h/8)*8
+  if not slot then
+   if iw*ih>262144 then return end
+   if (#gradientImages>=96 or gradientPixels+iw*ih>2097152) and
+    gradientFrame-gradientTrimFrame>=60 and not H.resourceHold then
+    gradientTrimFrame=gradientFrame
+    for i=#gradientImages,1,-1 do
+     local image=gradientImages[i]
+     if not image.owner and image.frame<gradientFrame-1 then
+      H:releaseImage(image.image,true);gradientPixels=gradientPixels-image.w*image.h;table.remove(gradientImages,i)
+     end
+    end
+   end
+   if #gradientImages>=96 or gradientPixels+iw*ih>2097152 then return end
+  end
+  local direct,boxes={},{}
+  if entry.uncertain then
+   local epsilon=1/256
+   local queue={}
+   local function near(v) return math.abs(v-.5-floor(v))<=epsilon end
+   for i=1,entry.count do
+    local r=entry.runs[i];local x,y=(ox+r.x)*dpi,(oy+r.y)*dpi
+    local xx,yy=x+r.w*dpi,y+r.h*dpi
+    boxes[i]={ceil(x-.5-epsilon),ceil(y-.5-epsilon),ceil(xx-.5+epsilon),ceil(yy-.5+epsilon)}
+    if near(x) or near(xx) or near(y) or near(yy) then direct[i]=true;queue[#queue+1]=i end
+   end
+   local at=1
+   while at<=#queue do
+    local b=boxes[queue[at]];at=at+1
+    for i,a in ipairs(boxes) do
+     if not direct[i] and a[1]<b[3] and a[3]>b[1] and a[2]<b[4] and a[4]>b[2] then
+      direct[i]=true;queue[#queue+1]=i
+     end
+    end
+   end
+  end
+  local safe=0;for i=1,entry.count do if not direct[i] then safe=safe+1 end end
+  if safe<8 then entry.vectorOnly=true;return end
+  local pixels={};for i=1,w*h do pixels[i]=0 end
+  for i=1,entry.count do
+   if not direct[i] then
+    local r=entry.runs[i];local x,y=(ox+r.x)*dpi,(oy+r.y)*dpi
+    local width,height=r.w*dpi,r.h*dpi
+    local x1,x2=max(left,ceil(x-.5)),min(right,ceil(x+width-.5))
+    local y1,y2=max(top,ceil(y-.5)),min(bottom,ceil(y+height-.5))
+    local l,rr=r.left,r.right
+    local lr,lg,lb,la=(l>>24)&255,(l>>16)&255,(l>>8)&255,l&255
+    local dr,dg,db,da=((rr>>24)&255)-lr,((rr>>16)&255)-lg,((rr>>8)&255)-lb,(rr&255)-la
+    for px=x1,x2-1 do
+     local u=(px+.5-x)/width
+     local color=(floor(lr+dr*u+.5)<<24)|(floor(lg+dg*u+.5)<<16)|(floor(lb+db*u+.5)<<8)|floor(la+da*u+.5)
+     for py=y1,y2-1 do pixels[(py-top)*w+px-left+1]=color end
+    end
+   end
+  end
+  if not slot then
+   slot={image=I.CreateImageFromSize(iw,ih),w=iw,h=ih};H:attachImage(slot.image)
+   gradientImages[#gradientImages+1]=slot;gradientPixels=gradientPixels+iw*ih
+  end
+  I.Image_SetPixels_Array(slot.image,0,0,w,h,api.new_array(pixels))
+  slot.owner,slot.frame=entry,gradientFrame
+  entry.image,entry.imageX,entry.imageY,entry.imageW,entry.imageH=slot,left/dpi-ox,top/dpi-oy,w/dpi,h/dpi
+  entry.imageU,entry.imageV=w/slot.w,h/slot.h
+  local vectors={}
+  for i=1,entry.count do if direct[i] then vectors[#vectors+1]=entry.runs[i] end end
+  entry.runs=vectors;entry.count=#vectors
+  H.gradientBuilds=(H.gradientBuilds or 0)+1
+ end
+ local function replayGradient(entry)
+  if entry.lastFrame~=gradientFrame then entry.hits=entry.hits+1;entry.lastFrame=gradientFrame end
+  if not entry.image then cacheGradient(entry) end
+  local ox,oy=H.originX,H.originY
+  if entry.image then
+   local x,y=ox+entry.imageX,oy+entry.imageY
+   entry.image.frame=gradientFrame
+   I.DrawList_AddImage(H.draw,entry.image.image,x,y,x+entry.imageW,y+entry.imageH,0,0,entry.imageU,entry.imageV)
+  end
+  for i=1,entry.count do
+   local r=entry.runs[i];local x,y=ox+r.x,oy+r.y
+   I.DrawList_AddRectFilledMultiColor(H.draw,x,y,x+r.w,y+r.h,r.left,r.right,r.right,r.left)
+  end
+ end
+ function G.beginGradient(kind,x,y,w,h,...)
+  local dpi=H.dpi or 1;local key=kind..':'..x..':'..y..':'..w..':'..h
+  local fx,fy=(H.originX*dpi)%1,(H.originY*dpi)%1
+  local entry=gradients[key];local n=select('#',...)
+  local same=entry and entry.dpi==dpi and entry.fx==fx and entry.fy==fy and entry.n==n
+  if same then for i=1,n do if entry.signature[i]~=select(i,...) then same=false;break end end end
+  if same then replayGradient(entry);return true end
+  if not entry then
+   gradientNext=gradientNext%96+1
+   local old=gradientSlots[gradientNext]
+   if old then releaseGradient(gradients[old]);gradients[old]=nil end
+   gradientSlots[gradientNext]=key
+   entry={runs={},signature={}};gradients[key]=entry
+  end
+  releaseGradient(entry)
+  entry.dpi,entry.fx,entry.fy,entry.n,entry.count,entry.hits,entry.lastFrame=dpi,fx,fy,n,0,0,nil
+  entry.columns={};entry.edges={};entry.uncertain=false;entry.vectorOnly=nil
+  for i=1,n do entry.signature[i]=select(i,...) end
+  recording=entry
+  return false
+ end
+ function G.endGradient()
+  local entry=recording;recording=nil;entry.columns=nil
+  if next(entry.edges) then entry.uncertain=true end
+  entry.edges=nil
+  for i=#entry.runs,entry.count+1,-1 do entry.runs[i]=nil end
+  replayGradient(entry)
+ end
+ local function gradientEdge(entry,first,last,at,distance,color,side)
+  if distance<=1e-7 or distance>1/256 then return end
+  local key=first..':'..last..':'..floor(at*256+.5)
+  local previous=entry.edges[key]
+  if previous and previous.color==color and previous.side~=side then entry.edges[key]=nil
+  else entry.edges[key]={color=color,side=side} end
+ end
+ local function horizontalGradient(x,y,w,h,left,right)
+  if ((left|right)&255)==0 then return end
+  local dpi=H.dpi or 1;local xx,yy=H.originX+x,H.originY+y
+  local top,bottom=yy*dpi-.5,(yy+h)*dpi-.5
+  local first,last=ceil(top),ceil(bottom)
+  local epsilon=1/256
+  if ceil(top-epsilon)>=ceil(bottom+epsilon) or ceil(xx*dpi-.5-epsilon)>=ceil((xx+w)*dpi-.5+epsilon) then return end
+  if not recording then
+   I.DrawList_AddRectFilledMultiColor(H.draw,xx,yy,xx+w,yy+h,left,right,right,left)
+   return
+  end
+  local stable=math.abs(top-floor(top+.5))>epsilon and math.abs(bottom-floor(bottom+.5))>epsilon
+  local entry=recording;local previous=entry.columns[x]
+  if not stable then entry.uncertain=true end
+  local x1,x2=xx*dpi-.5,(xx+w)*dpi-.5
+  local d1,d2=math.abs(x1-floor(x1+.5)),math.abs(x2-floor(x2+.5))
+  gradientEdge(entry,first,last,x1,d1,left,1);gradientEdge(entry,first,last,x2,d2,right,2)
+  if stable and previous and previous.last==first and previous.w==w and previous.left==left and previous.right==right then
+   previous.last=last;previous.h=(last-previous.first)/dpi
+   return
+  end
+  entry.count=entry.count+1;local r=entry.runs[entry.count] or {};entry.runs[entry.count]=r
+  r.x,r.w,r.left,r.right=x,w,left,right
+  r.y,r.h=stable and first/dpi-H.originY or y,stable and (last-first)/dpi or h
+  r.first,r.last=first,last;entry.columns[x]=stable and r or nil
+ end
+ local keys={{I.Key_Tab,9},{I.Key_Enter,13},{I.Key_KeypadEnter,13},{I.Key_Space,32}}
+ function H:bindShortcuts(escape)
+  local list={}
+  local function add(name,code)list[#list+1]={I['Key_'..name],code}end
+  if escape~=false then add('Escape',27)end
+  for _,p in ipairs({{'Backspace',8},{'Delete',6579564},{'Insert',6909555},{'Home',1752132965},{'End',6647396},
+   {'LeftArrow',1818584692},{'RightArrow',1919379572},{'UpArrow',30064},{'DownArrow',1685026670},
+   {'PageUp',1885828464},{'PageDown',1885824110},{'Minus',45},{'Equal',61},{'LeftBracket',91},
+   {'RightBracket',93},{'Backslash',92},{'Semicolon',59},{'Apostrophe',39},{'GraveAccent',96},
+   {'Comma',44},{'Period',46},{'Slash',47},{'KeypadDecimal',46},{'KeypadDivide',47},
+   {'KeypadMultiply',42},{'KeypadSubtract',45},{'KeypadAdd',43},{'KeypadEqual',61}})do add(p[1],p[2])end
+  for code=65,90 do add(string.char(code),code+32)end
+  for code=48,57 do add(string.char(code),code);add('Keypad'..(code-48),code)end
+  for index=1,12 do
+   local code=0;for c in ('f'..index):gmatch('.')do code=(code<<8)|c:byte()end
+   add('F'..index,code)
+  end
+  self.extraKeys=list
+ end
+ local function xy(x,y) return H.originX+x,H.originY+y end
+ function G.set(r,g,b,a)
+  a=a or 1
+  if r~=lastR or g~=lastG or b~=lastB or a~=lastA then
+   color=packed(r,g,b,a);lastR,lastG,lastB,lastA=r,g,b,a
+  end
+ end
+ function G.rect(x,y,w,h,filled)
+  if w<=0 or h<=0 or (color&255)==0 then return end
+  local xx,yy=xy(x,y)
+  if filled==0 then I.DrawList_AddRect(H.draw,xx+.5,yy+.5,xx+w-.5,yy+h-.5,color)
+  else I.DrawList_AddRectFilled(H.draw,xx,yy,xx+w,yy+h,color) end
+ end
+ function G.line(x,y,xx,yy,aa,width)
+  if (color&255)==0 then return end
+  local a,b=xy(x,y);local c,d=xy(xx,yy);I.DrawList_AddLine(H.draw,a+.5,b+.5,c+.5,d+.5,color,width or 1)
+ end
+ function G.bars(x,y,spacing,width,heights,scale)
+  if (color&255)==0 then return end
+  local dpi=H.dpi or 1;local step=max(1,floor(spacing*scale*dpi+.5))/dpi
+  local cx,cy=xy(x,y)
+  local left=(floor((cx-(#heights-1)*step*.5)*dpi)+.5)/dpi
+  for i,h in ipairs(heights) do
+   local xx=left+(i-1)*step;local half=h*scale*.5
+   I.DrawList_AddLine(H.draw,xx,cy-half,xx,cy+half,color,width*scale)
+  end
+ end
+ function G.circle(x,y,r)
+  if (color&255)==0 then return end
+  local xx,yy=xy(x,y);I.DrawList_AddCircleFilled(H.draw,xx,yy,r,color)
+ end
+ local polygons,polygonSlot={},0
+ function G.polygon(points,concave)
+  if api.new_array then
+   local entry
+   for _,candidate in ipairs(polygons) do
+    local same=candidate.count==#points
+    if same then for i,p in ipairs(points) do if candidate.coords[i*2-1]~=H.originX+p[1] or candidate.coords[i*2]~=H.originY+p[2] then same=false;break end end end
+    if same then entry=candidate;break end
+   end
+   if not entry then
+    entry={count=#points,coords={}}
+    for i,p in ipairs(points) do entry.coords[i*2-1],entry.coords[i*2]=H.originX+p[1],H.originY+p[2] end
+    entry.array=api.new_array(entry.coords)
+    polygonSlot=polygonSlot%32+1;polygons[polygonSlot]=entry
+   end
+   if concave then I.DrawList_AddConcavePolyFilled(H.draw,entry.array,color) else I.DrawList_AddConvexPolyFilled(H.draw,entry.array,color) end
+   return
+  end
+  I.DrawList_PathClear(H.draw)
+  for _,p in ipairs(points) do local x,y=xy(p[1],p[2]);I.DrawList_PathLineTo(H.draw,x,y) end
+  if concave then I.DrawList_PathFillConcave(H.draw,color) else I.DrawList_PathFillConvex(H.draw,color) end
+ end
+ function G.gradrect(x,y,w,h,r,g,b,a,rx,gx,bx,ax,ry,gy,by,ay)
+  if ry and (ry~=0 or gy~=0 or by~=0 or ay~=0) then
+   local xx,yy=xy(x,y)
+   I.DrawList_AddRectFilledMultiColor(H.draw,xx,yy,xx+w,yy+h,rgba(r,g,b,a),
+    rgba(r+rx*w,g+gx*w,b+bx*w,a+ax*w),rgba(r+rx*w+ry*h,g+gx*w+gy*h,b+bx*w+by*h,a+ax*w+ay*h),
+    rgba(r+ry*h,g+gy*h,b+by*h,a+ay*h));return
+  end
+  local left,right
+  if rx==0 and gx==0 and bx==0 then
+   if r~=gradientR or g~=gradientG or b~=gradientB then
+    gradientRGB=rgba(r,g,b,0);gradientR,gradientG,gradientB=r,g,b
+   end
+   left=gradientRGB|byte(a);right=gradientRGB|byte(a+ax*w)
+  else left=rgba(r,g,b,a);right=rgba(r+rx*w,g+gx*w,b+bx*w,a+ax*w) end
+  horizontalGradient(x,y,w,h,left,right)
+ end
+ function G.gradcolors(x,y,w,h,left,right)
+  horizontalGradient(x,y,w,h,left,right)
+ end
+ function G.setfont(_,face,size,flags)
+  fontSize=size
+  currentFont=register(face or H.faces[1],flags==98)
+  currentFont.retainSize=size
+ end
+ local function measure(text)
+  local metrics=currentFont.sizes[fontSize]
+  if not metrics or metrics.frame~=epoch then
+   I.PushFont(ctx,currentFont.font,fontSize);local size=I.GetFontSize(ctx);I.PopFont(ctx)
+   if not metrics or metrics.size~=size then
+    if not metrics then
+     fontCount=fontCount+1
+     if fontCount>32 then for _,record in ipairs(records) do record.sizes={} end;fontCount=1 end
+    end
+    metrics={size=size,strings={},count=0};currentFont.sizes[fontSize]=metrics
+   end
+   metrics.frame=epoch
+  end
+  local measured=metrics.strings[text]
+  if not measured then
+   if metrics.count==128 then metrics.strings={};metrics.count=0 end
+   I.PushFont(ctx,currentFont.font,fontSize);local w,h=I.CalcTextSize(ctx,text);I.PopFont(ctx)
+   measured={w,h};metrics.strings[text]=measured;metrics.count=metrics.count+1
+  end
+  return measured[1],measured[2],metrics.size
+ end
+ function G.measurestr(text) return measure(tostring(text)) end
+ function G.textMetrics(text)
+  local w,h,size=measure(text);return w,h,size,currentFont.font
+ end
+ function G.numberOffset(size) return H:numberOffset(size or fontSize) end
+ function G.drawstr(text,flags,right,bottom,opticalCenter)
+  text=tostring(text);flags=flags or 0;right=right or G.w;bottom=bottom or G.h
+  local w,h,renderedSize=measure(text)
+  local x,y=G.x,G.y
+  local left,top=xy(x,y);local r,b=xy(right,bottom)
+  if (flags&2)~=0 then x=right-w
+  elseif (flags&1)~=0 then x=x+(right-x-w)/2 end
+  if (flags&4)~=0 then y=y+(bottom-y-h)/2 end
+  x,y=xy(x,y)
+  if opticalCenter then
+   local dpi=H.dpi or 1;y=floor((y+H:numberOffset(renderedSize))*dpi+.5)/dpi
+  else y=floor(y) end
+  x=floor(x)
+  I.DrawList_AddTextEx(H.draw,currentFont.font,renderedSize,x,y,color,text,0,floor(left),floor(top),math.ceil(r),math.ceil(b))
+ end
+ function H:place(x,y,w,h)
+  if not api.my_getViewport then return x,y end
+  local nx,ny=I.PointConvertNative(ctx,x,y,true)
+  local nr,nb=I.PointConvertNative(ctx,x+min(120,w),y+min(26,h),true)
+  local al,at,ar,ab=api.my_getViewport(0,0,0,0,floor(min(nx,nr)),floor(min(ny,nb)),math.ceil(max(nx,nr)),math.ceil(max(ny,nb)),true)
+  if not (finite(al) and finite(at) and finite(ar) and finite(ab)) or ar<=al or at==ab then return x,y end
+  al,at=I.PointConvertNative(ctx,al,at);ar,ab=I.PointConvertNative(ctx,ar,ab)
+  al,ar=min(al,ar),max(al,ar);at,ab=min(at,ab),max(at,ab)
+  if x>=al and x+min(120,w,ar-al)<=ar and y>=at and y+min(26,h,ab-at)<=ab then return x,y end
+  local mx,my=min(8,max(0,(ar-al-w)*.5)),min(8,max(0,(ab-at-h)*.5))
+  return floor(max(al+mx,min(x,ar-w-mx))+.5),floor(max(at+my,min(y,ab-h-my))+.5)
+ end
+ function H:savePosition()
+  if not self.section or not api.SetExtState or not self.nativeX then return end
+  if self.nativeX~=self.savedX then api.SetExtState(self.section,'window_x',tostring(self.nativeX),true);self.savedX=self.nativeX end
+  if self.nativeY~=self.savedY then api.SetExtState(self.section,'window_y',tostring(self.nativeY),true);self.savedY=self.nativeY end
+  if self.persistSize then
+   if G.w~=self.savedWidth then api.SetExtState(self.section,'window_w',tostring(G.w),true);self.savedWidth=G.w end
+   if G.h~=self.savedHeight then api.SetExtState(self.section,'window_h',tostring(G.h),true);self.savedHeight=G.h end
+  end
+ end
+ function H:close()
+  self:savePosition()
+  self.closing=true;self.imageHold=nil;self.resourceHold=nil
+  self:releaseRetiredImages()
+  clearGradients()
+  for _,image in ipairs(gradientImages) do self:releaseImage(image.image) end
+  gradientImages={};gradientPixels=0
+ end
+ local function invalidateExposed(hwnd,l,t,r,b,nl,nt,nr,nb)
+  if not(api.JS_Window_GetParent and api.JS_Window_ScreenToClient and api.JS_Window_InvalidateRect)then return end
+  l,r=min(l,r),max(l,r);t,b=min(t,b),max(t,b)
+  nl,nr=min(nl,nr),max(nl,nr);nt,nb=min(nt,nb),max(nt,nb)
+  if nl<=l and nt<=t and nr>=r and nb>=b then return end
+  local parent=api.JS_Window_GetParent(hwnd)
+  if not parent or parent==0 then return end
+  if api.JS_Window_GetClientRect then
+   for _=1,8 do
+    local ok,pl,pt,pr,pb=api.JS_Window_GetClientRect(parent)
+    if ok and min(pl,pr)<=l and min(pt,pb)<=t and max(pl,pr)>=r and max(pt,pb)>=b then break end
+    local nextParent=api.JS_Window_GetParent(parent)
+    if not nextParent or nextParent==0 or nextParent==parent then break end
+    parent=nextParent
+   end
+  end
+  local function paint(x,y,xx,yy)
+   if xx<=x or yy<=y then return end
+   x,y=api.JS_Window_ScreenToClient(parent,x,y);xx,yy=api.JS_Window_ScreenToClient(parent,xx,yy)
+   api.JS_Window_InvalidateRect(parent,min(x,xx),min(y,yy),max(x,xx),max(y,yy),false)
+  end
+  local il,it,ir,ib=max(l,nl),max(t,nt),min(r,nr),min(b,nb)
+  if il>=ir or it>=ib then paint(l,t,r,b)
+  else paint(l,t,r,it);paint(l,ib,r,b);paint(l,it,il,ib);paint(ir,it,r,ib)end
+ end
+ function H:idle(now)
+  if self.shown==false or (self.visibilitySettle or 0)>0 then return false end
+  if next(retiredImages) and not self.imageHold and not self.resourceHold then self:releaseRetiredImages() end
+  if not (api.GetMousePosition and api.JS_Mouse_GetState and api.JS_VKeys_GetDown) then return false end
+  local x,y=api.GetMousePosition();local cap=api.JS_Mouse_GetState(63)
+  if self.windowGesture then self.idleWake=true;return false end
+  local held=(cap&1)~=0
+  if not self.section and(held or self.resizeWindow)then
+   local hwnd=self.nativeWindow
+   if not hwnd or not api.JS_Window_GetRect then self.resizeWindow=nil;self.idleWake=true;return false end
+   local ok,l,t,r,b=api.JS_Window_GetRect(hwnd)
+   if not ok then self.nativeWindow=nil;self.resizeWindow=nil;self.idleWake=true;return false end
+   local sameWindow=self.resizeWindow==hwnd
+   local changed=not sameWindow or self.resizeLeft~=l or self.resizeTop~=t or self.resizeRight~=r or self.resizeBottom~=b
+   if changed and self.nativeLeft then
+    invalidateExposed(hwnd,sameWindow and self.resizeLeft or self.nativeLeft,sameWindow and self.resizeTop or self.nativeTop,
+     sameWindow and self.resizeRight or self.nativeRight,sameWindow and self.resizeBottom or self.nativeBottom,l,t,r,b)
+   end
+   self.resizeWindow,self.resizeLeft,self.resizeTop,self.resizeRight,self.resizeBottom=held and hwnd or nil,l,t,r,b
+   if changed then self.idleWake=true;return false end
+  else self.resizeWindow=nil end
+  local keys=api.JS_VKeys_GetDown(-.25)
+  if type(keys)~='string' or #keys<255 then return false end
+  local margin=8*(self.mac and 1 or self.dpi or 1)
+  local inside=self.nativeLeft and x>=self.nativeLeft-margin and x<self.nativeRight+margin and y>=self.nativeTop-margin and y<self.nativeBottom+margin
+  if inside and api.JS_Window_FromPoint then
+   local window=api.JS_Window_FromPoint(x,y)
+   if window~=self.nativeWindow and window~=self.probedWindow then
+    self.probedWindow=window;self.nativeProbe=true;return false
+   end
+   inside=window~=nil and window~=0 and self.nativeWindow~=nil and window==self.nativeWindow
+  end
+  local wasInside=self.idleInside
+  if wasInside==nil then wasInside=self.hovered end
+  local recent=self.lastIdle and now-self.lastIdle<1
+  local pointer=(inside or wasInside) and recent and (x~=self.idleX or y~=self.idleY or cap~=self.idleCap)
+  local keyDown=keys:find('\1',1,true)~=nil
+  local keyProbe=keyDown and keys~=self.idleKeys
+  local wheelTarget=false
+  if inside and self.hovered then
+   for i=1,wheelCount do
+    local r=wheelRegions[i]
+    if G.mouse_x>=r.x and G.mouse_x<r.x+r.w and G.mouse_y>=r.y and G.mouse_y<r.y+r.h then wheelTarget=true;break end
+   end
+  end
+  local activity=pointer or inside~=wasInside or self.focused and keyDown or wheelTarget
+  self.idleX,self.idleY,self.idleCap,self.lastIdle=x,y,cap,now
+  self.idleInside,self.idleKeys=inside,keys
+  if activity then self.idleWake=true;return false end
+  if keyProbe then return false end
+  if now>=(self.nextIdleFrame or 0) then self.nextIdleFrame=now+(self.focused and .25 or 1);return false end
+  I.GetConfigVar(ctx,I.ConfigVar_Flags)
+  return true
+ end
+ function H:begin()
+  wheelCount=0
+  local previouslyShown=self.shown
+  self.gradientBuilds=0
+  gradientFrame=gradientFrame+1
+  local now=api.time_precise()
+  I.SetNextWindowSize(ctx,self.width,self.height,self.requestReset and I.Cond_Always or I.Cond_FirstUseEver)
+  self.requestReset=nil
+  I.SetNextWindowSizeConstraints(ctx,self.minWidth or 640,self.minHeight or 620,maxWindowSize,maxWindowSize)
+  if self.drag then
+   if I.IsMouseDown(ctx,0) then
+    local mx,my=I.GetMousePos(ctx);I.SetNextWindowPos(ctx,mx-self.drag.x,my-self.drag.y)
+   else self.drag=nil end
+  end
+  if self.section and not self.drag and (self.restoreX or now>=(self.nextPlacement or 0)) then
+   local x,y=self.windowX,self.windowY
+   if self.restoreX then x,y=I.PointConvertNative(ctx,self.restoreX,self.restoreY);self.restoreX,self.restoreY=nil,nil end
+   if x then
+    local px,py=self:place(x,y,G.w,G.h)
+    if px~=self.windowX or py~=self.windowY then I.SetNextWindowPos(ctx,px,py) end
+   end
+   self.nextPlacement=now+.5
+  end
+  I.PushStyleVar(ctx,I.StyleVar_WindowPadding,0,0)
+  I.PushStyleVar(ctx,I.StyleVar_WindowRounding,0);I.PushStyleVar(ctx,I.StyleVar_WindowBorderSize,0)
+  I.PushStyleColor(ctx,I.Col_WindowBg,0x05080eff)
+  local focusFlag=self.seenWindow and I.WindowFlags_NoFocusOnAppearing or 0
+  local shown,open=I.Begin(ctx,self.title,true,I.WindowFlags_NoScrollbar|I.WindowFlags_NoScrollWithMouse|I.WindowFlags_NoTitleBar|I.WindowFlags_NoMove|focusFlag)
+  I.PopStyleColor(ctx);I.PopStyleVar(ctx,3)
+  if gradientFrame%60==1 then self:retainResources() end
+  self.shown=shown;self.open=open
+  if shown and previouslyShown==false then self.visibilitySettle=4 end
+  self.resourceHold=self.imageHold or not shown or (self.visibilitySettle or 0)>0
+  self.windowBegun=shown
+  if not shown then return false end
+  self.seenWindow=true
+  local dpi=I.GetWindowDpiScale(ctx)
+  if self.section then
+   local x,y=I.GetWindowPos(ctx)
+   if x~=self.windowX or y~=self.windowY or dpi~=self.dpi then
+    self.windowX,self.windowY=x,y
+    self.nativeX,self.nativeY=I.PointConvertNative(ctx,x,y,true)
+   end
+   if not self.drag and now>=(self.nextSave or 0) then self:savePosition();self.nextSave=now+.25 end
+  end
+  if dpi~=self.dpi then self.dpi=dpi;epoch=epoch+1 end
+  G.ext_retina=dpi
+  self.originX,self.originY=I.GetCursorScreenPos(ctx)
+  local w,h=I.GetContentRegionAvail(ctx)
+  if w~=G.w or h~=G.h or dpi~=self.gradientDpi then clearGradients();self.gradientDpi=dpi end
+  G.w,G.h=w,h;self.draw=I.GetWindowDrawList(ctx)
+  if self.boundsX~=self.originX or self.boundsY~=self.originY or self.boundsW~=w or self.boundsH~=h or self.boundsDpi~=dpi then
+   local l,t=I.PointConvertNative(ctx,self.originX,self.originY,true)
+   local r,b=I.PointConvertNative(ctx,self.originX+w,self.originY+h,true)
+   self.nativeLeft,self.nativeRight=min(l,r),max(l,r);self.nativeTop,self.nativeBottom=min(t,b),max(t,b)
+   self.boundsX,self.boundsY,self.boundsW,self.boundsH,self.boundsDpi=self.originX,self.originY,w,h,dpi
+  end
+  local mx,my=I.GetMousePos(ctx);G.mouse_x=mx-self.originX;G.mouse_y=my-self.originY
+  local hovered=I.IsWindowHovered(ctx)
+  self.hovered,self.idleInside=hovered,hovered
+  if hovered and api.JS_Window_FromPoint and (not self.nativeWindow or self.nativeProbe) then
+   local x,y=api.GetMousePosition();self.nativeWindow=api.JS_Window_FromPoint(x,y)
+  end
+  self.nativeProbe=nil
+  if not hovered and not self.pointerCapture then G.mouse_x=-10000;G.mouse_y=-10000 end
+  G.mouse_cap=I.IsMouseDown(ctx,0) and 1 or 0
+  if self.captureRight and I.IsMouseDown(ctx,1) then G.mouse_cap=G.mouse_cap|2 end
+  if self.windowGesture and api.JS_Mouse_GetState and(api.JS_Mouse_GetState(1)&1)==0 then
+   G.mouse_cap=G.mouse_cap&~1;self.windowGesture=nil
+  end
+  local mods=I.GetKeyMods(ctx)
+  if (mods&I.Mod_Ctrl)~=0 then G.mouse_cap=G.mouse_cap|4 end
+  if (mods&I.Mod_Shift)~=0 then G.mouse_cap=G.mouse_cap|8 end
+  if (mods&I.Mod_Alt)~=0 then G.mouse_cap=G.mouse_cap|16 end
+  if (mods&I.Mod_Super)~=0 then G.mouse_cap=G.mouse_cap|32 end
+  G.mouse_wheel=hovered and (I.GetMouseWheel(ctx)*120) or 0
+  self.key=0
+  self.focused=I.IsWindowFocused(ctx)
+  if self.focused then
+   for _,pair in ipairs(keys) do
+    if I.IsKeyPressed(ctx,pair[1],false) then self.key=pair[2];break end
+   end
+   if self.key==0 and self.extraKeys then
+    for _,pair in ipairs(self.extraKeys) do
+     if I.IsKeyPressed(ctx,pair[1],false) then self.key=pair[2];break end
+    end
+   end
+  end
+  return true
+ end
+ function H:finish()
+  if self.resourceHold then self:retainImages() end
+  if self.windowBegun then
+   self.windowBegun=false
+   I.SetCursorScreenPos(ctx,self.originX,self.originY);I.Dummy(ctx,G.w,G.h);I.End(ctx)
+  end
+  if self.shown then
+   if (self.visibilitySettle or 0)>0 then self.visibilitySettle=self.visibilitySettle-1 end
+   if not self.imageHold and (self.visibilitySettle or 0)==0 then self:releaseRetiredImages() end
+  end
+  return self.open and not self.requestClose
+ end
+ return H
+end
+return M
+end)()
 
+BLT.TextInput=(function()
+local M={}
+local floor,min,max=math.floor,math.min,math.max
+function M.new(host,ui,reference)
+ local T={pending={},items={},metrics={{},{}},metricCount=0};local I,ctx=host.I,host.ctx
+ local function color(c,a) return host.rgba(c[1],c[2],c[3],a) end
+ function T:fontMetrics(b)
+  if not reference or b.calibrate==false then return end
+  local kind=b.number and 2 or 1;local size=max(8,b.size)
+  local key=b.face and b.face..':'..tostring(b.bold)..':'..kind or kind
+  local group=self.metrics[key];if not group then group={};self.metrics[key]=group end
+  local cached=group[size];if cached then return cached end
+  if self.metricCount>=32 then self.metrics={{},{}};self.metricCount=0;group={};self.metrics[key]=group end
+  local sample=kind==1 and 'あいうえお漢字ABC012345' or '0123456789.-'
+  reference:setfont(1,b.face or host.faces[1],size,b.bold and 98 or 0)
+  local width,height=reference:measurestr(sample)
+  I.PushFont(ctx,host:fontFor(b.face,b.bold),size);local measured=I.CalcTextSize(ctx,sample);I.PopFont(ctx)
+  local calibrated=min(96,max(1,measured>0 and size*width/measured*1.04 or size*1.04))
+  cached={size=calibrated,height=height};group[size]=cached;self.metricCount=self.metricCount+1
+  return cached
+ end
+ function T:close(cancel)
+  local e=self.edit;self.edit=nil
+  if e and not cancel then e.done(e.text) end
+ end
+ function T:open(id,text,done)
+  if self.edit then self:close(false) end
+  self.edit={id=id,text=tostring(text),done=done,frames=0}
+ end
+ function T:queue(id,value,bounds,enabled)
+  if enabled~=false and bounds.number then local b=bounds.hit or bounds;host.g.wheelRegion(b.x,b.y,b.w,b.h)end
+  local item=self.items[id]
+  if not item then item={id=id,label='##blt_input_'..id};self.items[id]=item end
+  item.value,item.bounds,item.enabled=tostring(value),bounds,enabled~=false
+  self.pending[#self.pending+1]=item
+ end
+ function T:idle(item)
+  local b=item.bounds;local dpi=host.dpi or 1;local p=item.layout
+  if not p or p.text~=item.value or p.dpi~=dpi or p.bx~=b.x or p.by~=b.y or p.bw~=b.w or p.bh~=b.h or
+   p.requested~=b.size or p.face~=b.face or p.bold~=b.bold or p.align~=b.align or
+   p.calibrate~=b.calibrate or p.number~=b.number or p.optical~=b.opticalCenter then
+   local metrics=self:fontMetrics(b);local font=host:fontFor(b.face,b.bold)
+   I.PushFont(ctx,font,metrics and metrics.size or max(8,floor(b.size+.5)))
+   local height,size=I.GetTextLineHeight(ctx),I.GetFontSize(ctx)
+   local offset=b.align=='right' and max(0,b.w-I.CalcTextSize(ctx,item.value)-2) or 0
+   I.PopFont(ctx)
+   local y1,y2,padY=0,0,0
+   if metrics then y1,y2=max(0,(b.h-metrics.height)/2),max(0,(metrics.height-height)/2)
+   else padY=max(0,floor((b.h-height)/2)) end
+   p=p or {};item.layout=p
+   p.text,p.dpi,p.bx,p.by,p.bw,p.bh=item.value,dpi,b.x,b.y,b.w,b.h
+   p.requested,p.face,p.bold,p.align,p.calibrate,p.number,p.optical=b.size,b.face,b.bold,b.align,b.calibrate,b.number,b.opticalCenter
+   p.font,p.size,p.offsetX,p.w,p.h,p.padY=font,size,offset,b.w-offset,height+2*padY,padY
+   p.y1,p.y2,p.center,p.numberOffset=y1,y2,(b.h-height)/2,b.opticalCenter and host:numberOffset(size) or 0
+  end
+  if item.value=='' then return end
+  local x=floor(host.originX+p.bx+p.offsetX)
+  local y=floor(host.originY+p.by+p.y1+p.y2)
+  if p.optical then y=floor((host.originY+p.by+p.center-p.padY+p.numberOffset)*dpi+.5)/dpi end
+  I.DrawList_AddTextEx(host.draw,p.font,p.size,x,y+p.padY,item.enabled and self.textColor or self.disabledColor,item.value,0,x,y,x+p.w,y+p.h)
+ end
+ function T:draw(item)
+  local e=self.edit and self.edit.id==item.id and self.edit or nil
+  if not e then self:idle(item);return end
+  local b=item.bounds
+  local metrics=self:fontMetrics(b)
+  local x,y=floor(host.originX+b.x),floor(host.originY+b.y)
+  I.PushFont(ctx,host:fontFor(b.face,b.bold),metrics and metrics.size or max(8,floor(b.size+.5)))
+  local width=b.w
+  if b.align=='right' then
+   local measured=I.CalcTextSize(ctx,e.text)
+   local offset=max(0,width-measured-2)
+   x=floor(host.originX+b.x+offset);width=width-offset
+  end
+  local height=I.GetTextLineHeight(ctx);local padY=0
+  if metrics then
+   y=floor(host.originY+b.y+max(0,(b.h-metrics.height)/2)+max(0,(metrics.height-height)/2))
+  else padY=max(0,floor((b.h-height)/2)) end
+  if b.opticalCenter then
+   local dpi=host.dpi or 1
+   local offset=host:numberOffset(I.GetFontSize(ctx))
+   y=floor((host.originY+b.y+(b.h-height)/2-padY+offset)*dpi+.5)/dpi
+  end
+  I.SetCursorScreenPos(ctx,x,y)
+  I.PushStyleVar(ctx,I.StyleVar_FramePadding,0,padY)
+  I.PushStyleColor(ctx,I.Col_Text,item.enabled and self.textColor or self.disabledColor)
+  I.BeginDisabled(ctx,not item.enabled);I.SetNextItemWidth(ctx,width)
+  if e.frames==0 then I.SetKeyboardFocusHere(ctx) end
+  local _,text=I.InputText(ctx,item.label,e.text,I.InputTextFlags_AutoSelectAll)
+  e.text=text;local deactivated=I.IsItemDeactivated(ctx)
+  local cancel=deactivated and I.IsKeyPressed(ctx,I.Key_Escape,false)
+  local focusLost=not I.IsWindowFocused(ctx);local outside
+  if I.IsMouseClicked(ctx,0) or I.IsMouseClicked(ctx,1) then
+   local mx,my=I.GetMousePos(ctx);local hit=b.hit or b
+   local left,top=host.originX+hit.x,host.originY+hit.y
+   outside=mx<left or mx>=left+hit.w or my<top or my>=top+hit.h
+  end
+  I.EndDisabled(ctx);I.PopStyleColor(ctx);I.PopStyleVar(ctx);I.PopFont(ctx)
+  e.frames=e.frames+1
+  if cancel then self:close(true)
+  elseif e.frames>1 and (deactivated or outside or focusLost) then self:close(false) end
+ end
+ function T:frame()
+  local list=self.pending
+  if #list==0 then return end
+  if reference then
+   local dpi=host.dpi or I.GetWindowDpiScale(ctx)
+   if self.metricDpi~=dpi then self.metrics={{},{}};self.metricCount=0;self.metricDpi=dpi end
+  end
+  local C=ui.C
+  self.textColor,self.disabledColor=color(C.text),color(C.disabled)
+  if not self.edit then
+   for _,item in ipairs(list) do self:idle(item) end
+   for i=#list,1,-1 do list[i]=nil end
+   return
+  end
+  I.PushStyleVar(ctx,I.StyleVar_FrameRounding,0);I.PushStyleVar(ctx,I.StyleVar_FrameBorderSize,0)
+  I.PushStyleVar(ctx,I.StyleVar_DisabledAlpha,1)
+  I.PushStyleColor(ctx,I.Col_FrameBg,0);I.PushStyleColor(ctx,I.Col_FrameBgHovered,0);I.PushStyleColor(ctx,I.Col_FrameBgActive,0)
+  I.PushStyleColor(ctx,I.Col_TextSelectedBg,color(C.accent,.65));I.PushStyleColor(ctx,I.Col_NavCursor,0)
+  for _,item in ipairs(list) do self:draw(item) end
+  I.PopStyleColor(ctx,5);I.PopStyleVar(ctx,3)
+  for i=#list,1,-1 do list[i]=nil end
+ end
+ return T
+end
+return M
+end)()
 
--- BEGIN BLT COMMON CHROME 1.0.0 (generated from _shared/BLT_Chrome.lua)
+BLT.ShellText=(function()
+local M={}
+local floor,ceil,max=math.floor,math.ceil,math.max
+function M.new(host,api,native)
+ native=native or gfx
+ assert(native and native.setfont and native.measurestr,'REAPER gfx font API is required')
+ local I,ctx=host.I,host.ctx
+ local T={fonts={},images={},imageCount=0,measureCount=0}
+ local faces=host.mac and {['Hiragino Sans']={'HiraginoSans-W4','HiraginoSans-W6'},
+  ['Helvetica Neue']={'HelveticaNeue-Medium','HelveticaNeue-Bold'},Menlo={'Menlo-Regular','Menlo-Bold'}}
+ local current,bitmap,bw,bh
+ local function clearImages()
+  for _,entry in pairs(T.images) do host:releaseImage(entry.image) end
+  T.images={};T.imageCount=0
+  for _,f in ipairs(T.fonts) do f.images={} end
+ end
+ local function release(f)
+  api.JS_LICE_DestroyFont(f.lice);api.JS_GDI_DeleteObject(f.gdi)
+ end
+ function T:setfont(_,face,size,flags)
+  local dpi=ceil(host.dpi or I.GetWindowDpiScale(ctx));local px=max(1,floor(size*dpi+.5));flags=flags or 0
+  if current and current.face==face and current.px==px and current.flags==flags then self.dpi=dpi;return px/dpi end
+  for _,f in ipairs(self.fonts) do
+   if f.face==face and f.px==px and f.flags==flags then current=f;self.dpi=dpi;return px/dpi end
+  end
+  local slot=(self.nextSlot or 0)%16+1;self.nextSlot=slot
+  if self.fonts[slot] then release(self.fonts[slot]) end
+  local family=faces and faces[face];local nativeFace=family and family[flags==98 and 2 or 1] or face
+  local nativeFlags=family and 0 or flags
+  native.setfont(slot,nativeFace,px,nativeFlags)
+  local f={face=face,px=px,flags=flags,slot=slot,metrics={},images={},key=face..':'..px..':'..flags..':'}
+  f.gdi=assert(api.JS_GDI_CreateFont(px,nativeFlags==98 and 700 or 400,0,false,false,false,nativeFace),'Font creation failed')
+  f.lice=assert(api.JS_LICE_CreateFont(),'LICE font creation failed')
+  api.JS_LICE_SetFontFromGDI(f.lice,f.gdi,'')
+  api.JS_LICE_SetFontColor(f.lice,0xffffffff)
+  self.fonts[slot]=f;current=f;self.dpi=dpi
+  return px/dpi
+ end
+ function T:measurestr(text)
+  text=tostring(text);local result=current.metrics[text]
+  if not result then
+   if self.measureCount>=512 then
+    for _,f in ipairs(self.fonts) do f.metrics={} end;self.measureCount=0
+   end
+   native.setfont(current.slot)
+   local w,h=native.measurestr(text)
+   result={w,h};current.metrics[text]=result;self.measureCount=self.measureCount+1
+  end
+  return result[1]/self.dpi,result[2]/self.dpi,current.px/self.dpi
+ end
+ function T:rasterize(text)
+   local w,h=self:measurestr(text);w,h=max(1,floor(w*self.dpi+.5)),max(1,floor(h*self.dpi+.5))
+   local unicode=text:find('[\128-\255]')
+   if unicode and bitmap then api.JS_LICE_DestroyBitmap(bitmap);bitmap=nil end
+   if not bitmap then bitmap=assert(api.JS_LICE_CreateBitmap(true,w,h))
+   elseif w~=bw or h~=bh then api.JS_LICE_Resize(bitmap,w,h) end
+   bw,bh=w,h;api.JS_LICE_Clear(bitmap,0xff000000)
+   if unicode then
+    local left=0
+    if unicode>1 then
+     local prefix=text:sub(1,unicode-1)
+     api.JS_LICE_DrawText(bitmap,current.lice,prefix,#prefix,0,0,w,h)
+     left=floor(self:measurestr(prefix)*self.dpi+.5)
+    end
+    local dc=assert(api.JS_LICE_GetDC(bitmap),'Bitmap drawing context is required')
+    api.JS_GDI_SelectObject(dc,current.gdi)
+    api.JS_GDI_SetTextBkMode(dc,1);api.JS_GDI_SetTextColor(dc,0xffffff)
+    local rest=text:sub(unicode)
+    api.JS_GDI_DrawText(dc,rest,#rest,left,0,w,h,'SINGLELINE NOPREFIX')
+   else api.JS_LICE_DrawText(bitmap,current.lice,text,#text,0,0,w,h) end
+   api.JS_LICE_Blit(bitmap,0,0,bitmap,0,0,w,h,1,'CHANCOPY_RTOA')
+   return bitmap,w,h,unicode
+ end
+ function T:paint(command,destination)
+  if command.text=='' then return end
+  self:setfont(1,command.face,command.size,command.flags)
+  local source,w,h,unicode=self:rasterize(command.text)
+  api.JS_LICE_ProcessRect(source,0,0,w,h,'SET_RGB',command.color&0xffffff)
+  local alpha=floor(command.alpha*255+.5)/255
+  api.JS_LICE_Blit(destination,floor(command.x*self.dpi+.5),floor(command.y*self.dpi+.5),source,0,0,w,h,alpha,'COPY ALPHA')
+  if unicode then api.JS_LICE_DestroyBitmap(bitmap);bitmap=nil end
+ end
+ function T:paintMask(command,destination)
+  local value=command.text;if value=='' then return end
+  self:setfont(1,command.face,command.size,command.flags)
+  local w,h=self:measurestr(value)
+  w,h=max(1,floor(w*self.dpi+.5)),max(1,floor(h*self.dpi+.5))
+  local x,y=floor(command.x*self.dpi+.5),floor(command.y*self.dpi+.5)
+  local right,bottom=x+w,y+h;local unicode=value:find('[\128-\255]')
+  if unicode then
+   if unicode>1 then
+    local prefix=value:sub(1,unicode-1)
+    api.JS_LICE_DrawText(destination,current.lice,prefix,#prefix,x,y,right,bottom)
+    x=x+floor(self:measurestr(prefix)*self.dpi+.5)
+   end
+   local dc=assert(api.JS_LICE_GetDC(destination),'Bitmap drawing context is required')
+   api.JS_GDI_SelectObject(dc,current.gdi)
+   api.JS_GDI_SetTextBkMode(dc,1);api.JS_GDI_SetTextColor(dc,0xffffff)
+   local rest=value:sub(unicode)
+   api.JS_GDI_DrawText(dc,rest,#rest,x,y,right,bottom,'SINGLELINE NOPREFIX')
+  else api.JS_LICE_DrawText(destination,current.lice,value,#value,x,y,right,bottom) end
+ end
+ function T:draw(text,x,y,r,g,b,a)
+  text=tostring(text);if text=='' then return end
+  local entry=current.images[text]
+  local key
+  if not entry then key=current.key..text;entry=self.images[key] end
+  if not entry then
+   local source,w,h,unicode=self:rasterize(text)
+   api.JS_LICE_ProcessRect(source,0,0,w,h,'SET_RGB',0xffffff)
+   if self.imageCount>=64 then clearImages() end
+   entry={image=I.CreateImageFromLICE(source),w=w,h=h};host:attachImage(entry.image)
+   if unicode then api.JS_LICE_DestroyBitmap(bitmap);bitmap=nil end
+   self.images[key]=entry;self.imageCount=self.imageCount+1
+  end
+  current.images[text]=entry
+  local ox,oy=host.windowX or host.originX,host.windowY or host.originY
+  local xx=ox+floor((host.originX-ox+x)*self.dpi+.5)/self.dpi
+  local yy=oy+floor((host.originY-oy+y)*self.dpi+.5)/self.dpi
+  I.DrawList_AddImage(host.draw,entry.image,xx,yy,xx+entry.w/self.dpi,yy+entry.h/self.dpi,0,0,1,1,host.rgba(r,g,b,a or 1))
+ end
+ function T:capture(command,text,x,y,color,alpha)
+  command.text,command.x,command.y,command.color,command.alpha=text,x,y,color,alpha
+  command.face,command.size,command.flags=current.face,current.px/self.dpi,current.flags
+ end
+ function T:replay(command)
+  self:setfont(1,command.face,command.size,command.flags)
+  local c=command.color
+  self:draw(command.text,command.x,command.y,((c>>16)&255)/255,((c>>8)&255)/255,(c&255)/255,command.alpha)
+ end
+ function T:canvas(G)
+  local P=setmetatable({},{__index=G});local r,g,b,a=1,1,1,1
+  P.setfont=function(...) return self:setfont(...) end
+  P.measurestr=function(text) return self:measurestr(text) end
+  P.set=function(rr,gg,bb,aa) r,g,b,a=rr,gg,bb,aa or 1;G.set(r,g,b,a) end
+  P.drawstr=function(text) self:draw(text,P.x,P.y,r,g,b,a) end
+  return P
+ end
+ function T:close()
+  if bitmap then api.JS_LICE_DestroyBitmap(bitmap);bitmap=nil end
+  for _,f in ipairs(self.fonts) do release(f) end
+  self.fonts={};clearImages();current=nil
+ end
+ return T
+end
+return M
+end)()
+
+BLT.ChromeRaster=(function()
+local M={}
+local floor,max=math.floor,math.max
+local function byte(v) return floor(max(0,math.min(1,v))*255) end
+function M.new(host,api,text)
+ local I,ctx,G=host.I,host.ctx,host.g
+ for _,name in ipairs({'CreateBitmap','DestroyBitmap','Resize','Clear','FillRect','GradRect','Line','RoundRect','FillCircle','ProcessRect'}) do
+  assert(type(api['JS_LICE_'..name])=='function','js_ReaScriptAPI: JS_LICE_'..name..' が必要です。')
+ end
+ local B={g={},signature={},texts={},count=0}
+ local P=B.g
+ local bitmap,image,scale,width,height
+ local color,alpha=0xffffffff,1
+ local paletteKeys={'bg','field','edge','accent','accent2','muted','text'}
+ local extraColors={}
+ local signatureIndex=0
+ local function check(value)
+  signatureIndex=signatureIndex+1
+  if B.signature[signatureIndex]~=value then B.signature[signatureIndex]=value;B.dirty=true end
+ end
+ function P.set(r,g,b,a)
+  color=(255<<24)|(byte(r)<<16)|(byte(g)<<8)|byte(b);alpha=a or 1
+ end
+ function P.rect(x,y,w,h,filled)
+  if not B.dirty then return end
+  x,y,w,h=floor(x*scale),floor(y*scale),floor(w*scale),floor(h*scale)
+  if filled==0 then
+   api.JS_LICE_Line(bitmap,x,y,x+w-1,y,color,alpha,'COPY',false)
+   api.JS_LICE_Line(bitmap,x+w-1,y,x+w-1,y+h-1,color,alpha,'COPY',false)
+   api.JS_LICE_Line(bitmap,x+w-1,y+h-1,x,y+h-1,color,alpha,'COPY',false)
+   api.JS_LICE_Line(bitmap,x,y+h-1,x,y,color,alpha,'COPY',false)
+  else api.JS_LICE_FillRect(bitmap,x,y,w,h,color,alpha,'COPY') end
+ end
+ function P.line(x,y,xx,yy,aa)
+  if B.dirty then api.JS_LICE_Line(bitmap,floor(x*scale),floor(y*scale),floor(xx*scale),floor(yy*scale),color,alpha,'COPY',aa~=0) end
+ end
+ function P.roundrect(x,y,w,h,r,aa)
+  if B.dirty then api.JS_LICE_RoundRect(bitmap,x*scale,y*scale,w*scale,h*scale,floor(r*scale),color,alpha,'COPY',aa~=0) end
+ end
+ function P.circle(x,y,r,filled,aa)
+  if B.dirty then api.JS_LICE_FillCircle(bitmap,x*scale,y*scale,r*scale,color,alpha,'COPY',aa~=0) end
+ end
+ function P.gradrect(x,y,w,h,r,g,b,a,rx,gx,bx,ax,ry,gy,by,ay)
+  if B.dirty then api.JS_LICE_GradRect(bitmap,floor(x*scale),floor(y*scale),floor(w*scale),floor(h*scale),
+   r,g,b,a,(rx or 0)/scale,(gx or 0)/scale,(bx or 0)/scale,(ax or 0)/scale,
+   (ry or 0)/scale,(gy or 0)/scale,(by or 0)/scale,(ay or 0)/scale,'COPY') end
+ end
+ P.setfont=function(...) return text:setfont(...) end
+ P.measurestr=function(value) return text:measurestr(value) end
+ function P.drawstr(value)
+  B.count=B.count+1;local command=B.texts[B.count] or {};B.texts[B.count]=command
+  text:capture(command,tostring(value),P.x,P.y,color,alpha)
+ end
+ function B:begin(painter)
+  scale=host.dpi or I.GetWindowDpiScale(ctx);width,height=floor(G.w*scale+.5),floor(painter.chrome.titleH*scale+.5)
+  self.combined=scale==math.ceil(scale) and math.abs(G.w*scale-width)<1e-7 and math.abs(painter.chrome.titleH*scale-height)<1e-7 and
+   math.abs(host.originX*scale-floor(host.originX*scale+.5))<1e-7 and math.abs(host.originY*scale-floor(host.originY*scale+.5))<1e-7
+  signatureIndex=0;self.dirty=not image
+  check(width);check(height);check(scale);check(self.combined);check(painter.dirty or false);check(painter.hot~='drag' and painter.hot or false);check(painter.presetOpen or false);check(painter.themeEnabled or false);check(painter.language)
+  for _,key in ipairs(paletteKeys) do local c=painter.C[key];check(c[1]);check(c[2]);check(c[3]) end
+  extraColors[1],extraColors[2],extraColors[3],extraColors[4],extraColors[5]=painter.chrome.mint,painter.chrome.red,painter.c1,painter.c2,painter.c3
+  for _,c in ipairs(extraColors) do check(c[1]);check(c[2]);check(c[3]) end
+  if not bitmap then bitmap=assert(api.JS_LICE_CreateBitmap(true,width,height),'LICE bitmap creation failed')
+  elseif self.width~=width or self.height~=height then api.JS_LICE_Resize(bitmap,width,height) end
+  self.width,self.height=width,height
+  if self.dirty then api.JS_LICE_Clear(bitmap,0xff000000) end
+  P.w,P.h=G.w,painter.chrome.titleH
+  if self.dirty then self.count=0 end
+  return P
+ end
+ function B:finish()
+  if self.dirty then
+   if self.combined then for i=1,self.count do text:paint(self.texts[i],bitmap) end end
+   api.JS_LICE_ProcessRect(bitmap,0,0,width,height,'SET_A',0xff000000)
+   if image then host:releaseImage(image) end
+   image=I.CreateImageFromLICE(bitmap);host:attachImage(image)
+  end
+  I.DrawList_AddImage(host.draw,image,host.originX,host.originY,host.originX+P.w,host.originY+P.h)
+  if not self.combined then for i=1,self.count do text:replay(self.texts[i]) end end
+ end
+ function B:close()
+  if bitmap then api.JS_LICE_DestroyBitmap(bitmap);bitmap=nil end
+  if image then host:releaseImage(image);image=nil end
+ end
+ return B
+end
+return M
+end)()
+
+BLT.HeaderIcon=(function()
+local M={}
+local min,max,sin,pi=math.min,math.max,math.sin,math.pi
+function M.new(host,ui,definition)
+ local icon={definition=definition,mode=definition.modes[1],state={},particles={},pool={},commands={},serial=0,
+  phase=0,spawnClock=0,untilTime=0}
+ local pen={C=ui.C,font=host.faces[1],minFontSize=5,scale=1,ox=0,oy=0}
+ for _,name in ipairs({'rect','line','disc','text','shape','surface','bloom','frame','glowParticle'}) do pen[name]=ui[name] end
+ function pen:bars(x,y,spacing,width,heights,c,a)
+  host.g.set(c[1],c[2],c[3],a or 1)
+  host.g.bars(self.ox+x*self.scale,self.oy+y*self.scale,spacing,width,heights,self.scale)
+ end
+ icon.pen=pen
+ local recorder={C=ui.C};local count=0
+ for _,name in ipairs({'rect','line','disc','text','bars'}) do
+  recorder[name]=function(_,...)
+   count=count+1;local c=icon.commands[count] or {};icon.commands[count]=c
+   c.draw,c.n=pen[name],select('#',...)
+   c[1],c[2],c[3],c[4],c[5],c[6],c[7],c[8],c[9]=...
+  end
+ end
+ function icon:cycle(now)
+  local modes=self.definition.modes;local index=1
+  for i,mode in ipairs(modes) do if mode==self.mode then index=i;break end end
+  self.mode=modes[index%#modes+1];self.dirty=true
+  self.untilTime=now+2.5
+ end
+ function icon:animating(now)
+  return self.dirty or not self.ready or #self.particles>0 or self.active and now<self.untilTime
+ end
+ function icon:tick(now,active,wake)
+  local gap=self.lastTime and max(0,now-self.lastTime) or 0;self.lastTime=now
+  if self.ready and not self.dirty and self.active==active and #self.particles==0 and
+   (not active or (not wake and now>=self.untilTime)) then return end
+  local dt=gap>.25 and 0 or min(.1,gap)
+  if active and (wake or not self.active) then self.untilTime=now+2.5 end
+  local remaining=self.untilTime-now
+  local speed=active and min(1,max(0,remaining/.7)) or 0;speed=speed*speed*(3-2*speed)
+  if not active or speed==0 or gap>.25 then self.spawnClock=0 end
+  self.phase=self.phase+dt*speed
+  local provider=self.definition
+  if self.dirty or not self.ready or (speed>0 and now>=(self.nextShape or 0)) or self.active~=active then
+   provider.update(self.state,self.mode,active and min(.1,max(0,now-(self.lastShape or now))) or 1)
+   count=0;provider.draw(recorder,self.state,self.mode,self.phase)
+   self.commandCount=count
+   self.ready,self.dirty,self.nextShape,self.lastShape=true,false,now+1/30,now
+  end
+  self.active=active
+  if speed>0 and dt>0 then
+   self.spawnClock=self.spawnClock+dt*speed
+   while self.spawnClock>=.075 and #self.particles<36 do
+    self.spawnClock=self.spawnClock-.075;self.serial=self.serial+1
+    local p=self.pool[#self.pool] or {};self.pool[#self.pool]=nil
+    provider.emit(self.state,self.serial,p);p.born,p.alpha=now,0
+    self.particles[#self.particles+1]=p
+   end
+   self.spawnClock=min(self.spawnClock,.075)
+  end
+  if #self.particles==0 then return end
+  if now<(self.nextParticles or 0) then return end
+  self.nextParticles=now+1/30
+  for i=#self.particles,1,-1 do
+   local p=self.particles[i];local age=max(0,now-p.born)
+   if age>=p.life then self.pool[#self.pool+1]=p;table.remove(self.particles,i)
+   else
+    if provider.sample then p.px,p.py=provider.sample(self.state,p,age)
+    else p.px=p.x+p.vx*age+sin(age*p.freq+p.phase)*p.sway;p.py=p.y-p.vy*age end
+    p.alpha=sin(pi*age/p.life)^2
+   end
+  end
+ end
+ function icon:draw(x,y,scale)
+  pen.scale,pen.ox,pen.oy=scale,x,y
+  for i=1,self.commandCount or 0 do
+   local c=self.commands[i];c.draw(pen,table.unpack(c,1,c.n))
+  end
+  for _,p in ipairs(self.particles) do
+   local a=p.alpha or 0
+   if a>.002 then
+    pen:glowParticle(p.px,p.py,p.r,a,p.glint)
+   end
+  end
+ end
+ return icon
+end
+return M
+end)()
+
+BLT.Shell=(function()
+local M={}
+local ChromeRaster,ShellText=BLT.ChromeRaster,BLT.ShellText
+M.spec={barHeight=26,titleSize=35,subtitleSize=10,titleX=24,titleY=8,subtitleX=26,subtitleY=44,
+ dividerY=62,inset=24,footerBottom=13,footerSize=9,versionSize=8,versionGap=14}
+function M.new(host,ui,api,options)
+ local gfx=host.g
+
 local BLTChrome=(function()
 local M={}
-function M.layout(w,fold,compact)
+function M.layout(w)
  local b=M.layoutCache
- if b and b.width==w and b.hasFold==fold and b.compact==compact then return b end
- b={width=w,hasFold=fold,compact=compact,closeX=w-38,resetX=w-72,themeX=w-106}
- b.foldX=fold and b.themeX-34 or nil;b.languageX=(b.foldX or b.themeX)-26
+ if b and b.width==w then return b end
+ b={width=w,closeX=w-38,resetX=w-72,themeX=w-106}
+ b.languageX=b.themeX-26
  b.nextX=b.languageX-20;b.prevX=b.nextX-20;b.presetX=b.prevX-84
- if compact then
-  b.resetX=b.closeX;b.themeX=w-72;b.foldX=w-106
-  b.languageX=w+500;b.nextX=w+500;b.prevX=w+500;b.presetX=w+500
- end
- b.close,b.reset,b.theme,b.language=b.closeX,b.resetX,b.themeX,b.languageX
- b.next,b.prev,b.preset=b.nextX,b.prevX,b.presetX
  M.layoutCache=b;return b
 end
 function M.hit(b,x,y,w,h)
  if x<0 or x>=w or y<0 or y>=h then return nil end
  if x>=b.closeX then return 'close' end
- if not b.compact and x>=b.resetX then return 'reset' end
+ if x>=b.resetX then return 'reset' end
  if x>=b.themeX then return 'theme' end
- if b.foldX and x>=b.foldX then return 'fold' end
  if x>=b.languageX then return 'language' end
- if not b.compact then
-  if x>=b.nextX then return 'next' end
-  if x>=b.prevX then return 'prev' end
-  if x>=b.presetX then return 'preset' end
- end
+ if x>=b.nextX then return 'next' end
+ if x>=b.prevX then return 'prev' end
+ if x>=b.presetX then return 'preset' end
  return 'drag'
 end
 function M.background(C,h,x,w)
@@ -372,21 +1860,19 @@ function M.background(C,h,x,w)
 end
 function M.draw(p)
  local C,Chrome,b,w=p.C,p.chrome,p.b,gfx.w
- local closeX,resetX,chamX,foldX=b.closeX,b.resetX,b.themeX,b.foldX
+ local closeX,resetX,chamX=b.closeX,b.resetX,b.themeX
  local languageX,presetX,prevX,nextX=b.languageX,b.presetX,b.prevX,b.nextX
  local closeW,resetW,chamW=38,34,34
  local hoverClose,hoverReset,hoverCham=p.hot=='close',p.hot=='reset',p.hot=='theme'
  local hoverLanguage,hoverPreset=p.hot=='language',p.hot=='preset'
- local hoverPrev,hoverNext,hoverFold=p.hot=='prev',p.hot=='next',p.hot=='fold'
-  if b.inline then M.background(C,Chrome.titleH,0,b.titleEnd);M.background(C,Chrome.titleH,presetX,w-presetX)
-  else M.background(C,Chrome.titleH,0,w) end
+ local hoverPrev,hoverNext=p.hot=='prev',p.hot=='next'
+  M.background(C,Chrome.titleH,0,w)
 
   p.barFont()
   local _,titleHeight=p.metrics(Chrome.titleText)
   local ty=math.floor((Chrome.titleH-titleHeight)*.5)
-  gfx.set(Chrome.mint[1],Chrome.mint[2],Chrome.mint[3],.88); gfx.x=14; gfx.y=ty; gfx.drawstr(p.fit(Chrome.titleText,math.max(0,(b.titleEnd or (b.compact and b.foldX or presetX))-22)))
+  gfx.set(Chrome.mint[1],Chrome.mint[2],Chrome.mint[3],.88); gfx.x=14; gfx.y=ty; gfx.drawstr(p.fit(Chrome.titleText,math.max(0,presetX-22)))
 
-  if not b.compact then
   if hoverPreset or p.presetOpen then
     gfx.set(C.accent[1],C.accent[2],C.accent[3],.10);gfx.rect(presetX+2,3,78,20,1)
   end
@@ -399,7 +1885,6 @@ function M.draw(p)
   p.barFont()
   gfx.x=presetX+26;gfx.y=7;gfx.drawstr("PRESET")
   gfx.line(presetX+67,11,presetX+70,14);gfx.line(presetX+70,14,presetX+73,11)
-  if p.dirty then gfx.set(C.warn[1],C.warn[2],C.warn[3],.9);gfx.circle(presetX+23,6,1.3,1,1) end
 
   p.arrows=p.arrows or {{},{}}
   local left,right=p.arrows[1],p.arrows[2]
@@ -416,26 +1901,11 @@ function M.draw(p)
     gfx.line(cx+direction*2,cy,cx-direction*2,cy+4,1)
   end
 
-  end
-  if not b.compact or p.compactLanguage then
   local lc=hoverLanguage and Chrome.mint or C.text
   gfx.set(lc[1],lc[2],lc[3],hoverLanguage and 1 or .95)
   p.languageFont()
   local lw,lh=p.metrics(p.language)
   gfx.x=languageX+(26-lw)/2;gfx.y=(Chrome.titleH-lh)/2;gfx.drawstr(p.language)
-  end -- full-size preset and language controls
-  if foldX then
-    gfx.set(C.accent2[1],C.accent2[2],C.accent2[3],hoverFold and .98 or .8)
-    local cx,cy=foldX+17,13
-    if p.dockButton then
-      gfx.rect(cx-7,cy-6,14,12,0)
-      if p.docked then gfx.rect(cx-5,cy+1,10,3,1)
-      else gfx.line(cx-5,cy+2,cx+5,cy+2);gfx.line(cx,cy-4,cx,cy);gfx.line(cx-2,cy-2,cx,cy);gfx.line(cx,cy,cx+2,cy-2) end
-    else
-      local d=p.collapsed and 1 or -1
-      gfx.line(cx-6,cy-5,cx+6,cy-5);gfx.line(cx-4,cy-d*3,cx,cy+d);gfx.line(cx,cy+d,cx+4,cy-d*3)
-    end
-  end
   if hoverCham or p.themeEnabled then
     local a=hoverCham and .095 or .045
     gfx.set(C.accent[1],C.accent[2],C.accent[3],a); gfx.rect(chamX,0,chamW,Chrome.titleH,1)
@@ -456,20 +1926,18 @@ function M.draw(p)
   gfx.set(c3[1],c3[2],c3[3],active_a*.94)
   gfx.circle(chx,chy-3.3,4.5,1,1)
 
-  if not b.compact then
   if hoverReset then
     gfx.set(Chrome.mint[1],Chrome.mint[2],Chrome.mint[3],.050); gfx.rect(resetX,0,resetW,Chrome.titleH,1)
     gfx.set(Chrome.mint[1],Chrome.mint[2],Chrome.mint[3],.34); gfx.line(resetX,Chrome.titleH-1,closeX,Chrome.titleH-1,1)
   end
   local rcx,rcy=resetX+resetW*.5,Chrome.titleH*.5
   local rcol=hoverReset and Chrome.mint or C.muted
-  gfx.set(rcol[1],rcol[2],rcol[3],p.docked and .25 or (hoverReset and .98 or .82))
+  gfx.set(rcol[1],rcol[2],rcol[3],hoverReset and .98 or .82)
   gfx.roundrect(rcx-6,rcy-6,12,12,1,1)
   gfx.line(rcx+3,rcy-3,rcx-3,rcy+3,1)
   gfx.line(rcx-3,rcy+3,rcx-3,rcy-1,1)
   gfx.line(rcx-3,rcy+3,rcx+1,rcy+3,1)
 
-  end -- full-size reset control
   if hoverClose then
     gfx.set(Chrome.red[1],Chrome.red[2],Chrome.red[3],.10); gfx.rect(closeX,0,closeW,Chrome.titleH,1)
     gfx.set(Chrome.red[1],Chrome.red[2],Chrome.red[3],.56); gfx.line(closeX,Chrome.titleH-1,w,Chrome.titleH-1,1)
@@ -483,38 +1951,896 @@ function M.draw(p)
 end
 return M
 end)()
--- END BLT COMMON CHROME
 
-local BLTPresetLimits={bytes=16777216,stringBytes=2097152,nodes=262144,entries=8192}
-function BLTPresetLimits.show(english)
- reaper.MB(english and 'Preset capacity limit exceeded. Export presets individually instead of as a bundle.' or '容量上限オーバーです。一括ではなく個別に保存してください。','BLT PRESET',0)
+
+
+local BLTChameleon=(function()
+
+local BLTThemeColors=(function()
+ local M={}
+ function M.native(api,key)
+  local ok,n=pcall(api.GetThemeColor,key,0)
+  if not ok or type(n)~='number' or n~=n or n%1~=0 then return -1 end
+  return n
+ end
+ function M.decode(api,n)
+  if n==-1 then return nil end
+  local ok,r,g,b=pcall(api.ColorFromNative,n)
+  if not ok then return nil end
+  for _,v in ipairs({r,g,b}) do
+   if type(v)~='number' or v~=v or v<0 or v>255 then return nil end
+  end
+  if r==nil or g==nil or b==nil then return nil end
+  return {r/255,g/255,b/255}
+ end
+ local function linear(v) return v<=.04045 and v/12.92 or ((v+.055)/1.055)^2.4 end
+ function M.luminance(c) return linear(c[1])*.2126+linear(c[2])*.7152+linear(c[3])*.0722 end
+ function M.contrast(a,b)
+  local x,y=M.luminance(a),M.luminance(b)
+  return (math.max(x,y)+.05)/(math.min(x,y)+.05)
+ end
+ return M
+end)()
+
+ local M={}
+ M.keys={
+  'col_main_bg2','col_main_bg','col_arrangebg','col_tracklistbg','col_mixerbg',
+  'genlist_bg','col_tl_bg','col_trans_bg','col_tr1_bg','col_tr2_bg',
+  'col_main_editbk','col_transport_editbk','col_buttonbg',
+  'col_main_text2','col_main_text','genlist_fg','col_tcp_text',
+  'col_toolbar_text','col_toolbar_text_on','col_tl_fg','col_tl_fg2','col_trans_fg',
+  'col_seltrack','col_seltrack2','genlist_selbg','col_tl_bgsel','toolbararmed_color',
+  'col_main_resize2','selitem_dot','selitem_tag','activetake_tag',
+  'col_routinghl1','col_routinghl2','track_lanesolo_tabcol',
+  'col_main_3dhl','col_main_3dsh','genlist_grid','col_toolbar_frame',
+  'col_tr1_divline','col_tr2_divline','docker_shadow',
+ }
+ function M.copy(c) return {c[1],c[2],c[3]} end
+ function M.mix(a,b,t)
+  t=math.max(0,math.min(1,t or 0))
+  return {a[1]+(b[1]-a[1])*t,a[2]+(b[2]-a[2])*t,a[3]+(b[3]-a[3])*t}
+ end
+ function M.luma(c) return c[1]*.2126+c[2]*.7152+c[3]*.0722 end
+ local function saturation(c) return math.max(c[1],c[2],c[3])-math.min(c[1],c[2],c[3]) end
+ local function shift(c,target)
+  local l=M.luma(c);target=math.max(0,math.min(1,target))
+  if math.abs(target-l)<1e-5 then return M.copy(c) end
+  if target<l then return M.mix(c,{0,0,0},(l-target)/math.max(l,1e-9)) end
+  return M.mix(c,{1,1,1},(target-l)/math.max(1-l,1e-9))
+ end
+ local function boost(c,factor)
+  local l=M.luma(c);local out={}
+  for i=1,3 do out[i]=math.max(0,math.min(1,l+(c[i]-l)*factor)) end
+  return out
+ end
+ function M.fit(accent,bg,light)
+  if math.abs(M.luma(accent)-M.luma(bg))>=.17 then return M.copy(accent) end
+  return shift(accent,light and math.min(.78,M.luma(bg)+.28) or math.max(.16,M.luma(bg)-.30))
+ end
+ local function surface(c,bg,factor,lo,hi)
+  local delta=M.luma(c)-M.luma(bg)
+  return shift(c,math.max(.01,math.min(.99,M.luma(bg)+(delta<0 and -1 or 1)*math.max(lo,math.min(hi,math.abs(delta)*factor)))))
+ end
+ local function first_near(map,bg,keys,gap)
+  local l=M.luma(bg)
+  for _,key in ipairs(keys) do local c=map[key];if c and math.abs(M.luma(c)-l)<=gap then return c end end
+ end
+ local function generated_text(bg)
+  local light,dark={.935,.945,.958},{.070,.075,.082}
+  local lr,dr=BLTThemeColors.contrast(light,bg),BLTThemeColors.contrast(dark,bg)
+  local is_light=lr>dr;local color=is_light and light or dark
+  if math.max(lr,dr)<4.5 then color=is_light and {1,1,1} or {0,0,0} end
+  return color,is_light
+ end
+ local text_keys={'col_main_text2','col_main_text','genlist_fg','col_tcp_text','col_toolbar_text','col_tl_fg','col_trans_fg'}
+ local accent_keys={'genlist_selbg','col_seltrack','toolbararmed_color','col_tl_bgsel','col_toolbar_text_on','col_main_resize2',
+  'selitem_dot','selitem_tag','activetake_tag','col_routinghl1','col_routinghl2','track_lanesolo_tabcol','col_tl_fg'}
+ local hi_keys={'col_main_3dhl','col_toolbar_frame','genlist_grid','col_tl_fg2','col_tr1_divline','col_tr2_divline'}
+ local sh_keys={'col_main_3dsh','docker_shadow','genlist_grid','col_tr1_divline','col_tr2_divline'}
+ local panel_keys={'col_main_bg','col_tracklistbg','col_mixerbg','genlist_bg','col_seltrack2','col_tl_bg','col_tr1_bg','col_tr2_bg'}
+ local field_keys={'col_main_editbk','col_transport_editbk','genlist_bg','col_buttonbg','col_trans_bg'}
+ local function best_color(map,bg,keys,role,dark)
+  local best,score=nil,-math.huge;local l=M.luma(bg)
+  for i,key in ipairs(keys) do
+   local c=map[key]
+   if c then
+    local delta=M.luma(c)-l;local gap=math.abs(delta);local sat=saturation(c);local value
+    if role=='text' then
+     if gap>=.28 then value=gap+sat*.20 end
+    elseif role=='accent' then
+     value=sat*1.45+gap*.72+(i<=3 and .12 or 0)-(gap<.035 and sat<.035 and .35 or 0)
+    else
+     local wanted=role=='hi' and (dark and delta>0 or not dark and delta<0)
+      or role=='sh' and (dark and delta<0 or not dark and delta>0)
+     value=gap+(wanted and .16 or 0)
+    end
+    if value and value>score then best,score=c,value end
+   end
+  end
+  return best
+ end
+
+ function M.snapshot(api,cache,force)
+  cache=cache or {raw={},map={}};local changed=not cache.ready
+  for i,key in ipairs(M.keys) do
+   local native=BLTThemeColors.native(api,key)
+   if force or native~=cache.raw[i] then
+    local c=BLTThemeColors.decode(api,native)
+    cache.map[key]=c;cache.raw[i]=c and native or -1;changed=true
+   end
+  end
+  cache.ready=true
+  return cache.map,changed,cache
+ end
+ local function hue_gap(a,b)
+  local al,bl=math.min(a[1],a[2],a[3]),math.min(b[1],b[2],b[3])
+  local ar,br=saturation(a),saturation(b)
+  if ar<.06 or br<.06 then return 1 end
+  local gap=0
+  for i=1,3 do gap=gap+math.abs((a[i]-al)/ar-(b[i]-bl)/br) end
+  return gap/3
+ end
+ local function special_color(map,base,original,other)
+  local best,score=nil,-math.huge
+  for _,key in ipairs(accent_keys) do
+   local c=map[key]
+   if c and saturation(c)>=.08 then
+    local gap=hue_gap(c,base);local separation=other and hue_gap(c,other) or 1
+    if gap>=.14 and separation>=.14 then
+     local value=gap*.8+separation*.65+saturation(c)*.3+(1-hue_gap(c,original))*.25
+     if value>score then best,score=c,value end
+    end
+   end
+  end
+  if best then return best end
+  local fallback=original
+  for _=1,3 do
+   local color=M.mix(base,fallback,.55)
+   if hue_gap(color,base)>=.14 and (not other or hue_gap(color,other)>=.14) then return color end
+   fallback={fallback[2],fallback[3],fallback[1]}
+  end
+  return M.mix(base,original,.55)
+ end
+ local function special_palette(base,source,original,light)
+  local accent=M.fit(source,base.bg,light)
+  local field=M.mix(base.field,accent,.045)
+  local text=M.mix(accent,base.text,.48)
+  if BLTThemeColors.contrast(text,field)<4.5 then text=generated_text(field) end
+  local ice=M.mix(accent,base.text,.30)
+  return {field=field,edge=M.mix(base.edge,accent,.35),
+   accent=accent,ice=ice,text=text,rim=ice,ember=M.mix(accent,base.text,.16),spark=base.text,gilded=original.gilded==true}
+ end
+ function M.palette(map,defaults,special)
+
+  local bg=M.copy(map.col_main_bg2 or map.col_main_bg or map.col_tracklistbg or map.genlist_bg or map.col_arrangebg or defaults.bg)
+  local l=M.luma(bg);local dark=l<.50
+  local panel=first_near(map,bg,panel_keys,.16) or shift(bg,dark and math.min(.92,l+.040) or math.max(.08,l-.040))
+  local field=first_near(map,bg,field_keys,.14) or shift(bg,dark and math.min(.92,l+.018) or math.min(.96,l+.020))
+  panel=surface(panel,bg,1.48,.030,.105);field=surface(field,bg,1.38,.020,.085)
+  if dark and M.luma(panel)<=l+.022 then panel=shift(panel,math.min(.94,l+.038))
+  elseif not dark and M.luma(panel)>=l-.022 then panel=shift(panel,math.max(.06,l-.038)) end
+  local generated,light=generated_text(bg)
+  local text=M.mix(generated,best_color(map,bg,text_keys,'text') or generated,.18)
+  if BLTThemeColors.contrast(text,bg)<4.5 then text=generated end
+  local accent=boost(best_color(map,bg,accent_keys,'accent') or defaults.accent,dark and 1.18 or 1.14)
+  accent=M.fit(accent,bg,light)
+  if dark and M.luma(accent)<l+.22 then accent=shift(accent,math.min(.82,l+.26))
+  elseif not dark and M.luma(accent)>l-.22 then accent=shift(accent,math.max(.12,l-.28)) end
+  local edge=M.mix(bg,text,dark and .20 or .18);local edge2=M.mix(accent,text,dark and .12 or .09)
+  local hi=best_color(map,bg,hi_keys,'hi',dark);local sh=best_color(map,bg,sh_keys,'sh',dark)
+  if sh then edge=M.mix(edge,sh,.28) end;if hi then edge2=M.mix(edge2,hi,.24) end
+  local out={bg=bg,bg2=M.mix(bg,accent,dark and .080 or .065),panel=panel,panel2=M.mix(panel,accent,dark and .105 or .085),field=field,
+   text=text,muted=M.mix(text,bg,dark and .28 or .30),faint=M.mix(text,bg,dark and .50 or .52),edge=edge,edge2=edge2,
+   accent=accent,accent2=M.mix(accent,text,dark and .14 or .09),accent3=M.mix(accent,bg,dark and .48 or .46),
+   focus=M.mix(accent,text,dark and .06 or .04),focus2=M.mix(accent,text,dark and .20 or .12),
+   ink=M.mix(bg,accent,dark and .16 or .12),hover=M.mix(accent,text,dark and .15 or .10)}
+  if defaults.green then out.green=M.copy(out.accent2) end
+  for _,key in ipairs({'warn','red','gold','purple','lock'}) do
+   if defaults[key] then out[key]=M.fit(defaults[key],bg,light) end
+  end
+  if out.lock and defaults.lock2 then out.lock2=M.mix(out.lock,text,dark and .22 or .16) end
+  if special then
+   local gold=special_color(map,accent,special.gold.accent)
+   local chaos=special_color(map,accent,special.chaos.accent,gold)
+   out.special={gold=special_palette(out,gold,special.gold,light),chaos=special_palette(out,chaos,special.chaos,light)}
+  end
+  return out
+ end
+ local function hsv(c)
+  local r,g,b=c[1],c[2],c[3];local mx=math.max(r,g,b);local d=mx-math.min(r,g,b);local h=0
+  if d>1e-6 then h=(mx==r and ((g-b)/d)%6 or mx==g and (b-r)/d+2 or (r-g)/d+4)/6 end
+  return h,mx<=1e-6 and 0 or d/mx,mx
+ end
+ local function rgb(h,s,v)
+  h=h%1;local i=math.floor(h*6);local f=h*6-i
+  local p,q,t=v*(1-s),v*(1-f*s),v*(1-(1-f)*s)
+  i=i%6
+  if i==0 then return {v,t,p} elseif i==1 then return {q,v,p} elseif i==2 then return {p,v,t}
+  elseif i==3 then return {p,q,v} elseif i==4 then return {t,p,v} else return {v,p,q} end
+ end
+ function M.new(api,colors,options)
+  options=options or {};local defaults={};local chrome_defaults
+  for k,c in pairs(colors) do if type(c)=='table' and type(c[1])=='number' then defaults[k]=M.copy(c) end end
+  local theme={enabled=api.GetExtState(options.section,'chameleon')=='1',poll_at=0,poll_interval=3}
+  local cache,pending=nil,false
+  local function chrome()
+   local c=options.chrome;if type(c)=='function' then c=c() end
+   if c and not chrome_defaults then chrome_defaults={mint=M.copy(c.mint),ice=M.copy(c.ice)} end
+   return c
+  end
+  chrome()
+  local function updated(restored,palette)
+   theme.bltIcon=nil
+   if options.applied then options.applied(restored,palette) end
+   if options.changed then options.changed() end
+  end
+  function theme.apply(palette)
+   for key in pairs(defaults) do
+    local c=palette[options.roles and options.roles[key] or key]
+    if c then colors[key]=c end
+   end
+   local c=chrome();if c then c.mint=M.copy(palette.accent2);c.ice=M.copy(palette.focus2) end
+   updated(false,palette)
+  end
+  function theme.restore()
+   for key,c in pairs(defaults) do colors[key]=M.copy(c) end
+   local c=chrome();if c then c.mint=M.copy(chrome_defaults.mint);c.ice=M.copy(chrome_defaults.ice) end
+   updated(true)
+  end
+  function theme.refresh(force)
+   if not theme.enabled then return false end
+   local map,changed;map,changed,cache=M.snapshot(api,cache,force)
+   if not force and not changed and not pending then return false end
+   pending=true;theme.apply(M.palette(map,defaults,options.special));pending=false
+   if force then theme.poll_at=api.time_precise()+theme.poll_interval end
+   return true
+  end
+  function theme.set(on)
+   theme.enabled=on and true or false;cache=nil;pending=false
+   local value=theme.enabled and '1' or '0'
+   if options.store then options.store(options.section,'chameleon',value,true)
+   else api.SetExtState(options.section,'chameleon',value,true) end
+   if theme.enabled then theme.refresh(true) else theme.restore() end
+   if options.notify then options.notify(theme.enabled and 'CHAMELEON  REAPERテーマに擬態' or 'CHAMELEON  オリジナル配色') end
+  end
+  function theme.toggle() theme.set(not theme.enabled) end
+  function theme.tick(now)
+   if not theme.enabled or now<theme.poll_at then return false end
+   theme.poll_at=now+theme.poll_interval
+   return theme.refresh(false)
+  end
+  function theme.icon_colors()
+   local c=theme.bltIcon;local a=colors.accent
+   if c and c.on==theme.enabled and c.r==a[1] and c.g==a[2] and c.b==a[3] then return c[1],c[2],c[3] end
+   local x,y,z
+   if theme.enabled then
+    local h,s,v=hsv(a);s=math.max(s,.46)
+    x,y,z=rgb(h,s,v),rgb(h+.19,math.max(.42,s*.90),v),rgb(h-.19,math.max(.42,s*.86),v)
+   else
+    x,y,z=M.copy(colors.muted),M.copy(colors.faint),M.copy(colors.edge)
+    for _,color in ipairs({x,y,z}) do
+     local gray=M.luma(color);for i=1,3 do color[i]=gray+(color[i]-gray)*.12 end
+    end
+   end
+   theme.bltIcon={x,y,z,on=theme.enabled,r=a[1],g=a[2],b=a[3]};return x,y,z
+  end
+  return theme
+ end
+ return M
+end)()
+
+
+ local S={language=options.language or 'JP',preset=1,fitCache={},fitCount=0}
+ S.typography=ShellText.new(host,api)
+ S.textG=S.typography:canvas(host.g);gfx=S.textG
+ S.raster=ChromeRaster.new(host,api,S.typography)
+ local I,ctx,C=host.I,host.ctx,ui.C
+ local spec=M.spec
+ if options.layout then
+  spec={};for key,value in pairs(M.spec) do spec[key]=value end
+  for key,value in pairs(options.layout) do spec[key]=value end
+ end
+ C.accent2=C.ice;C.edge2={.36,.65,.90};C.faint={.39,.505,.635};C.warn={1,.755,.49}
+ local chrome={titleH=spec.barHeight,titleText=options.barTitle or 'C O N T R O L   L A B',mint={.38,.88,.72},ice={.65,.895,1},red={1,.27,.34}}
+ S.chrome=chrome
+ if options.headerIcon then S.icon=BLT.HeaderIcon.new(host,ui,options.headerIcon) end
+ local themeAPI=options.persist and api or setmetatable({GetExtState=function() return '' end},{__index=api})
+ S.theme=BLTChameleon.new(themeAPI,C,{section=options.section or 'BLT_UI_DEMO',chrome=chrome,roles={ice='accent2',disabled='faint'},special=ui.tones,
+  store=options.persist and (options.store or api.SetExtState) or function() end,
+  applied=function(restored,palette) ui.themeTones=not restored and palette.special or nil end,
+  changed=function() if S.icon then S.icon.dirty=true end end})
+ function S:translate(text)
+  if options.translate then return options.translate(text,self.language) end
+  return text
+ end
+ function S:font(size,kind,bold,scale)
+  local px=math.max(8,math.floor(size*(scale or ui.scale)+.5))
+  self.face,self.weight,self.size=host.faces[kind],bold and 98 or 0,px
+  local actual=gfx.setfont(1,self.face,px,self.weight)
+  self.fontKey=self.face..':'..self.weight..':'..actual..':'..(host.dpi or 1)
+ end
+ function S:fit(text,width)
+  local bucket=self.fitCache[self.fontKey];local cached=bucket and bucket[text]
+  if cached and cached.width==width then return cached.text end
+  local shown=text
+  if gfx.measurestr(text)>width then
+   if gfx.measurestr('…')>width then shown=''
+   else
+    local count=utf8.len(text);local valid=text
+    if not count then valid=text:gsub('[\128-\255]','?');count=#valid end
+    local low,high=0,count
+    while low<high do
+     local mid=math.floor((low+high+1)/2);local stop=utf8.offset(valid,mid+1) or (#valid+1)
+     if gfx.measurestr(valid:sub(1,stop-1)..'…')<=width then low=mid else high=mid-1 end
+    end
+    shown=valid:sub(1,(utf8.offset(valid,low+1) or (#valid+1))-1)..'…'
+   end
+  end
+  if self.fitCount>=512 then self.fitCache={};self.fitCount=0;bucket=nil end
+  if not bucket then bucket={};self.fitCache[self.fontKey]=bucket end
+  if not bucket[text] then self.fitCount=self.fitCount+1 end
+  bucket[text]={width=width,text=shown};return shown
+ end
+ local function color(c,a) gfx.set(c[1],c[2],c[3],a or 1) end
+ function S:text(text,x,y,width,size,kind,bold,c)
+  self:font(size,kind,bold);color(c)
+  gfx.x,gfx.y=ui.ox+x*ui.scale,ui.oy+y*ui.scale
+  gfx.drawstr(self:fit(text,width*ui.scale))
+ end
+ function S:header(width)
+  self:text(options.title or 'CONTROL LAB',spec.titleX,spec.titleY,width-150,spec.titleSize,2,true,C.text)
+  self:text(self:translate(options.subtitle or 'COMMON BUTTON AND INPUT DESIGN STUDY'),spec.subtitleX,spec.subtitleY,width-155,spec.subtitleSize,1,false,C.accent2)
+  ui:line(spec.inset,spec.dividerY,width-spec.inset,spec.dividerY,C.edge2,.26)
+  if self.icon then
+   local icon=self.icon;local now=api.time_precise();local active=I.IsWindowFocused(ctx)
+   if options.iconMode then
+    local mode=options.iconMode()
+    if icon.mode~=mode then icon.mode=mode;icon.dirty=true end
+   end
+   local x,y=width-178,30
+   local mx,my=(gfx.mouse_x-ui.ox)/ui.scale,(gfx.mouse_y-ui.oy)/ui.scale
+   local hot=not options.iconMode and active and not self.popupOpen and mx>=x and mx<x+54 and my>=y and my<y+20
+   if self.pressed and hot then self.iconPressed=true end
+   if self.released or not active then
+    if self.iconPressed and hot and active then icon:cycle(now) end
+    self.iconPressed=false
+   end
+   local text=ui.editor.edit and ui.editor.edit.text
+   local wake=(gfx.mouse_x>=0 and gfx.mouse_y>=0 and (gfx.mouse_x~=self.iconMX or gfx.mouse_y~=self.iconMY)) or
+    gfx.mouse_cap~=self.iconCap or gfx.mouse_wheel~=0 or host.key~=0 or text~=self.iconText or gfx.w~=self.iconWidth or gfx.h~=self.iconHeight or host.dpi~=self.iconDpi
+   self.iconMX,self.iconMY,self.iconCap,self.iconText,self.iconWidth,self.iconHeight,self.iconDpi=gfx.mouse_x,gfx.mouse_y,gfx.mouse_cap,text,gfx.w,gfx.h,host.dpi
+   icon:tick(now,active,wake)
+   local scale=spec.iconScale or math.min(.8,80/icon.definition.width,50/icon.definition.height)
+   icon:draw(ui.ox+(spec.iconX or width-spec.inset-icon.definition.width*scale)*ui.scale,ui.oy+(spec.iconY or 6)*ui.scale,scale*ui.scale)
+   if not options.iconMode then
+    local p=icon.pen;p.scale,p.ox,p.oy=ui.scale,ui.ox,ui.oy
+    local f=self.iconFrame or {};self.iconFrame=f
+    f.hot,f.pressed,f.focus=hot and 1 or 0,self.iconPressed and hot,false
+    p:frame(x,y,54,20,f)
+    p:text(self.language=='JP' and '切替' or 'SWITCH',x,y,54,20,9,C.muted,true)
+   end
+  end
+ end
+ function S:footer(message,bad,width,height,version,progress)
+  local scale=ui.scale;local y=height-spec.footerBottom;local ver='v'..version
+  self:font(spec.versionSize,3,true);local vw=gfx.measurestr(ver)
+  local available=(width-spec.inset*2)*scale-vw-spec.versionGap*scale
+  self:font(spec.footerSize,1,false)
+  self.footerMessage=self:translate(tostring(message or ''))
+  self.footerShown=type(progress)=='number' and '' or self:fit(self.footerMessage,available)
+  self.footerX,self.footerY,self.footerW=ui.ox+spec.inset*scale,ui.oy+y*scale,available
+  self.footerH=14*scale
+  ui:line(spec.inset,y-3,width-spec.inset,y-3,C.edge,.26)
+  if type(progress)=='number' then
+   local fraction=math.max(0,math.min(1,progress))
+   local pattern=self.language=='JP' and '生成中...%d%%' or 'Generating...%d%%'
+   local caption=string.format(pattern,math.floor(fraction*100+.5));local cw=gfx.measurestr(string.format(pattern,100))
+   color(C.muted);gfx.x,gfx.y=self.footerX,self.footerY;gfx.drawstr(caption)
+   local x=self.footerX+cw+10*scale;local by=self.footerY+3*scale
+   local w=math.max(0,math.min(available,(width-48)*scale*.45)-cw-10*scale)
+   color(C.field);gfx.rect(x,by,w,6*scale,1);color(C.accent2,.95);gfx.rect(x,by,w*fraction,6*scale,1)
+   color(C.muted,.5);gfx.rect(x,by,w,6*scale,0)
+  else color(bad and C.warn or C.muted);gfx.x,gfx.y=self.footerX,self.footerY;gfx.drawstr(self.footerShown) end
+  self:font(spec.versionSize,3,true);color(C.faint);gfx.x,gfx.y=ui.ox+(width-spec.inset)*scale-vw,self.footerY;gfx.drawstr(ver)
+ end
+ function S:applyPreset(index)
+  if options.stepPreset then options.stepPreset(index<self.preset and -1 or 1);return end
+  self.preset=(index-1)%#options.presets+1
+  if ui.editor.edit then ui.editor:close(false) end
+  options.apply(options.presets[self.preset])
+ end
+ function S:begin()
+  self.theme.tick(api.time_precise())
+  self.layout=BLTChrome.layout(gfx.w)
+  self.hot=host.hovered and BLTChrome.hit(self.layout,gfx.mouse_x,gfx.mouse_y,gfx.w,spec.barHeight) or nil
+  local down=(gfx.mouse_cap&1)~=0
+  self.pressed,self.released=down and not self.down,not down and self.down;self.down=down
+  if self.pressed and self.hot and not self.popupOpen then
+   self.capture=self.hot
+   if self.hot=='drag' then
+    local mx,my=I.GetMousePos(ctx);local wx,wy=I.GetWindowPos(ctx);host.drag={x=mx-wx,y=my-wy}
+   end
+  end
+  ui.blocked=self.popupOpen or self.hot~=nil or host.drag~=nil or not (host.focused or host.hovered)
+ end
+ local tips={preset={'プリセットを選択','Choose a preset'},prev={'前のプリセット','Previous preset'},next={'次のプリセット','Next preset'},
+  language={'日本語 / English','Japanese / English'},theme={'CHAMELEON：REAPERテーマに擬態','CHAMELEON: match the REAPER theme'},
+  reset={'ウィンドウサイズを初期値に戻す','Restore default window size'},close={'閉じる','Close'}}
+ local painter={C=C,chrome=chrome,metrics=gfx.measurestr,fit=function(t,w) return S:fit(t,w) end,
+  barFont=function() S:font(10,2,false,1) end,languageFont=function() S:font(13,2,true,1) end}
+ function S:drawBar()
+  local opening=false
+  if self.released then
+   if self.capture==self.hot then
+    if self.hot=='close' then host.requestClose=true
+    elseif self.hot=='reset' then host.requestReset=true
+    elseif self.hot=='theme' then self.theme.toggle()
+    elseif self.hot=='language' then
+     self.language=self.language=='JP' and 'EN' or 'JP'
+     if options.languageChanged then options.languageChanged(self.language) end
+    elseif self.hot=='prev' then self:applyPreset(self.preset-1)
+    elseif self.hot=='next' then self:applyPreset(self.preset+1)
+    elseif self.hot=='preset' then
+     I.OpenPopup(ctx,'BLT_DEMO_PRESETS')
+     opening=true
+    end
+   end
+   self.capture=nil
+  end
+  self.popupOpen=I.IsPopupOpen(ctx,'BLT_DEMO_PRESETS')
+  painter.b,painter.hot,painter.language=self.layout,self.hot,self.language
+  painter.presetOpen,painter.themeEnabled,painter.dirty=self.popupOpen,self.theme.enabled,options.dirty and options.dirty() or false
+  painter.c1,painter.c2,painter.c3=self.theme.icon_colors()
+  gfx=self.raster:begin(painter)
+  if self.raster.dirty then BLTChrome.draw(painter) end
+  gfx=self.textG;self.raster:finish()
+  if self.popupOpen then
+  local width,height
+  if options.presetSize then width,height=options.presetSize();I.SetNextWindowSize(ctx,width,height) end
+  if opening then
+   I.SetNextWindowPos(ctx,host.originX+(width and math.max(6,gfx.w-width-6) or self.layout.presetX),host.originY+spec.barHeight+2)
+  end
+  I.PushFont(ctx,host.font,13)
+  I.PushStyleVar(ctx,I.StyleVar_WindowPadding,12,10)
+  I.PushStyleColor(ctx,I.Col_PopupBg,host.rgba(C.panel[1],C.panel[2],C.panel[3],1))
+  I.PushStyleColor(ctx,I.Col_Text,host.rgba(C.text[1],C.text[2],C.text[3],1))
+  if I.BeginPopup(ctx,'BLT_DEMO_PRESETS') then
+   if options.drawPresets then options.drawPresets(self) else
+   for index,preset in ipairs(options.presets) do
+    if I.Selectable(ctx,self.language=='JP' and preset.name or preset.nameEN,index==self.preset,0,180,24) then self:applyPreset(index) end
+   end
+   end
+   I.EndPopup(ctx)
+  end
+  self.popupOpen=I.IsPopupOpen(ctx,'BLT_DEMO_PRESETS')
+  I.PopStyleColor(ctx,2);I.PopStyleVar(ctx);I.PopFont(ctx)
+  end
+  local tip=self.hot and tips[self.hot]
+  local footerHot=self.footerShown and self.footerShown~='' and self.footerShown~=self.footerMessage and
+   gfx.mouse_x>=self.footerX and gfx.mouse_x<self.footerX+self.footerW and gfx.mouse_y>=self.footerY and gfx.mouse_y<self.footerY+self.footerH
+  local hoverID=self.hot or (footerHot and 'footer' or nil)
+  local now=api.time_precise()
+  if self.hoverID~=hoverID then self.hoverID,self.hoverSince=hoverID,now end
+  if tip and not self.down and not self.popupOpen and now-(self.hoverSince or now)>=.7 then
+   I.PushFont(ctx,host.font,12);I.SetTooltip(ctx,tip[self.language=='JP' and 1 or 2]);I.PopFont(ctx)
+  elseif footerHot and not self.down and not self.popupOpen and now-(self.hoverSince or now)>=.7 then
+   I.PushFont(ctx,host.font,12);I.SetTooltip(ctx,self.footerMessage);I.PopFont(ctx)
+  end
+ end
+ function S:close() self.raster:close();self.typography:close() end
+ return S
 end
+return M
+end)()
 
--- BLT window geometry 1.0.0. Embedded; screen coordinates only.
-local function create_window_geometry(api,graphics)
- local osname=api.GetOS() or ''
- if not osname:match('OSX') and not osname:match('macOS') then return api end
- local G=setmetatable({}, {__index=api})
- -- Internal screen Y points downward. Client coordinates remain untouched.
- function G.GetMousePosition()
-  local x,y=api.GetMousePosition();return x,-y
- end
- function G.JS_Window_GetRect(hwnd)
-  local ok,l,t,r,b=api.JS_Window_GetRect(hwnd)
-  if not ok then return ok,l,t,r,b end
-  return ok,l,-math.max(t,b),r,-math.min(t,b)
- end
- function G.JS_Window_SetPosition(hwnd,x,y,w,h,z,flags)
-  if graphics and graphics.dock and (graphics.dock(-1)&1)~=0 then return false end
-  -- SWELL SetWindowPos uses a bottom-left origin for floating macOS windows.
-  return api.JS_Window_SetPosition(hwnd,x,-y-h,w,h,z,flags)
- end
- return G
+BLT.PresetMenu=(function()
+local M={}
+function M.new(Host,ui,options)
+ local UI={}
+ local R=reaper
+ local I,ctx,C=Host.I,Host.ctx,ui.C
+ local Layout={popup=options.layout}
+ local Presets,Language,commit=options.presets,options.language,options.commit
+local function presetIcon(draw,kind,x,y,color)
+ local function line(a,b,c,d) I.DrawList_AddLine(draw,x+a,y+b,x+c,y+d,color,1) end
+ local function box(a,b,w,h) I.DrawList_AddRect(draw,x+a,y+b,x+a+w,y+b+h,color,1) end
+ if kind=='cards' then box(0,0,8,9);box(3,3,8,9)
+ elseif kind=='folder' then line(0,2,4,2);line(4,2,6,4);line(6,4,12,4);line(12,4,12,12);line(12,12,0,12);line(0,12,0,2)
+ elseif kind=='save' or kind=='plus' then
+  box(0,0,12,12);box(3,0,5,4);box(3,7,6,5)
+  if kind=='plus' then line(10,6,10,12);line(7,9,13,9) end
+ elseif kind=='import' or kind=='export' then
+  line(0,9,0,13);line(0,13,12,13);line(12,13,12,9)
+  if kind=='import' then line(6,0,6,9);line(2,5,6,9);line(6,9,10,5)
+  else line(6,9,6,0);line(2,4,6,0);line(6,0,10,4) end
+ elseif kind=='check' then line(0,6,4,10);line(4,10,12,1)
+ elseif kind=='back' then line(11,6,0,6);line(0,6,4,2);line(0,6,4,10) end
 end
+function UI:size()
+ local p=Layout.popup;local count=math.min(#Presets.items,p.visiblePresets)
+ return p.width,p.headerHeight+math.max(7*p.rowHeight+9,(count+1)*p.rowHeight+(#Presets.items>p.visiblePresets and 18 or 0))+10
+end
+function UI:draw(owner)
+ if I.IsWindowAppearing(ctx) then
+  commit();UI.presetPage='main';UI.presetHoverAt=nil;UI.contextPreset=nil;UI.presetOffset=0;UI.presetFocused=nil
+ end
+ if UI.presetPage=='load' and I.IsKeyPressed(ctx,I.Key_LeftArrow,false) then UI.presetPage='main' end
+ local current=Presets.current
+ local title=UI.presetPage=='load' and Language.text('プリセット') or
+  Language.text('現在: ')..(current and (Presets.isFactory(current) and Language.text(current.name) or current.name) or Language.text('未選択'))..(Presets.dirty() and ' *' or '')
+ local width=Layout.popup.width-24
+ local draw=I.GetWindowDrawList(ctx);local wx,wy=I.GetWindowPos(ctx);local ww,wh=I.GetWindowSize(ctx)
+ I.DrawList_PushClipRect(draw,wx+1,wy+1,wx+ww-1,wy+wh-1,false)
+ local function text(label,x,y,size,color,alpha,available)
+  owner:font(size,1,false,1)
+  local draw=Host.draw;Host.draw=I.GetWindowDrawList(ctx)
+  owner.typography:draw(owner:fit(label,available),x-Host.originX,y-Host.originY,color[1],color[2],color[3],alpha)
+  Host.draw=draw
+ end
+ local x,y=I.GetCursorScreenPos(ctx)
+ text(title,x,y-1,12,C.muted,.9,width)
+ I.Dummy(ctx,width,15);I.Separator(ctx)
+ local function item(label,icon,action,disabled,navigate)
+  disabled=disabled or (options.busy and options.busy())
+  local x,y=I.GetCursorScreenPos(ctx);local mint=owner.chrome.mint
+  I.PushStyleColor(ctx,I.Col_HeaderHovered,Host.rgba(mint[1],mint[2],mint[3],.18))
+  I.PushStyleColor(ctx,I.Col_HeaderActive,Host.rgba(mint[1],mint[2],mint[3],.18))
+  I.BeginDisabled(ctx,disabled==true)
+  local clicked=I.Selectable(ctx,'##'..label,false,navigate and I.SelectableFlags_NoAutoClosePopups or 0,width,25)
+  I.PopStyleColor(ctx,2)
+  if I.IsItemVisible(ctx) then
+   local draw=I.GetWindowDrawList(ctx)
+   local alpha=disabled and .3 or .94;local color=Host.rgba(C.text[1],C.text[2],C.text[3],alpha)
+   if not disabled and (I.IsItemHovered(ctx) or I.IsItemFocused(ctx)) then
+    I.DrawList_AddRectFilled(draw,x-11,y,x-9,y+Layout.popup.rowHeight,Host.rgba(mint[1],mint[2],mint[3],.8))
+   end
+   presetIcon(draw,icon,x+1,y+8,color)
+   text(label,x+27,y+7,13,C.text,alpha,width-42)
+   if icon=='folder' then
+    I.DrawList_AddLine(draw,x+width-6,y+10,x+width-2,y+14,color,1)
+    I.DrawList_AddLine(draw,x+width-2,y+14,x+width-6,y+18,color,1)
+   end
+  end
+  I.EndDisabled(ctx)
+  if clicked then
+   if navigate then UI.presetHoverAt=nil;action() else commit();action() end
+  end
+  return clicked
+ end
+ if UI.presetPage=='load' then
+  item(Language.text('戻る'),'back',function() UI.presetPage='main' end,false,true)
+  if I.IsItemFocused(ctx) then UI.presetFocused=nil end
+  local visible=Layout.popup.visiblePresets;local offset=UI.presetOffset or 0
+  local x,y=I.GetCursorScreenPos(ctx)
+  if I.IsMouseHoveringRect(ctx,x-11,y,x+width+11,y+visible*Layout.popup.rowHeight) then
+   local wheel=I.GetMouseWheel(ctx)
+   if wheel~=0 then offset=offset+(wheel>0 and -1 or 1) end
+  end
+  local focused=UI.presetFocused;local target
+  if focused then
+   if I.IsKeyPressed(ctx,I.Key_DownArrow,true) and focused==offset+visible and focused<#Presets.items then target=focused+1;offset=offset+1
+   elseif I.IsKeyPressed(ctx,I.Key_UpArrow,true) and focused==offset+1 and offset>0 then target=focused-1;offset=offset-1 end
+  end
+  offset=math.max(0,math.min(math.max(0,#Presets.items-visible),offset));UI.presetOffset=offset
+  I.PushID(ctx,'INTERVAL_SAVED_PRESETS')
+  for index=offset+1,math.min(#Presets.items,offset+visible) do
+    local p=Presets.items[index]
+    if not p then break end
+    if target==index then I.SetKeyboardFocusHere(ctx) end
+    item(p.name,current and current.name==p.name and 'check' or 'cards',function() Presets.apply(p);I.CloseCurrentPopup(ctx) end)
+    if I.IsItemFocused(ctx) then UI.presetFocused=index end
+    if I.IsItemClicked(ctx,1) then UI.contextPreset=p;I.OpenPopup(ctx,'INTERVAL_DELETE_PRESET') end
+    if UI.contextPreset==p and I.BeginPopup(ctx,'INTERVAL_DELETE_PRESET') then
+     if I.Selectable(ctx,Language.code=='EN' and 'Delete' or '削除',false,0,120,24) then
+      Presets.remove(p);UI.contextPreset=nil;if #Presets.items==0 then UI.presetPage='main' end
+     end
+     I.EndPopup(ctx)
+    end
+  end
+  I.PopID(ctx)
+  if #Presets.items>visible then
+   local x,y=I.GetCursorScreenPos(ctx)
+   text(Language.message(string.format('%d–%d / %d   スクロールで選択',offset+1,math.min(#Presets.items,offset+visible),#Presets.items)),x,y,10,C.muted,.8,width)
+   I.Dummy(ctx,width,14)
+  end
+  I.DrawList_PopClipRect(draw)
+  return
+ end
+ item(Language.text(Presets.factory.name),Presets.isFactory(current) and 'check' or 'cards',function() Presets.apply(Presets.factory) end)
+ item(Language.text('プリセット'),'folder',function() UI.presetPage='load' end,#Presets.items==0,true)
+ if #Presets.items>0 and I.IsItemHovered(ctx) and not I.IsMouseDown(ctx,0) then
+  local now=R.time_precise();UI.presetHoverAt=UI.presetHoverAt or now
+  if now-UI.presetHoverAt>=Layout.popup.hoverDelay then UI.presetPage='load';UI.presetHoverAt=nil end
+ else UI.presetHoverAt=nil end
+ item(Language.text('上書き保存'),'save',function() Presets.save(false) end,Presets.isFactory(current))
+ item(Language.text('名前を付けて保存…'),'plus',function() Presets.save(true) end)
+ I.Separator(ctx)
+ item(Language.text('インポート…'),'import',Presets.import)
+ item(Language.text('現在値をエクスポート'),'export',function() Presets.export(false) end,Presets.isFactory(current))
+ item(Language.text('プリセット一覧をエクスポート'),'export',function() Presets.export(true) end,#Presets.items==0)
+ I.DrawList_PopClipRect(draw)
+end
+ return UI
+end
+return M
+end)()
 
-local WindowGeometry=create_window_geometry(reaper,gfx)
-local BLT_MAC=(reaper.GetOS() or ''):match('OSX')~=nil or (reaper.GetOS() or ''):match('macOS')~=nil
+BLT.MarkerDeskIcon=(function()
+local M={width=100,height=70,modes={'list'}}
+local sin,pi=math.sin,math.pi
+local function hash(n,salt)
+ local value=sin(n*12.9898+salt*78.233)*43758.5453
+ return value-math.floor(value)
+end
+function M.update() end
+function M.draw(p,s,mode,time)
+ local C=p.C;local breath=.85+.15*sin(time*.72)
+ for i=7,1,-1 do
+  p:disc(64,34,3+i*3.3,C.accent,(.002+(7-i)*.0018)*breath)
+  p:disc(75,24,2+i*1.7,C.ice,.0025*breath)
+ end
+ p:rect(39,12,71,52,C.bg,.97)
+ p:rect(41,14,67,48,C.panel2,.82)
+ for lane=1,3 do
+  local y=17+(lane-1)*16
+  p:rect(46,y,57,11,C.field,.48)
+  p:line(73,y+4,99-(lane==3 and 3 or 0),y+4,C.ice,.64)
+  p:line(73,y+8,91+(lane==2 and 4 or 0),y+8,C.edge2,.40)
+  if lane<3 then p:line(44,y+13,105,y+13,C.edge2,.22) end
+ end
+ p:line(53,18,53,27,C.ice,.78)
+ p:line(54,18,66,21,C.ice,.8);p:line(66,21,54,24,C.ice,.55)
+ p:line(54,24,54,18,C.accent,.72)
+ p:rect(54,36,12,5,C.accent,.30)
+ p:line(53,38.5,67,38.5,C.ice,.70)
+ p:line(53,34.5,53,42.5,C.ice,.76);p:line(67,34.5,67,42.5,C.ice,.76)
+ p:disc(60,38.5,1.05,C.ice,.82)
+ p:line(55,50,55,59,C.ice,.68)
+ p:line(55,50,65,52.5,C.ice,.72);p:line(65,52.5,55,55,C.ice,.54)
+ p:line(44,12,102,12,C.ice,.72)
+ p:line(102,12,110,20,C.ice,.64);p:line(110,20,110,57,C.edge2,.36)
+ p:line(110,57,103,64,C.ice,.58);p:line(103,64,44,64,C.edge2,.28)
+ p:line(39,59,39,17,C.ice,.42)
+ p:disc(102,12,3.6,C.ice,.035);p:disc(102,12,.65,C.ice,.92)
+end
+function M.emit(s,n,p)
+ p.lane=1+(n-1)%3;p.subline=hash(n,69)>.68 and 2 or 1
+ p.slot,p.spread=.22+hash(n,70)*.78,(hash(n,72)-.5)*5.5
+ p.phase,p.depth=hash(n,73)*pi*2,hash(n,75)
+ p.life,p.r,p.glint=1.05+hash(n,71)*.70,.28+p.depth*.77,hash(n,74)>.90
+end
+local sourceX,sourceY={66,67,65},{21,38.5,52.5}
+local lineY,lineEndX={{21,25},{37,41},{53,57}},{{99,91},{99,95},{96,88}}
+function M.sample(s,p,age)
+ local t=age/p.life;local u=1-t
+ local x,y=sourceX[p.lane],sourceY[p.lane]
+ local ey=lineY[p.lane][p.subline];local ex=75+(lineEndX[p.lane][p.subline]-75)*p.slot
+ return u*u*u*x+3*u*u*t*(x+7)+3*u*t*t*(ex-6)+t*t*t*ex,
+  u*u*u*y+3*u*u*t*(y+p.spread)+3*u*t*t*(ey+p.spread*.16)+t*t*t*ey+
+   sin(t*8+p.phase)*u*u*(.7+p.depth*1.1)
+end
+return M
+end)()
 
+BLT.MarkerDeskList=(function()
+local M={}
+local min,max,floor,ceil=math.min,math.max,math.floor,math.ceil
+M.keys={'isrgn','id','pos','ending','before'}
+local titles={'種別','ID','開始','終了','名前'}
+local paletteKeys={'field','panel','panel2','edge','edge2','accent3','focus2'}
+function M.new(host,api,text,language,C)
+ local L={signature={}};local background,glyph={},{}
+ local scale,density,factor,offset,width,rows,T,sortKey,descending
+ local colors,colorCount={},0
+ local function packed(c)
+  return 0xff000000|(floor(c[1]*255+.5)<<16)|(floor(c[2]*255+.5)<<8)|floor(c[3]*255+.5)
+ end
+ local function prepare(layer,w,h,fill)
+  if not layer.bitmap then layer.bitmap=assert(api.JS_LICE_CreateBitmap(true,w,h),'List bitmap creation failed')
+  elseif layer.w~=w or layer.h~=h then api.JS_LICE_Resize(layer.bitmap,w,h) end
+  layer.w,layer.h=w,h;api.JS_LICE_Clear(layer.bitmap,fill)
+ end
+ local function upload(layer)
+  if layer.image then host:releaseImage(layer.image) end
+  layer.image=host.I.CreateImageFromLICE(layer.bitmap);host:attachImage(layer.image)
+ end
+ local function rect(x,y,w,h,c,a)
+  api.JS_LICE_FillRect(background.bitmap,floor(x*factor+.5),floor(y*factor+.5),
+   max(1,floor(w*factor+.5)),max(1,floor(h*factor+.5)),packed(c),a or 1,'COPY')
+ end
+ local function line(x,y,xx,yy,c)
+  api.JS_LICE_Line(background.bitmap,x*factor,y*factor,xx*factor,yy*factor,packed(c),1,'COPY',true)
+ end
+ local function decorations(v,y,drawRect,drawLine)
+  if v.color~=0 then
+   local c=colors[v.color]
+   if not c then
+    if colorCount>=128 then colors={};colorCount=0 end
+    local r,g,b=api.ColorFromNative(v.color);c={r/255,g/255,b/255};colors[v.color]=c;colorCount=colorCount+1
+   end
+   drawRect(3,y+9,3,14,c,1)
+  end
+  drawRect(8,y+8,15,15,C.field,1)
+  drawRect(8,y+8,15,1,C.edge2,.85);drawRect(8,y+22,15,1,C.edge2,.85)
+  drawRect(8,y+8,1,15,C.edge2,.85);drawRect(22,y+8,1,15,C.edge2,.85)
+  if v.visible then
+   drawRect(9,y+9,13,13,C.accent3,.8)
+   drawLine(11,y+15,14,y+19,C.focus2);drawLine(14,y+19,20,y+12,C.focus2)
+  end
+ end
+ local function font(size,bold,kind)
+  text:setfont(1,host.faces[kind or 1],max(8,floor(size*scale+.5)),bold and 98 or 0)
+ end
+ local function fit(value,available)
+  if text:measurestr(value)<=available then return value end
+  if text:measurestr('…')>available then return '' end
+  local n=utf8.len(value)
+  if not n then value=value:gsub('[\128-\255]','?');n=#value end
+  local lo,hi=0,n
+  while lo<hi do
+   local mid=floor((lo+hi+1)/2);local at=utf8.offset(value,mid+1) or #value+1
+   if text:measurestr(value:sub(1,at-1)..'…')<=available then lo=mid else hi=mid-1 end
+  end
+  return value:sub(1,(utf8.offset(value,lo+1) or #value+1)-1)..'…'
+ end
+ local command={}
+ local function label(value,x,y,w,size,bold,kind,centerH,band)
+  font(size,bold,kind);value=fit(tostring(value),max(0,w*scale))
+  if centerH then local _,height=text:measurestr(value);y=y+(centerH-height/scale)*.5 end
+  text:capture(command,value,x*scale,y*scale,0xffffffff,1)
+  if band then command.x=(background.w+(band-1)*L.strip)/density end
+  text:paintMask(command,glyph.bitmap)
+ end
+ function L:columns(style,W)
+  local tw=max(75,min(style.time_width or 75,max(75,(W-289)/2)))
+  self.cols=self.cols or {};self.widths=self.widths or {}
+  local c,w=self.cols,self.widths
+  c[1],c[2],c[3],c[4],c[5]=style.x+34,style.x+78,style.x+115,style.x+117+tw,style.x+119+2*tw
+  w[1],w[2],w[3],w[4],w[5]=42,35,tw,tw,W-189-2*tw
+  return c,w
+ end
+ function L:prepare(A,style,W,s,sort,desc,editing)
+  scale,density=s,ceil(host.dpi or 1);factor=scale*density
+  local count=floor((style.h-style.header)/style.row)
+  local i=0;local bgDirty,textDirty=self.bgDirty or not background.image,self.textDirty or not glyph.image
+  local function check(v,kind)
+   i=i+1
+   if self.signature[i]~=v then
+    self.signature[i]=v
+    if kind~=1 then bgDirty=true end
+    if kind~=2 then textDirty=true end
+   end
+  end
+  check(scale);check(density);check(style.w);check(style.h);check(A.offset);check(count)
+  check(min(count,max(0,#A.rows-A.offset)))
+  check(language.code,1);check(sort or false);check(desc)
+  for _,key in ipairs(paletteKeys) do check(C[key],2) end
+  local timeWidth=75
+  for index=A.offset+1,min(#A.rows,A.offset+count) do
+   local row=A.rows[index];local v=row.info;local values=row.text
+   check(v.visible,2);check(v.color,2);check(v.isrgn,1)
+   check(values[1],1);check(values[2],1);check(values[3],1);check(values[4],1)
+   local metrics=row.widths
+   if not metrics or metrics.scale~=s or metrics.dpi~=density or metrics.first~=values[2] or metrics.last~=values[3] then
+    font(13.5,false)
+    metrics={scale=s,dpi=density,first=values[2],last=values[3],
+     width=max(ceil(text:measurestr(values[2])/s)+4,ceil(text:measurestr(values[3])/s)+4)}
+    row.widths=metrics
+   end
+   timeWidth=max(timeWidth,metrics.width)
+  end
+  if not editing then style.time_width=timeWidth end
+  check(style.time_width)
+  for k=#self.signature,i+1,-1 do self.signature[k]=nil end
+  self.bgDirty,self.textDirty=bgDirty,textDirty;self:columns(style,W)
+  offset,width,rows,T,sortKey,descending=A.offset,style.w,A.rows,style,sort,desc
+ end
+ local drawX,drawY
+ local function drawRect(x,y,w,h,c,a)
+  local xx,yy=drawX+floor(x*factor+.5)/density,drawY+floor(y*factor+.5)/density
+  host.I.DrawList_AddRectFilled(host.draw,xx,yy,xx+max(1,floor(w*factor+.5))/density,
+   yy+max(1,floor(h*factor+.5))/density,host.rgba(c[1],c[2],c[3],a or 1))
+ end
+ local function drawLine(x,y,xx,yy,c)
+  host.I.DrawList_AddLine(host.draw,drawX+x*scale,drawY+y*scale,drawX+xx*scale,drawY+yy*scale,host.rgba(c[1],c[2],c[3],1),1)
+ end
+ local function drawGradient(x,y,w,h,a,b,aa,ab)
+  local xx,yy=drawX+floor(x*factor+.5)/density,drawY+floor(y*factor+.5)/density
+  local left,right=host.rgba(a[1],a[2],a[3],aa),host.rgba(b[1],b[2],b[3],ab)
+  host.I.DrawList_AddRectFilledMultiColor(host.draw,xx,yy,xx+max(1,floor(w*factor+.5))/density,
+   yy+max(1,floor(h*factor+.5))/density,left,right,right,left)
+ end
+ function L:draw(x,y)
+  local cols,widths=self.cols,self.widths
+  local count=floor((T.h-T.header)/T.row)
+  if self.bgDirty then
+   prepare(background,max(1,ceil(T.w*factor)),max(1,ceil(T.h*factor)),packed(C.field))
+   rect(0,0,width,T.header,C.panel2,1);rect(0,0,width,1,C.edge2,.65)
+   for i,key in ipairs(M.keys) do if sortKey==key then rect(cols[i]-T.x-2,0,widths[i]+2,T.header,C.accent3,.50) end end
+   for slot=1,count do
+    local row=rows[offset+slot]
+    if row then
+     local yy=T.header+(slot-1)*T.row
+     if slot%2==0 then rect(1,yy,width-T.bar-1,T.row,C.panel,.50) end
+     rect(4,yy+T.row-1,width-T.bar-4,1,C.edge,.16)
+     decorations(row.info,yy,rect,line)
+    end
+   end
+   api.JS_LICE_ProcessRect(background.bitmap,0,0,background.w,background.h,'SET_A',0xff000000)
+   upload(background);self.bgDirty=false
+  end
+  if self.textDirty then
+   self.strip=max(1,ceil(32*factor))
+   prepare(glyph,background.w+2*self.strip,background.h,0xff000000)
+   label(language.text('表示'),2,7,30,13,true)
+   for i,key in ipairs(M.keys) do
+    local active=sortKey==key
+    label(language.text(titles[i])..(active and (descending and ' ↓' or ' ↑') or ''),cols[i]-T.x,7,widths[i],14,true)
+   end
+   for slot=1,count do
+    local row=rows[offset+slot]
+    if row then
+     local v=row.info;local yy=T.header+(slot-1)*T.row
+     label(v.isrgn and 'R' or 'M',cols[1]-T.x,yy+6,widths[1],16,true,3,nil,v.isrgn and 1 or nil)
+     label(row.text[1],cols[2]-T.x,yy+6,widths[2]-2,16,false)
+     for column=2,3 do
+      local available=widths[column+1]-2
+      font(13.5,false);local measured=text:measurestr(row.text[column])/scale
+      local size=measured>available and max(9,13.5*available/measured) or 13.5
+      label(row.text[column],cols[column+1]-T.x,yy+7+(13.5-size)/2,available,size,false,1,nil,column==3 and not v.isrgn and 2 or nil)
+     end
+     label(row.text[4],cols[5]-T.x,yy,widths[5]-8,18,false,1,T.row)
+    end
+   end
+   api.JS_LICE_Blit(glyph.bitmap,0,0,glyph.bitmap,0,0,glyph.w,glyph.h,1,'CHANCOPY_RTOA')
+   api.JS_LICE_ProcessRect(glyph.bitmap,0,0,glyph.w,glyph.h,'SET_RGB',0xffffff)
+   upload(glyph);self.textDirty=false
+  end
+  local ox,oy=host.windowX or host.originX,host.windowY or host.originY
+  drawX=ox+floor((host.originX-ox+x)*density+.5)/density
+  drawY=oy+floor((host.originY-oy+y)*density+.5)/density
+  local I,draw=host.I,host.draw;local w,h=background.w/density,background.h/density
+  I.DrawList_AddImage(draw,background.image,drawX,drawY,drawX+w,drawY+h)
+  for slot=1,count do
+   local row=rows[offset+slot]
+   if row and row.info.selected then
+    local yy=T.header+(slot-1)*T.row
+    drawRect(1,yy,width-T.bar-1,T.row,C.field,1)
+    drawGradient(1,yy,width-T.bar-1,T.row,C.accent3,C.panel,.76,1)
+    drawRect(1,yy,3,T.row,C.focus2,.88)
+    drawGradient(4,yy,13,T.row,C.accent2,C.accent2,.18,0)
+    drawGradient(4,yy,width-T.bar-4,1,C.focus2,C.accent2,.50,.05)
+    drawRect(4,yy+T.row-1,width-T.bar-4,1,C.edge,.16)
+    decorations(row.info,yy,drawRect,drawLine)
+   end
+  end
+  local c=C.text;local tint=host.rgba(c[1],c[2],c[3],1)
+  I.DrawList_AddImage(draw,glyph.image,drawX,drawY,drawX+w,drawY+h,0,0,background.w/glyph.w,1,tint)
+  local accent,faint=host.rgba(C.accent2[1],C.accent2[2],C.accent2[3],1),host.rgba(C.faint[1],C.faint[2],C.faint[3],1)
+  for slot=1,count do
+   local row=rows[offset+slot]
+   if row then
+    local region=row.info.isrgn;local band=region and 1 or 2
+    local px=background.w+(band-1)*self.strip
+    local top=floor((T.header+(slot-1)*T.row)*factor+.5)
+    local bottom=floor((T.header+slot*T.row)*factor+.5)
+    local xx=drawX+floor((cols[region and 1 or 4]-T.x)*factor+.5)/density
+    local yy=drawY+top/density
+    I.DrawList_AddImage(draw,glyph.image,xx,yy,xx+self.strip/density,drawY+bottom/density,
+     px/glyph.w,top/glyph.h,(px+self.strip)/glyph.w,bottom/glyph.h,region and accent or faint)
+   end
+  end
+ end
+ function L:close()
+  for _,layer in ipairs({background,glyph}) do
+   if layer.image then host:releaseImage(layer.image);layer.image=nil end
+   if layer.bitmap then api.JS_LICE_DestroyBitmap(layer.bitmap);layer.bitmap=nil end
+  end
+ end
+ return L
+end
+return M
+end)()
 local NAME="MARKER REGION DESK"
 local APP_NAME="BLT "..NAME
 -- BLT language runtime 1.1.0. Embed with an app-specific catalog; no runtime file I/O.
@@ -561,17 +2887,10 @@ local function create_language(api,section,catalog)
  function L.input(title,n,captions,defaults) return api.GetUserInputs(L.text(title),n,L.text(captions),defaults) end
  function L.open(path,title,ext) return api.GetUserFileNameForRead(path,L.text(title),ext) end
  function L.save(title,path,file,filter) return api.JS_Dialog_BrowseForSaveFile(L.text(title),path,file,filter) end
- function L.menu(value)
-  if L.code=='JP' then return value end
-  return (value:gsub('[^|]+',function(item)
-   local flags,body=item:match('^([!#<>]*)(.*)$')
-   return flags..L.message(body)
-  end))
- end
+
  return L
 end
 
--- Latest embedded application catalog.
 local LanguageCatalog={en={
  ["ファクトリーデフォルト"]="Factory Default",
  ["ファクトリーデフォルトは変更できません。"]="Factory Default is read-only.",
@@ -669,6 +2988,7 @@ local LanguageCatalog={en={
  ["あいうえお漢字ABC012345"]="あいうえお漢字ABC012345",
  ["名前が長すぎるか、使用できない制御文字があります。"]="Name too long or contains invalid control characters.",
  ["ReaImGui 0.10以降が必要です。ReaPackで導入・更新してください。"]="ReaImGui 0.10+ is required. Install/update via ReaPack.",
+ ["ReaImGui 0.10以降と js_ReaScriptAPI が必要です。ReaPackで導入・更新してください。"]="ReaImGui 0.10+ and js_ReaScriptAPI are required. Install/update them via ReaPack.",
  ["日本語入力欄を初期化できません。\n"]="Cannot initialize the text input.\n",
  ["文字列でフィルター…"]="Filter text...",
  ["種別"]="Type",
@@ -719,21 +3039,17 @@ local LanguageCatalog={en={
 
 local Language=create_language(reaper,"BLT_MARKER_REGION_DESK",LanguageCatalog)
 local R=reaper
--- BLT shared shell 3.2.0. Embedded at build time; no runtime module dependency.
-local BLT=(function()
-local B={fitCache={},fitCount=0,metrics={},metricCount=0,slots={},nextSlot=1,specs={}}
-local host,C,Chrome,Chameleon,scale,ox,oy
-local R=reaper
-local UI={}
-local Layout={bar={height=26,close=38,reset=34,theme=34,language=26,preset=84,arrow=20},popup={width=292,headerHeight=36,rowHeight=29,visiblePresets=8,hoverDelay=1}}
 local Presets={items={},revision=0}
-local ids={1,2,3,4,5,6,8,9,10,11,12,13,14,15}
-local function wake_visuals() if host then host.wake() end end
+do
+ local B=BLT
+ local host
+ local R=reaper
+ local Layout={popup={visiblePresets=8}}
+ local function wake_visuals() if host then host.wake() end end
 function B.copy(v)
  if type(v)~='table' then return v end
  local t={};for k,x in pairs(v) do t[k]=B.copy(x) end;return t
 end
--- Typed, length-prefixed data. Never evaluate imported Lua or JSON-like code.
 function B.pack(v)
  local t=type(v)
  if t=='boolean' then return v and 'b1' or 'b0' end
@@ -806,57 +3122,6 @@ function B.shape(v,base)
  elseif type(v)=='string' then return #v<=8192 and utf8.len(v)~=nil and not v:find('%z') end
  return true
 end
-function B.viewport(viewScale,dpi)
- if B.viewScale==viewScale and B.dpi==dpi then return end
- B.slots={};B.nextSlot=1;B.fontKey=nil;B.scratch=nil
- if B.dpi~=dpi then B.metrics={};B.metricCount=0;B.fitCache={};B.fitCount=0;B.chromeDPI=nil end
- B.viewScale,B.dpi=viewScale,dpi
-end
-function B.spec(size,kind,bold,s)
- kind=kind or 1;local px=math.max(8,math.floor((size or 10)*s+.5));local weight=bold and 98 or 0
- local g=kind*2+(bold and 1 or 0);local sizes=B.specs[g]
- if not sizes then sizes={};B.specs[g]=sizes end
- local r=sizes[px];if not r then r={kind,px,weight,kind..':'..px..':'..weight};sizes[px]=r end
- return r[1],r[2],r[3],r[4]
-end
-function B.font(size,kind,bold,s,faces)
- local k,px,weight,key=B.spec(size,kind,bold,s)
- local face=faces[k] or faces[1]
- B.faceKeys=B.faceKeys or {};local family=B.faceKeys[face]
- if not family then family={};B.faceKeys[face]=family end
- local style=px*2+(bold and 1 or 0)
- key=family[style]
- if not key then key=face..':'..px..':'..weight;family[style]=key end
- if B.fontKey==key then return end
- local slot=B.slots[key]
- if slot then gfx.setfont(slot)
- elseif B.nextSlot<=#ids then slot=ids[B.nextSlot];B.nextSlot=B.nextSlot+1;B.slots[key]=slot;gfx.setfont(slot,face,px,weight)
- elseif B.scratch==key then gfx.setfont(16)
- else gfx.setfont(16,face,px,weight);B.scratch=key end
- B.fontKey=key
-end
-function B.chromeFont()
- if B.chromeDPI~=(gfx.ext_retina or 1) then gfx.setfont(7,Chrome.font,10,0);B.chromeDPI=gfx.ext_retina or 1 else gfx.setfont(7) end
- B.fontKey='chrome'
-end
-function UI.textMetrics(text)
- local key=B.fontKey or 'chrome';local bucket=B.metrics[key];local r=bucket and bucket[text]
- if r then return r[1],r[2] end
- local w,h=gfx.measurestr(text)
- if B.metricCount>=2048 then B.metrics={};B.metricCount=0;bucket=nil end
- if not bucket then bucket={};B.metrics[key]=bucket end
- bucket[text]={w,h};B.metricCount=B.metricCount+1;return w,h
-end
-B.metricsFor=UI.textMetrics
-local function font(size,kind,bold) host.font(size,kind,bold) end
-function B.position(hwnd,x,y,w,h,a,b)
- local old=B.lastRect
- if old and old[1]==hwnd and old[2]==x and old[3]==y and old[4]==w and old[5]==h then return true end
- local ok,l,t,r,bt=WindowGeometry.JS_Window_GetRect(hwnd)
- if ok and l==x and t==y and r-l==w and bt-t==h then B.lastRect={hwnd,x,y,w,h};return true end
- local done=WindowGeometry.JS_Window_SetPosition(hwnd,x,y,w,h,a,b)
- if done then B.lastRect={hwnd,x,y,w,h} end;return done
-end
 function B.store(section,key,value,persist)
  local encoded=tostring(value)
  B.saved=B.saved or {};local cache=B.saved[section]
@@ -886,7 +3151,6 @@ function Presets.capture(name)
 end
 function Presets.dirty()
  if not Presets.current then return false end
- -- Whitelisted views are reused; never serialize settings in the draw path.
  return not B.same(host.capture(),Presets.current.values)
 end
 function Presets.flush()
@@ -907,7 +3171,6 @@ local PresetDelete={
  end,
 }
 -- BEGIN BLT PRESET DELETE 1.0.0 (generated from _shared/BLT_PresetDelete.lua)
--- Embedded inside the common preset scope of each BLT application.
 function Presets.remove(p)
  if PresetDelete.busy() or not p or Presets.isFactory(p) then return false end
  local index
@@ -927,15 +3190,6 @@ function Presets.remove(p)
  PresetDelete.changed();return true
 end
 
-function Presets.context(p,x,y)
- if not p or Presets.isFactory(p) or PresetDelete.busy() then return end
- gfx.x=x;gfx.y=y
- if gfx.showmenu(PresetDelete.english() and 'Delete' or '削除')==1 then Presets.remove(p) end
- Presets.pressed=nil;Presets.hoverSince=nil
- Presets.down=((gfx.mouse_cap or 0)&1)~=0
- Presets.rightDown=((gfx.mouse_cap or 0)&2)~=0
- PresetDelete.changed()
-end
 -- END BLT PRESET DELETE
 end
 function Presets.put(p)
@@ -961,7 +3215,7 @@ end
 function Presets.apply(p)
  if host.busy() or not host.commit() then return end
  if Presets.dirty() and Language.mb('未保存の変更を破棄して読み込みますか？','PRESET',4)~=6 then return end
- host.cancelEdit();host.apply(B.copy(p.values));B.presetRevision=(B.presetRevision or 0)+1;B.presetMotionSeen={};Presets.current=p;wake_visuals();notice('プリセットを読み込みました: '..p.name,true)
+ host.cancelEdit();host.apply(B.copy(p.values));Presets.current=p;wake_visuals();notice('プリセットを読み込みました: '..p.name,true)
 end
 function Presets.step(d)
  local n=1
@@ -1020,325 +3274,8 @@ function Presets.export(all)
  local f,err=io.open(path,'wb');if not f then notice(B.publicError(err),false);return end
  local wrote,werr=f:write(data);local closed,cerr=f:close();notice(wrote and closed and 'エクスポートしました。' or B.publicError(werr or cerr),wrote and closed)
 end
-function UI.bar(w) return BLTChrome.layout(w,host.fold~=nil,host.compactChrome and host.compactChrome() or false) end
-local function gfx_window_handle() return host.handle() end
-local function chrome_resize_hit(x,y) if y<26 and x>=UI.bar(gfx.w).presetX then return nil end;return host.resizeHit(x,y) end
-local function set_resize_cursor(mode) host.cursor(mode) end
-local function begin_window_resize(mode) host.beginResize(mode) end
-local function update_window_resize() host.resize() end
-local function clear_chrome_tooltip() B.popupUntil=nil;if R.TrackCtl_SetToolTip then R.TrackCtl_SetToolTip('',0,0,true) end end
-B.clearTooltip=clear_chrome_tooltip
--- Non-modal dependency hint. Uses the existing tick, with no extra defer loop.
-function B.inputNotice()
- local x,y=gfx.clienttoscreen(gfx.mouse_x,gfx.mouse_y+18)
- R.TrackCtl_SetToolTip(Language.message('ReaImGui 0.10以降が必要です。ReaPackで導入・更新してください。'),x,y,true)
- B.popupUntil=R.time_precise()+1;B.tip=nil;B.tipVisible=false
-end
-function B.requireInput(ime)
- if ime.api then return true end
- if type(R.ImGui_GetBuiltinPath)~='function' then B.inputNotice();return false end
- local ok,api=pcall(function() return dofile(R.ImGui_GetBuiltinPath()..'/imgui.lua')('0.10') end)
- if not ok or type(api)~='table' then B.inputNotice();return false end
- ime.api=api;return true
-end
-function B.switch(x,y,state,enabled)
- local s,bx,by=host.geometry();local cy=by+(y+12)*s;local cx=bx+(x+7+12*state)*s
- local c=C.edge2;gfx.set(c[1],c[2],c[3],enabled and .45 or .2);gfx.line(bx+(x+3)*s,cy,bx+(x+23)*s,cy,1)
- c=C.faint;gfx.set(c[1],c[2],c[3],enabled and .8 or .4);gfx.circle(cx,cy,4.2*s,1,1)
- if state>.001 and enabled then c=C.accent;gfx.set(c[1],c[2],c[3],.06*state);gfx.circle(cx,cy,7*s,1,1);c=C.accent2;gfx.set(c[1],c[2],c[3],.94*state);gfx.circle(cx,cy,4.2*s,1,1) end
-end
-function B.blend(dt)
- if B.blendDt~=dt then B.blendDt=dt;B.blendValue=1-math.exp(-12*dt) end
- return B.blendValue
-end
-function Presets.menu(x,y)
-  if host.prepareMenu and not host.prepareMenu() then wake_visuals();return end
-  Presets.open=true;Presets.page="main";Presets.offset=0;Presets.selected=1
-  Presets.down=false;Presets.rightDown=((gfx.mouse_cap or 0)&2)~=0;Presets.pressed=nil;Presets.mx=nil;Presets.my=nil;Presets.hoverSince=nil
-  host.cancelEdit();wake_visuals()
-end
-function Presets.dismiss()
-  Presets.swallow=((gfx.mouse_cap or 0)&3)~=0
-  Presets.open=false;Presets.hoverSince=nil;Presets.pressed=nil;host.cancelEdit();wake_visuals()
-end
-function Presets.buildRows()
-  if Presets.page=="load" then
-    local rows={{text="戻る",icon="back",action=function() Presets.page="main";Presets.selected=1 end}}
-    local count=math.min(Layout.popup.visiblePresets,#Presets.items-Presets.offset)
-    for i=1,count do
-      local p=Presets.items[i+Presets.offset]
-      rows[#rows+1]={text=p.name,literal=true,preset=p,icon=Presets.current and Presets.current.name==p.name and "check" or "cards",action=function() Presets.dismiss();Presets.apply(p) end}
-    end
-    return rows
-  end
-  return {
-    {text=Presets.factory.name,icon=Presets.isFactory(Presets.current) and "check" or "cards",action=function() Presets.dismiss();Presets.apply(Presets.factory) end},
-    {text="プリセット",disabled=#Presets.items==0,icon="folder",arrow=true,action=function() Presets.page="load";Presets.offset=0;Presets.selected=nil;Presets.hoverSince=nil;Presets.pressed=nil end},
-    {text="上書き保存",icon="save",disabled=Presets.isFactory(Presets.current),action=function() Presets.dismiss();Presets.save(false) end},
-    {text="名前を付けて保存…",icon="plus",action=function() Presets.dismiss();Presets.save(true) end},
-    {text="インポート…",icon="import",gap=true,action=function() Presets.dismiss();Presets.import() end},
-    {text="現在値をエクスポート",icon="export",disabled=Presets.isFactory(Presets.current),action=function() Presets.dismiss();Presets.export(false) end},
-    {text="プリセット一覧をエクスポート",icon="export",disabled=#Presets.items==0,action=function() Presets.dismiss();Presets.export(true) end},
-  }
-end
-function Presets.rows()
-  local c=Presets.rowCache
-  local current=Presets.current and Presets.current.name or ""
-  if c and c.page==Presets.page and c.offset==Presets.offset and c.items==Presets.items
-    and c.count==#Presets.items and c.revision==Presets.revision and c.current==current then return c.rows end
-  local rows=Presets.buildRows()
-  Presets.rowCache={page=Presets.page,offset=Presets.offset,items=Presets.items,count=#Presets.items,
-    revision=Presets.revision,current=current,rows=rows}
-  return rows
-end
-function Presets.layout()
-  local rows=Presets.rows()
-  local cached=Presets.layoutCache
-  if cached and cached.rows==rows and cached.windowWidth==gfx.w then return cached.x,cached.y,cached.w,cached.h,rows end
-  local w=math.min(Layout.popup.width,gfx.w-12)
-  local x=math.max(6,gfx.w-w-6);local y=Chrome.titleH+2
-  local top=y+Layout.popup.headerHeight
-  for _,r in ipairs(rows) do if r.gap then top=top+9 end;r.y=top;top=top+Layout.popup.rowHeight end
-  local h=top-y+8+(Presets.page=="load" and #Presets.items>Layout.popup.visiblePresets and 18 or 0)
-  Presets.layoutCache={rows=rows,windowWidth=gfx.w,x=x,y=y,w=w,h=h}
-  return x,y,w,h,rows
-end
-function Presets.activate(i)
-  local rows=Presets.rows();local row=rows[i]
-  if row and not row.disabled then row.action();wake_visuals() end
-end
-function Presets.key(k)
-  if k==27 then Presets.dismiss()
-  elseif k==13 then Presets.activate(Presets.selected or 1)
-  elseif k==1818584692 and Presets.page=="load" then Presets.page="main";Presets.selected=1
-  elseif k==30064 or k==1685026670 then
-    local delta=k==30064 and -1 or 1
-    local rows=Presets.rows();local n=(Presets.selected or 1)+delta
-    if Presets.page=="load" and n>#rows and Presets.offset+Layout.popup.visiblePresets<#Presets.items then Presets.offset=Presets.offset+1;n=#rows
-    elseif Presets.page=="load" and n<2 and Presets.offset>0 then Presets.offset=Presets.offset-1;n=2 end
-    Presets.selected=math.max(1,math.min(#rows,n))
-  end
-  wake_visuals()
-end
-function Presets.update(active)
-  if Presets.swallow and ((gfx.mouse_cap or 0)&3)==0 then Presets.swallow=false end
-  if not Presets.open then return end
-  if not active then Presets.dismiss();return end
-  local x,y,w,h,rows=Presets.layout()
-  local mx,my=gfx.mouse_x,gfx.mouse_y;local down=(gfx.mouse_cap&1)~=0
-  local inside=mx>=x and mx<x+w and my>=y and my<y+h
-  local hit=nil
-  if inside then for i,r in ipairs(rows) do if my>=r.y and my<r.y+Layout.popup.rowHeight then hit=i end end end
-  if mx~=Presets.mx or my~=Presets.my then Presets.selected=hit;Presets.mx=mx;Presets.my=my end
-  local wheel=gfx.mouse_wheel or 0
-  if wheel~=0 then
-    if inside and Presets.page=="load" then Presets.offset=math.max(0,math.min(math.max(0,#Presets.items-Layout.popup.visiblePresets),Presets.offset+(wheel>0 and -1 or 1)));Presets.selected=nil end
-    gfx.mouse_wheel=0
-  end
-  -- Hover only opens the preset list, never applies a preset automatically.
-  local rightDown=(gfx.mouse_cap&2)~=0
-  local rightPressed=rightDown and not Presets.rightDown
-  Presets.rightDown=rightDown
-  if rightPressed and hit and rows[hit].preset then
-    Presets.selected=hit;Presets.context(rows[hit].preset,mx,my);return
-  end
-  if rightDown then Presets.hoverSince=nil;return end
-  if Presets.page=="main" and hit==2 and #Presets.items>0 and not down then
-    Presets.hoverSince=Presets.hoverSince or R.time_precise()
-    if R.time_precise()-Presets.hoverSince>=Layout.popup.hoverDelay then Presets.activate(2);Presets.down=down;return end
-  else Presets.hoverSince=nil end
-  if down and not Presets.down then
-    if not inside then Presets.dismiss() else Presets.pressed=hit end
-  elseif not down and Presets.down then
-    if hit and hit==Presets.pressed then Presets.activate(hit) end
-    Presets.pressed=nil
-  end
-  Presets.down=down
-end
-function Presets.icon(kind,x,y)
-  local function l(a,b,c,d) gfx.line(x+a,y+b,x+c,y+d,1) end
-  local function box(a,b,w,h) gfx.roundrect(x+a,y+b,w,h,1,1) end
-  if kind=="cards" then box(0,0,8,9);box(3,3,8,9)
-  elseif kind=="folder" then l(0,2,4,2);l(4,2,6,4);l(6,4,12,4);l(12,4,12,12);l(12,12,0,12);l(0,12,0,2)
-  elseif kind=="save" or kind=="plus" then
-    box(0,0,12,12);box(3,0,5,4);box(3,7,6,5)
-    if kind=="plus" then l(10,6,10,12);l(7,9,13,9) end
-  elseif kind=="import" or kind=="export" then
-    l(0,9,0,13);l(0,13,12,13);l(12,13,12,9)
-    if kind=="import" then l(6,0,6,9);l(2,5,6,9);l(6,9,10,5)
-    else l(6,9,6,0);l(2,4,6,0);l(6,0,10,4) end
-  elseif kind=="check" then l(0,6,4,10);l(4,10,12,1)
-  elseif kind=="back" then l(11,6,0,6);l(0,6,4,2);l(0,6,4,10) end
-end
-function UI.fit(text,width)
-  local key=B.fontKey or "chrome"
-  local bucket=B.fitCache[key];local cached=bucket and bucket[text]
-  if cached and cached.width==width then return cached.text end
-  local shown=text
-  if UI.textMetrics(text)>width then
-    if UI.textMetrics("…")>width then shown=""
-    else
-      local count=utf8.len(text)
-      local valid=text
-      if not count then valid=text:gsub("[\128-\255]","?");count=#valid end
-      local low,high=0,count
-      while low<high do
-        local mid=math.floor((low+high+1)/2)
-        local stop=utf8.offset(valid,mid+1) or (#valid+1)
-        if UI.textMetrics(valid:sub(1,stop-1).."…")<=width then low=mid else high=mid-1 end
-      end
-      local stop=utf8.offset(valid,low+1) or (#valid+1)
-      shown=valid:sub(1,stop-1).."…"
-    end
-  end
-  if B.fitCount>=512 then B.fitCache={};B.fitCount=0;bucket=nil end
-  if not bucket then bucket={};B.fitCache[key]=bucket end
-  if not bucket[text] then B.fitCount=B.fitCount+1 end
-  bucket[text]={width=width,text=shown}
-  return shown
-end
-function Presets.draw()
-  if not Presets.open then return end
-  local x,y,w,h,rows=Presets.layout()
-  gfx.set(0,0,0,.22);gfx.rect(x+3,y+4,w,h,1)
-  gfx.set(C.panel[1],C.panel[2],C.panel[3],1);gfx.rect(x,y,w,h,1)
-  gfx.set(C.edge2[1],C.edge2[2],C.edge2[3],.65);gfx.roundrect(x,y,w,h,3,1)
-  font(12/scale,4,false)
-  gfx.set(C.muted[1],C.muted[2],C.muted[3],.9);gfx.x=x+12;gfx.y=y+9
-  local title=Presets.page=="load" and Language.text("プリセット") or (Language.text("現在: ")..(Presets.current and (Presets.isFactory(Presets.current) and Language.text(Presets.current.name) or Presets.current.name) or Language.text("未選択"))..(Presets.dirty() and " *" or ""))
-  gfx.drawstr(UI.fit(title,w-24))
-  gfx.set(C.edge[1],C.edge[2],C.edge[3],.65);gfx.line(x+10,y+30,x+w-10,y+30)
-  font(13/scale,4,false)
-  for i,r in ipairs(rows) do
-    if r.gap then gfx.set(C.edge[1],C.edge[2],C.edge[3],.65);gfx.line(x+10,r.y-5,x+w-10,r.y-5) end
-    if i==Presets.selected and not r.disabled then
-      gfx.set(Chrome.mint[1],Chrome.mint[2],Chrome.mint[3],.18);gfx.rect(x+1,r.y,w-2,Layout.popup.rowHeight,1)
-      gfx.set(Chrome.mint[1],Chrome.mint[2],Chrome.mint[3],.8);gfx.rect(x+1,r.y,2,Layout.popup.rowHeight,1)
-    end
-    gfx.set(C.text[1],C.text[2],C.text[3],r.disabled and .3 or .94)
-    Presets.icon(r.icon,x+13,r.y+8)
-    gfx.x=x+39;gfx.y=r.y+7;gfx.drawstr(UI.fit(r.literal and r.text or Language.text(r.text),w-65))
-    if r.arrow then gfx.line(x+w-18,r.y+10,x+w-14,r.y+14);gfx.line(x+w-14,r.y+14,x+w-18,r.y+18) end
-  end
-  if Presets.page=="load" and #Presets.items>Layout.popup.visiblePresets then
-    font(10/scale,4,false)
-    gfx.set(C.muted[1],C.muted[2],C.muted[3],.8);gfx.x=x+12;gfx.y=y+h-19
-    gfx.drawstr(string.format(Language.text("%d–%d / %d   スクロールで選択"),Presets.offset+1,math.min(Presets.offset+Layout.popup.visiblePresets,#Presets.items),#Presets.items))
-  end
-end
-
-local function custom_titlebar(blocked)
-  local w=gfx.w
-  local mx,my=gfx.mouse_x,gfx.mouse_y
-  local b=UI.bar(w)
-  local closeW,resetW,chamW=Layout.bar.close,Layout.bar.reset,Layout.bar.theme
-  local closeX,resetX,chamX=b.closeX,b.resetX,b.themeX
-  local languageX=b.languageX
-  local presetX=b.presetX
-  local foldX=b.foldX
-  local prevX,nextX=b.prevX,b.nextX
-  local inWindow=mx>=0 and mx<w and my>=0 and my<gfx.h
-  local inBar=host.active() and not blocked and inWindow and my<Chrome.titleH
-  local resizeMode=not blocked and chrome_resize_hit(mx,my) or nil
-  local resizing=Chrome.resize~=nil
-  local cursorMode=resizing and Chrome.resize.mode or resizeMode
-  set_resize_cursor(cursorMode)
-  local control=inBar and not resizeMode and not resizing and BLTChrome.hit(b,mx,my,w,Chrome.titleH) or nil
-  local hoverClose=control=='close'
-  local hoverReset=not (host.collapsed and host.collapsed()) and not (host.transition and host.transition()) and control=='reset'
-  local hoverCham=control=='theme'
-  local hoverPreset=control=='preset'
-  local hoverPrev=control=='prev'
-  local hoverNext=control=='next'
-  local hoverFold=foldX and not (host.transition and host.transition()) and control=='fold'
-  local hoverLanguage=control=='language'
-  local down=not blocked and (gfx.mouse_cap&1)~=0
-  -- A content modal disables chrome; it does not give chrome ownership of its input.
-  Chrome.mouseActive=(Presets.open or Presets.swallow) or inBar or Chrome.drag~=nil or Chrome.resize~=nil or cursorMode~=nil
-    or Chrome.languagePressed or Chrome.closePressed or Chrome.resetPressed or Chrome.chameleonPressed or Chrome.presetPressed or Chrome.presetPrevPressed or Chrome.presetNextPressed
-
-  local p=Chrome.presenter
-  if not p then
-    p={C=C,chrome=Chrome,metrics=UI.textMetrics,fit=UI.fit,
-      barFont=B.chromeFont,languageFont=function() B.font(13,2,true,1,host.faces) end}
-    Chrome.presenter=p
-  end
-  p.b=b;p.language=Language.code;p.presetOpen=Presets.open;p.dirty=not b.compact and Presets.dirty()
-  p.themeEnabled=Chameleon.enabled;p.c1,p.c2,p.c3=Chameleon.icon_colors()
-  p.hot=hoverClose and 'close' or hoverReset and 'reset' or hoverCham and 'theme' or hoverLanguage and 'language' or hoverPreset and 'preset' or hoverPrev and 'prev' or hoverNext and 'next' or hoverFold and 'fold' or nil
-  p.collapsed=host.collapsed and host.collapsed() or false;p.docked=host.docked and host.docked() or false;p.dockButton=host.docked~=nil;p.compactLanguage=false
-  BLTChrome.draw(p)
-
-  if down and not Chrome.mouseDown then
-    if resizeMode then
-      begin_window_resize(resizeMode)
-    elseif hoverClose then
-      Chrome.closePressed=true
-    elseif hoverReset then
-      Chrome.resetPressed=true
-    elseif hoverPrev then
-      Chrome.presetPrevPressed=true
-    elseif hoverNext then
-      Chrome.presetNextPressed=true
-    elseif hoverPreset then
-      Chrome.presetPressed=true
-    elseif hoverLanguage then
-      Chrome.languagePressed=true
-    elseif hoverFold then
-      Chrome.foldPressed=true
-    elseif hoverCham then
-      Chrome.chameleonPressed=true
-    elseif inBar and not (host.transition and host.transition()) then
-      local hwnd=gfx_window_handle()
-      if hwnd then
-        local ok,l,t,r,b=WindowGeometry.JS_Window_GetRect(hwnd)
-        if ok then
-          local sx,sy=WindowGeometry.GetMousePosition()
-          Chrome.drag={mouseX=sx,mouseY=sy,left=l,top=t,width=r-l,height=b-t,lastX=l,lastY=t}
-        end
-      end
-    end
-  end
-
-  if down and Chrome.resize then update_window_resize() end
-  if down and Chrome.drag and not Chrome.resize then
-    local d=Chrome.drag;local sx,sy=WindowGeometry.GetMousePosition()
-    local x,y=d.left+(sx-d.mouseX),d.top+(sy-d.mouseY)
-    local hwnd=(x~=d.lastX or y~=d.lastY) and gfx_window_handle() or nil
-    if hwnd and B.position(hwnd,x,y,d.width,d.height,"","") then
-      d.lastX,d.lastY=x,y;Chrome.geometryDirty=true
-    end
-  end
-
-  if not down and Chrome.mouseDown then
-    if Chrome.languagePressed and hoverLanguage then B.toggleLanguage() end
-    Chrome.languagePressed=false
-    if Chrome.closePressed and hoverClose then Chrome.requestClose=true end
-    if Chrome.resetPressed and hoverReset then Chrome.requestReset=true end
-    if Chrome.foldPressed and hoverFold then host.fold() end;Chrome.foldPressed=false
-    if Chrome.chameleonPressed and hoverCham then Chameleon.set(not Chameleon.enabled) end
-    if Chrome.presetPressed and hoverPreset then
-      clear_chrome_tooltip();Presets.menu(presetX,Chrome.titleH)
-    end
-    if Chrome.presetPrevPressed and hoverPrev then clear_chrome_tooltip();Presets.step(-1) end
-    if Chrome.presetNextPressed and hoverNext then clear_chrome_tooltip();Presets.step(1) end
-    Chrome.presetPrevPressed=false;Chrome.presetNextPressed=false
-    Chrome.presetPressed=false
-    Chrome.closePressed=false; Chrome.resetPressed=false; Chrome.chameleonPressed=false
-    Chrome.drag=nil; Chrome.resize=nil
-  end
-  Chrome.mouseDown=down
-end
-
-function B.toggleLanguage()
- if Language.set(Language.code=='JP' and 'EN' or 'JP') then
-  clear_chrome_tooltip();B.tip=nil;B.tipVisible=false
-  wake_visuals()
- end
-end
-function B.attach(h)
- host=h;R=h.R;C=h.C;Chrome=h.Chrome;Chameleon=h.Chameleon
- B.language=Language;B.presets=Presets;B.ui=UI;B.host=h
+function B.attachPresets(h)
+ host=h;R=h.R
  Presets.factory={name='ファクトリーデフォルト',factory=true,values=B.copy(h.defaults)}
  local n=math.min(200,math.max(0,tonumber(R.GetExtState(h.section,'preset_count')) or 0));local names={}
  for i=1,n do
@@ -1346,94 +3283,6 @@ function B.attach(h)
   local p=Presets.decode(raw);if p and not Presets.isFactory(p) and not names[p.name] then Presets.items[#Presets.items+1]=p;names[p.name]=true end
  end;table.sort(Presets.items,function(a,b)return a.name<b.name end)
 end
-function B.blocked()
- return Presets.open or Presets.swallow or (gfx.mouse_y>=0 and gfx.mouse_y<26)
-end
--- Shared project Undo shortcut. Embedded; no runtime file dependency.
-local function create_project_undo(api,context)
- local function message(jp,en,ok)
-  if context.notice then context.notice(context.language()=='EN' and en or jp,ok) end
- end
- return function(key,modifiers)
-  modifiers=modifiers or 0
-  if (modifiers&24)~=0 or not (key==26 or ((modifiers&4)~=0 and (key==90 or key==122))) then return false end
-  -- Native text editors own their own Undo; never send their shortcut to REAPER.
-  if context.editing() then return true end
-  if context.busy() then message('処理中は元に戻せません。','Cannot undo during processing.',false);return true end
-  local project=api.EnumProjects(-1,'')
-  if context.perform then context.perform(project);return true end
-  local entry=api.Undo_CanUndo2(project)
-  if not entry or entry=='' then message('元に戻せる操作がありません。','Nothing to undo.',true);return true end
-  if context.before then context.before() end
-  local result=api.Undo_DoUndo2(project)
-  if result==nil or result==false or result==0 then message('Undoを実行できませんでした。','Undo failed.',false);return true end
-  api.UpdateArrange()
-  if context.after then context.after(project) end
-  message('元に戻しました。','Undone.',true)
-  return true
- end
-end
-local project_undo=create_project_undo(R,{
- language=function() return Language.code end,notice=notice,
- editing=function() return host.editing() or host.modal() end,
- busy=function() return host.busy() end,
- before=function() if host.undoBefore then host.undoBefore() end end,
- after=function(project) if host.undoRefresh then host.undoRefresh(project) end;wake_visuals() end,
-})
-function B.key(k)
- if k<0 then return k end
- if Presets.open then Presets.key(k);return 0 end
- if host and not host.localUndo then
-  if host.undoAction then
-   local cap=gfx.mouse_cap or 0
-   if (cap&24)==0 and (k==26 or ((cap&4)~=0 and (k==90 or k==122))) then
-    if not host.editing() and not host.modal() then host.undoAction() end
-    return 0
-   end
-  elseif project_undo(k,gfx.mouse_cap) then return 0 end
- end
- return k
-end
-function B.tick(now)
- if not host then return end
- if B.windowW~=gfx.w or B.windowH~=gfx.h then B.windowW,B.windowH=gfx.w,gfx.h;B.lastRect=nil;wake_visuals() end
- B.viewport(host.geometry(),gfx.ext_retina or 1)
- if B.openAfterExpand and not host.collapsed() and not host.busy() then B.openAfterExpand=nil;Presets.menu();wake_visuals() end
- local active=host.active()
- if Presets.open or Presets.swallow then Presets.update(active) end
- if Presets.open and Presets.hoverSince and now>=Presets.hoverSince+1 then wake_visuals() end
- if B.noticeUntil and now>=B.noticeUntil then B.noticeUntil=nil;B.notice=nil;wake_visuals() end
- local phase=host.editing() and (now%1<.5) or false
- if B.caretPhase~=phase then B.caretPhase=phase;wake_visuals() end
- if B.lastDPI~=(gfx.ext_retina or 1) then B.lastDPI=gfx.ext_retina or 1;wake_visuals() end
- if now>=(B.displayAt or 0) then gfx.update();B.displayAt=now+.25 end
- if B.popupUntil then
-  if now<B.popupUntil then return end
-  clear_chrome_tooltip();B.tip=nil;B.tipVisible=false;B.tipAt=now
- end
- local tip
- local mx,my=gfx.mouse_x,gfx.mouse_y
- if active and not Presets.open and not host.modal() and (gfx.mouse_cap&1)==0 then
-  if my>=0 and my<26 then
-   local b=UI.bar(gfx.w)
-   tip=mx>=b.closeX and '閉じる' or mx>=b.resetX and 'ウィンドウサイズ初期化' or mx>=b.themeX and 'カメレオンモード' or b.foldX and mx>=b.foldX and '縮小／展開' or mx>=b.languageX and '表示言語を切替（JP / EN）' or mx>=b.nextX and '次のプリセット' or mx>=b.prevX and '前のプリセット' or mx>=b.presetX and 'プリセット（読込・保存・インポート／エクスポート）' or nil
-  elseif B.footerBounds and B.footerClipped then local r=B.footerBounds;if mx>=r[1] and mx<=r[3] and my>=r[2] and my<=r[4] then tip=B.footerText end end
- end
- if tip then tip=Language.message(tip) end
- if tip~=B.tip then if B.tipVisible then clear_chrome_tooltip() end;B.tip=tip;B.tipAt=now;B.tipVisible=false
- elseif tip and not B.tipVisible and now-B.tipAt>.7 and R.TrackCtl_SetToolTip and gfx.clienttoscreen then
-  local x,y=gfx.clienttoscreen(mx,my+18);R.TrackCtl_SetToolTip(tip,x,y,true);B.tipVisible=true
- end
-end
-function B.bar()
- if not host then return end
- scale,ox,oy=host.geometry()
- local blocked=not B.recoveryMode and (Presets.open or Presets.swallow or host.modal())
- custom_titlebar(blocked)
- Presets.draw()
-end
-
--- Preserve title-bar button edges across repeated application failures.
 function B.logError(err)
  local message=B.publicError(err)
  if message~=B.lastLoggedError then
@@ -1446,74 +3295,7 @@ function B.cleanup(fn,...)
  if not ok then B.logError(result) end
  return ok,result
 end
-function B.recoverInput(state,err)
- gfx.dest=-1;gfx.mode=0;gfx.a=1
- for _,key in ipairs({'drag','number_drag','pointer_capture','field_drag','fieldDrag','scrollDrag','source_wave_drag','curve_drag','scroll_drag','seam_drag','seam_hold','pressed','popup','name_dialog','duplicate_modal'}) do state[key]=nil end
- if host.cancelEdit then B.cleanup(host.cancelEdit) end
- Presets.open=false;Presets.swallow=false;Presets.pressed=nil;Presets.hoverSince=nil
- Chrome.drag=nil;Chrome.resize=nil
- if host.cursor then B.cleanup(host.cursor,nil) end
- B.recoveryMode=true
- local ok,why=pcall(B.bar)
- B.recoveryMode=nil
- if not ok then
-  B.logError(why)
-  -- A failed font, preset or theme draw must still allow closing the window.
-  local down=((gfx.mouse_cap or 0)&1)~=0
-  local hit=gfx.mouse_y>=0 and gfx.mouse_y<26 and gfx.mouse_x>=gfx.w-38 and gfx.mouse_x<gfx.w
-  if down and not B.emergencyDown then B.emergencyClose=hit end
-  if not down and B.emergencyDown then
-   if B.emergencyClose and hit then Chrome.requestClose=true end
-   B.emergencyClose=nil
-  end
-  B.emergencyDown=down
- else B.emergencyDown=nil;B.emergencyClose=nil end
- pcall(B.footer,B.publicError(err),true,gfx.w,0,B.footerVersion or '')
- pcall(gfx.update)
- if Chrome.requestClose then state.closing=true end
- state.content_dirty=true
- B.cleanup(host.wake)
- B.logError(err)
 end
-
-function B.title(title,subtitle,width,divider)
- scale,ox,oy=host.geometry();local origin=oy+22*scale
- B.font(35,2,true,scale,host.faces);gfx.set(C.text[1],C.text[2],C.text[3],1);gfx.x=ox+24*scale;gfx.y=origin+8*scale;gfx.drawstr(UI.fit(title,(width-150)*scale))
- B.font(10,1,false,scale,host.faces);gfx.set(C.accent2[1],C.accent2[2],C.accent2[3],1);gfx.x=ox+26*scale;gfx.y=origin+44*scale;gfx.drawstr(UI.fit(Language.text(subtitle),(width-155)*scale))
- if divider~=false then gfx.set(C.edge2[1],C.edge2[2],C.edge2[3],.26);gfx.line(ox+24*scale,origin+62*scale,ox+(width-24)*scale,origin+62*scale,1) end
-end
-
-
-function B.footer(message,bad,width,height,version,progress)
- if version~='' then B.footerVersion=version end
- scale,ox,oy=host.geometry();message=Language.message(B.notice or tostring(message or ''))
- if B.notice then bad=B.noticeBad end
- local y=oy+(height-13)*scale
- B.font(8,3,true,scale,host.faces);local ver=version~='' and 'v'..version or '';local vw=UI.textMetrics(ver)
- local available=(width-48)*scale-vw-14*scale
- local progressing=type(progress)=='number'
- B.font(9,1,false,scale,host.faces);local shown=progressing and '' or UI.fit(message,available)
- B.footerText=progressing and '' or message;B.footerClipped=not progressing and shown~=message;B.footerBounds={ox+24*scale,y,ox+24*scale+available,y+14*scale}
- gfx.set(C.edge[1],C.edge[2],C.edge[3],.26);gfx.line(ox+24*scale,y-3*scale,ox+(width-24)*scale,y-3*scale)
- if progressing then
-  local fraction=math.max(0,math.min(1,progress))
-  -- Reserve the widest caption so the track stays still as the percentage changes.
-  local caption=string.format(Language.text('解析中...%d%%'),math.floor(fraction*100+.5))
-  local captionWidth=UI.textMetrics(Language.text('解析中...100%'))
-  gfx.set(C.muted[1],C.muted[2],C.muted[3],1);gfx.x=ox+24*scale;gfx.y=y;gfx.drawstr(caption)
-  local x=ox+24*scale+captionWidth+10*scale;local barY=y+3*scale;local barH=6*scale
-  local barW=math.max(0,math.min(available,(width-48)*scale*.45)-captionWidth-10*scale)
-  gfx.set(C.field[1],C.field[2],C.field[3],1);gfx.rect(x,barY,barW,barH,1)
-  gfx.set(C.accent2[1],C.accent2[2],C.accent2[3],.95);gfx.rect(x,barY,barW*fraction,barH,1)
-  gfx.set(C.muted[1],C.muted[2],C.muted[3],.5);gfx.rect(x,barY,barW,barH,0)
- else
-  local c=bad and C.warn or C.muted;gfx.set(c[1],c[2],c[3],1);gfx.x=ox+24*scale;gfx.y=y;gfx.drawstr(shown)
- end
- B.font(8,3,true,scale,host.faces);gfx.set(C.faint[1],C.faint[2],C.faint[3],1);gfx.x=ox+(width-24)*scale-vw;gfx.y=y;gfx.drawstr(ver)
-end
-return B
-end)()
-
 local Core={MAX_BYTES=16*1024*1024,MAX_ROWS=200000,MAX_NAME=4096}
 local min,max,floor=math.min,math.max,math.floor
 local function clamp(n,a,b) return max(a,min(b,n)) end
@@ -1878,7 +3660,19 @@ local function rebuild_selection()
   end
 end
 local function rebuild()
-  A.rows={};for i,v in ipairs(A.items) do A.rows[i]={info=v} end
+  local previous
+  local rows={}
+  for i,v in ipairs(A.items) do
+    local row=A.rows[i]
+    if not row or row.info.guid~=v.guid then
+      if not previous then previous={};for _,old in ipairs(A.rows) do previous[old.info.guid]=old end end
+      row=previous[v.guid] or {}
+    end
+    local old=row.info
+    if not old or old.before~=v.before or old.id~=v.id or old.pos~=v.pos or old.ending~=v.ending or old.isrgn~=v.isrgn then row.text=nil end
+    row.info=v;rows[i]=row
+  end
+  A.rows=rows
   rebuild_selection()
   local s=Core.scope;A.scope_state={s.kind,s.query,s.sort,s.desc,s.exclude_loop}
 end
@@ -2067,1166 +3861,9 @@ local function paste_names(selected_only)
   if not n then report_error(err) end
 end
 local function paste_selected() paste_names(true) end
-local function context_menu(guid)
-  sync_selection()
-  local target=nil;for _,v in ipairs(A.items) do if v.guid==guid then target=v;break end end
-  if not target then return end
-  if not target.selected then select_row(guid,0,true) end
-  gfx.x=gfx.mouse_x;gfx.y=gfx.mouse_y
-  local action=gfx.showmenu(Language.menu("コピー|一覧情報をコピー|名前を貼り付け"))
-  if action==1 then copy_information(true,true)
-  elseif action==2 then copy_information(false,true)
-  elseif action==3 then paste_selected() end
-end
 local function guarded(fn)
   local ok,err=xpcall(fn,debug.traceback)
   if not ok then report_error(err); BLT.recoverInput(A,err) end
-end
-
-local BASE_W,BASE_H=540,962
-local H=BASE_H
-local W=BASE_W
-local C={
-  bg={0.018,0.030,0.055}, bg2={0.030,0.090,0.180},
-  panel={0.040,0.068,0.110}, panel2={0.055,0.125,0.205},
-  field={0.018,0.040,0.080}, edge={0.145,0.285,0.445}, edge2={0.360,0.650,0.900},
-  text={0.955,0.980,1.000}, muted={0.690,0.780,0.875}, faint={0.390,0.505,0.635},
-  accent={0.120,0.490,0.980}, accent2={0.650,0.895,1.000}, accent3={0.045,0.235,0.520},
-  focus={0.225,0.610,1.000}, focus2={0.690,0.900,1.000}, ink={0.018,0.075,0.160},
-  hover={0.430,0.790,1.000}, warn={1.000,0.755,0.490}, red={1.000,0.230,0.300}, quiet={0.300,0.360,0.440},
-  green={0.510,0.860,0.740}
-}
-local fonts={"Yu Gothic UI","Segoe UI","Consolas"}
-local os=R.GetOS()
-if os:match("OSX") or os:match("macOS") then fonts={"Hiragino Sans","Helvetica Neue","Menlo"}
-elseif not os:match("Win") then fonts={"sans-serif","sans-serif","monospace"} end
-
-local scale,ox,oy=1,0,0
- BLT.viewport(scale,gfx.ext_retina or 1);local mx,my=-1,-1
-local widgets,last_down={},false
-local drawn_layout=nil
-local scroll_drag=nil
-local pressed_generation=nil
-local frame_clock,frame_dt,particle_dt,anim_time=R.time_precise(),1/60,1/60,0
-local animations_active=true
-local animation_speed=1
-local EFFECT_IDLE_TAIL=2.5
-local EFFECT_COAST=0.70
-local effect_activity_until=R.time_precise()+EFFECT_IDLE_TAIL
-local redraw_dirty=true
-local next_draw_time=0
-local last_raw_mouse_x,last_raw_mouse_y,last_raw_mouse_cap=nil,nil,nil
-local last_window_w,last_window_h=nil,nil
-local last_window_active=nil
-local function wake_visuals(now)
-  now=now or R.time_precise(); redraw_dirty=true
-  effect_activity_until=max(effect_activity_until,now+EFFECT_IDLE_TAIL)
-  if next_draw_time==math.huge then next_draw_time=now end
-end
-local function visual_speed(now)
-  local remain=effect_activity_until-(now or R.time_precise())
-  if remain<=0 then return 0 end
-  if remain>=EFFECT_COAST then return 1 end
-  local t=clamp(remain/EFFECT_COAST,0,1)
-  return t*t*(3-2*t)
-end
-local motion={}
-
-local window_poll_at=0
-
-local function sx(x) return ox+x*scale end
-local function sy(y) return oy+y*scale end
-local function color(c,a) gfx.set(c[1],c[2],c[3],a or 1) end
-local function rect(x,y,w,h,c,a) color(c,a); gfx.rect(sx(x),sy(y),w*scale,h*scale,1) end
-local function line(x,y,x2,y2,c,a) color(c,a); gfx.line(sx(x),sy(y),sx(x2),sy(y2),1) end
-local function disc(x,y,r,c,a) color(c,a); gfx.circle(sx(x),sy(y),r*scale,1,1) end
-
-local function font(size,kind,bold) BLT.font(size,kind,bold,scale,fonts) end
-local function label(text,x,y,size,c,kind,w,h,flags,bold,literal)
-  local shown=literal and tostring(text) or Language.message(text)
-  font(size,kind,bold); color(c or C.text); gfx.x,gfx.y=sx(x),sy(y)
-  if shown~=tostring(text) and w then shown=BLT.ui.fit(shown,w*scale) end
-  gfx.drawstr(shown,flags or 0,sx(x+(w or 700)),sy(y+(h or size+8)))
-end
-local function measure(text,size,kind,bold) font(size,kind,bold);return BLT.metricsFor(Language.message(text))/scale end
-
-local function gradient(x,y,w,h,a,b,alpha1,alpha2,vertical)
-  local aa1=alpha1 or 1; local aa2=alpha2==nil and aa1 or alpha2
-  local n=max(1,(vertical and h or w)*scale)
-  if (a==b or (a[1]==b[1] and a[2]==b[2] and a[3]==b[3])) and aa1==aa2 then rect(x,y,w,h,a,aa1); return end
-  if n<=1.01 then rect(x,y,w,h,a,aa1); return end
-  local dr,dg,db=(b[1]-a[1])/n,(b[2]-a[2])/n,(b[3]-a[3])/n
-  local da=(aa2-aa1)/n
-  gfx.gradrect(sx(x),sy(y),w*scale,h*scale,a[1],a[2],a[3],aa1,
-    vertical and 0 or dr,vertical and 0 or dg,vertical and 0 or db,vertical and 0 or da,
-    vertical and dr or 0,vertical and dg or 0,vertical and db or 0,vertical and da or 0)
-end
-local function glow_line(x,y,x2,y2,c,strength)
-  strength=strength or 1
-  line(x,y-2,x2,y2-2,c,.05*strength); line(x,y+2,x2,y2+2,c,.05*strength)
-  line(x,y-1,x2,y2-1,c,.12*strength); line(x,y+1,x2,y2+1,c,.12*strength)
-  line(x,y,x2,y2,c,.92*strength)
-end
-local function finish_corners(x,y,w,h,cut,top_left,edge,a)
-  color(C.bg)
-  gfx.triangle(sx(x+w-cut-1),sy(y+h+1),sx(x+w+1),sy(y+h-cut-1),sx(x+w+1),sy(y+h+1))
-  if top_left then gfx.triangle(sx(x-1),sy(y-1),sx(x+cut+1),sy(y-1),sx(x-1),sy(y+cut+1)) end
-  line(x+w,y+h-cut,x+w-cut,y+h,edge,a)
-  if top_left then line(x,y+cut,x+cut,y,edge,a) end
-end
-local function animate(key,target)
- if BLT.presetRevision and BLT.presetMotionSeen[key]~=BLT.presetRevision then
-  BLT.presetMotionSeen[key]=BLT.presetRevision;motion[key]=target;return target
- end
-  local p=motion[key]; if p==nil then p=target end
-  local v=p+(target-p)*BLT.blend(frame_dt); motion[key]=v; return v
-end
-local function particle_hash(n,salt)
-  local v=math.sin(n*12.9898+salt*78.233)*43758.5453; return v-floor(v)
-end
-local function inside(x,y,w,h) return mx>=x and mx<=x+w and my>=y and my<=y+h end
-local function widget(id,x,y,w,h,fn,enabled)
-  widgets[#widgets+1]={id=id,x=x,y=y,w=w,h=h,fn=fn,enabled=enabled~=false}
-end
-
-local function draw_background()
-  rect(0,0,W,H+22,C.bg)
-  disc(W-45,42,180,C.accent,.016)
-  disc(5,H-85,150,C.bg2,.030)
-  gradient(0,0,W,92,C.bg2,C.bg,.22,0,true)
-
-  line(17,104,17,H-46,C.edge2,.12)
-  for y=115,H-52,20 do line(17,y,22,y,C.edge2,.10) end
-end
-local BACKGROUND_IMAGE=900
-local background_cache={}
-local function cached_background()
-  local cache=background_cache
-  if cache.w~=gfx.w or cache.h~=gfx.h or cache.scale~=scale or cache.dpi~=gfx.ext_retina
-    or cache.ox~=ox or cache.oy~=oy or cache.width~=W
-    or cache.bg~=C.bg or cache.bg2~=C.bg2 or cache.accent~=C.accent or cache.edge2~=C.edge2 then
-    gfx.setimgdim(BACKGROUND_IMAGE,gfx.w,gfx.h)
-    local dest=gfx.dest
-    gfx.dest=BACKGROUND_IMAGE
-    gfx.set(C.bg[1],C.bg[2],C.bg[3],1);gfx.rect(0,0,gfx.w,gfx.h,1)
-    draw_background()
-    gfx.dest=dest
-    cache.w=gfx.w;cache.h=gfx.h;cache.scale=scale;cache.dpi=gfx.ext_retina;cache.ox=ox;cache.oy=oy;cache.width=W
-    cache.bg=C.bg;cache.bg2=C.bg2;cache.accent=C.accent;cache.edge2=C.edge2
-  end
-  local mode=gfx.mode
-  gfx.mode=2;gfx.a=1
-  gfx.blit(BACKGROUND_IMAGE,1,0,0,0,gfx.w,gfx.h,0,0,gfx.w,gfx.h)
-  gfx.mode=mode
-end
-
-local function small_button(id,text,x,y,w,h,fn,enabled,strong_edge)
-  enabled=enabled~=false
-  local hovered=inside(x,y,w,h) and enabled
-  local pressed=A.pressed==id and (gfx.mouse_cap&1)~=0 and enabled
-  local stamp=A.flashes[id];local flash=stamp and max(0,1-(R.time_precise()-stamp)/.65) or 0
-  if pressed then y=y+2 end
-  local a=animate("small_"..id,hovered and 1 or 0)
-  gradient(x,y,w,h,C.panel2,C.panel,.34+.16*a,.88)
-  gradient(x,y,w,1,C.accent2,C.accent2,.16+.50*a,.02)
-  line(x,y+h,x+w,y+h,C.edge,.46)
-  if a>.01 then rect(x,y,2,h,C.accent2,.65*a) end
-  local ea=(strong_edge and .58 or .28)+(strong_edge and .26 or .35)*a
-  finish_corners(x,y,w,h,6,false,strong_edge and C.accent2 or C.edge2,ea)
-  if strong_edge then
-    line(x+5,y,x+w-8,y,C.accent2,.34+.26*a)
-    line(x,y+4,x,y+h-6,C.accent2,.24+.24*a)
-  end
-  if id=="reset" then rect(x+1,y+1,w-2,h-2,C.accent3,.40) end
-  if pressed or flash>0 then
-    rect(x+1,y+1,w-2,h-2,C.accent2,pressed and .44 or .50*flash)
-    line(x+1,y+1,x+w-1,y+1,C.focus2,pressed and 1 or flash)
-    line(x+1,y+h-1,x+w-1,y+h-1,C.focus2,pressed and 1 or flash)
-  end
-  if flash>0 and (id=="copy_names" or id=="copy_info") then text="コピーしました" end
-  label(text,x,y+2,14,enabled and C.text or C.muted,1,w,h-3,5,true)
-  widget(id,x,pressed and y-2 or y,w,h,fn,enabled)
-end
-
-local function scroll_button(id,text,x,y,w,fn,enabled)
-  local hovered=enabled and inside(x,y,w,30)
-  local pressed=hovered and A.pressed==id and (gfx.mouse_cap&1)~=0
-  if hovered then rect(x,y+3,w,24,C.panel2,pressed and .85 or .55) end
-  label(text,x,y+(pressed and 1 or 0),13,hovered and C.text or C.muted,1,w,30,5,false)
-  widget(id,x,y,w,30,fn,enabled)
-end
-
-local function segment_button(id,text,x,y,w,h,active,fn,enabled)
-  enabled=enabled~=false
-  local hovered=inside(x,y,w,h) and enabled
-  local a=animate("segment_"..id,active and 1 or (hovered and .28 or 0))
-  rect(x,y,w,h,C.panel,.98)
-  gradient(x,y,w,h,C.accent3,C.panel,(active and .38 or .22)*a,0)
-  if active then
-    gradient(x+2,y+2,w-5,h-5,C.accent,C.accent3,.16,.015,true)
-    rect(x+1,y+5,2,h-10,C.accent2,.82)
-    glow_line(x+10,y+1,x+w-12,y+1,C.accent2,.30)
-  end
-  line(x,y+h-1,x+w,y+h-1,C.edge2,.20+.58*a)
-  if active then glow_line(x+12,y+h-1,x+w-12,y+h-1,C.accent2,.34) end
-  finish_corners(x,y,w,h,6,false,active and C.accent2 or C.edge2,active and .66 or (.22+.42*a))
-  label(text,x,y+3,14,enabled and C.text or C.muted,1,w,h-5,5,true)
-  widget(id,x,y,w,h,fn,enabled)
-end
-
-local Chameleon
-local Chrome={window=nil,mouseDown=false,drag=nil,resize=nil,mouseActive=false,requestClose=false,requestReset=false,
-  chameleonPressed=false,resizeCursors={},resizeCursorMode=nil,titleH=26,windowTitle=APP_NAME,titleText='M A R K E R   R E G I O N   D E S K',
-  minW=486,minH=500,mint={0.38,0.88,0.72},ice={0.65,0.895,1.0},red={1.0,0.27,0.34},
-  isWindows=R.GetOS():match("Win")~=nil,resizeEdge=6,resizeCornerBand=8,resizeCornerSpan=24,resizeTopLeftGuard=30,resizeTopRightGuard=110,
-  tooltipHover=nil,tooltipSince=0,tooltipVisible=false,tooltipDelay=.70,
-  cursorId={we=32644,ns=32645,nwse=32642,nesw=32643,arrow=32512}}
-Chrome.font=Chrome.isWindows and "Segoe UI" or (BLT_MAC and "Helvetica Neue" or "sans-serif")
-
--- BEGIN BLT CHAMELEON 1.0.0 (generated from _shared/BLT_Chameleon.lua)
--- Standalone embedded factory. Hosts supply persistence and redraw hooks.
-local BLTChameleon=(function()
--- BEGIN BLT THEME COLORS 1.0.0 (generated from _shared/BLT_ThemeColors.lua)
-local BLTThemeColors=(function()
- local M={}
- function M.native(api,key)
-  local ok,n=pcall(api.GetThemeColor,key,0)
-  if not ok or type(n)~='number' or n~=n or n%1~=0 then return -1 end
-  return n
- end
- function M.decode(api,n)
-  if n==-1 then return nil end
-  local ok,r,g,b=pcall(api.ColorFromNative,n)
-  if not ok then return nil end
-  for _,v in ipairs({r,g,b}) do
-   if type(v)~='number' or v~=v or v<0 or v>255 then return nil end
-  end
-  if r==nil or g==nil or b==nil then return nil end
-  return {r/255,g/255,b/255}
- end
- function M.read(api,key,fallback) return M.decode(api,M.native(api,key)) or fallback end
- local function linear(v) return v<=.04045 and v/12.92 or ((v+.055)/1.055)^2.4 end
- function M.luminance(c) return linear(c[1])*.2126+linear(c[2])*.7152+linear(c[3])*.0722 end
- function M.contrast(a,b)
-  local x,y=M.luminance(a),M.luminance(b)
-  return (math.max(x,y)+.05)/(math.min(x,y)+.05)
- end
- return M
-end)()
--- END BLT THEME COLORS
- local M={}
- M.keys={
-  'col_main_bg2','col_main_bg','col_arrangebg','col_tracklistbg','col_mixerbg',
-  'genlist_bg','col_tl_bg','col_trans_bg','col_tr1_bg','col_tr2_bg',
-  'col_main_editbk','col_transport_editbk','col_buttonbg',
-  'col_main_text2','col_main_text','genlist_fg','col_tcp_text',
-  'col_toolbar_text','col_toolbar_text_on','col_tl_fg','col_tl_fg2','col_trans_fg',
-  'col_seltrack','col_seltrack2','genlist_selbg','col_tl_bgsel','toolbararmed_color',
-  'col_main_resize2','selitem_dot','selitem_tag','activetake_tag',
-  'col_routinghl1','col_routinghl2','track_lanesolo_tabcol',
-  'col_main_3dhl','col_main_3dsh','genlist_grid','col_toolbar_frame',
-  'col_tr1_divline','col_tr2_divline','docker_shadow',
- }
- function M.copy(c) return {c[1],c[2],c[3]} end
- function M.mix(a,b,t)
-  t=math.max(0,math.min(1,t or 0))
-  return {a[1]+(b[1]-a[1])*t,a[2]+(b[2]-a[2])*t,a[3]+(b[3]-a[3])*t}
- end
- function M.luma(c) return c[1]*.2126+c[2]*.7152+c[3]*.0722 end
- local function saturation(c) return math.max(c[1],c[2],c[3])-math.min(c[1],c[2],c[3]) end
- local function shift(c,target)
-  local l=M.luma(c);target=math.max(0,math.min(1,target))
-  if math.abs(target-l)<1e-5 then return M.copy(c) end
-  if target<l then return M.mix(c,{0,0,0},(l-target)/math.max(l,1e-9)) end
-  return M.mix(c,{1,1,1},(target-l)/math.max(1-l,1e-9))
- end
- local function boost(c,factor)
-  local l=M.luma(c);local out={}
-  for i=1,3 do out[i]=math.max(0,math.min(1,l+(c[i]-l)*factor)) end
-  return out
- end
- function M.fit(accent,bg,light)
-  if math.abs(M.luma(accent)-M.luma(bg))>=.17 then return M.copy(accent) end
-  return shift(accent,light and math.min(.78,M.luma(bg)+.28) or math.max(.16,M.luma(bg)-.30))
- end
- local function surface(c,bg,factor,lo,hi)
-  local delta=M.luma(c)-M.luma(bg)
-  return shift(c,math.max(.01,math.min(.99,M.luma(bg)+(delta<0 and -1 or 1)*math.max(lo,math.min(hi,math.abs(delta)*factor)))))
- end
- local function first_near(map,bg,keys,gap)
-  local l=M.luma(bg)
-  for _,key in ipairs(keys) do local c=map[key];if c and math.abs(M.luma(c)-l)<=gap then return c end end
- end
- local function generated_text(bg)
-  local light,dark={.935,.945,.958},{.070,.075,.082}
-  local lr,dr=BLTThemeColors.contrast(light,bg),BLTThemeColors.contrast(dark,bg)
-  local is_light=lr>dr;local color=is_light and light or dark
-  if math.max(lr,dr)<4.5 then color=is_light and {1,1,1} or {0,0,0} end
-  return color,is_light
- end
- local text_keys={'col_main_text2','col_main_text','genlist_fg','col_tcp_text','col_toolbar_text','col_tl_fg','col_trans_fg'}
- local accent_keys={'genlist_selbg','col_seltrack','toolbararmed_color','col_tl_bgsel','col_toolbar_text_on','col_main_resize2',
-  'selitem_dot','selitem_tag','activetake_tag','col_routinghl1','col_routinghl2','track_lanesolo_tabcol','col_tl_fg'}
- local hi_keys={'col_main_3dhl','col_toolbar_frame','genlist_grid','col_tl_fg2','col_tr1_divline','col_tr2_divline'}
- local sh_keys={'col_main_3dsh','docker_shadow','genlist_grid','col_tr1_divline','col_tr2_divline'}
- local panel_keys={'col_main_bg','col_tracklistbg','col_mixerbg','genlist_bg','col_seltrack2','col_tl_bg','col_tr1_bg','col_tr2_bg'}
- local field_keys={'col_main_editbk','col_transport_editbk','genlist_bg','col_buttonbg','col_trans_bg'}
- local function best_color(map,bg,keys,role,dark)
-  local best,score=nil,-math.huge;local l=M.luma(bg)
-  for i,key in ipairs(keys) do
-   local c=map[key]
-   if c then
-    local delta=M.luma(c)-l;local gap=math.abs(delta);local sat=saturation(c);local value
-    if role=='text' then
-     if gap>=.28 then value=gap+sat*.20 end
-    elseif role=='accent' then
-     value=sat*1.45+gap*.72+(i<=3 and .12 or 0)-(gap<.035 and sat<.035 and .35 or 0)
-    else
-     local wanted=role=='hi' and (dark and delta>0 or not dark and delta<0)
-      or role=='sh' and (dark and delta<0 or not dark and delta>0)
-     value=gap+(wanted and .16 or 0)
-    end
-    if value and value>score then best,score=c,value end
-   end
-  end
-  return best
- end
- -- Cache native values and decode only changed slots. Failed decoding is retried.
- function M.snapshot(api,cache,force)
-  cache=cache or {raw={},map={}};local changed=not cache.ready
-  for i,key in ipairs(M.keys) do
-   local native=BLTThemeColors.native(api,key)
-   if force or native~=cache.raw[i] then
-    local c=BLTThemeColors.decode(api,native)
-    cache.map[key]=c;cache.raw[i]=c and native or -1;changed=true
-   end
-  end
-  cache.ready=true
-  return cache.map,changed,cache
- end
- function M.palette(map,defaults)
-  -- Keep the main window/toolbar RGB unchanged; images may override the visible toolbar.
-  local bg=M.copy(map.col_main_bg2 or map.col_main_bg or map.col_tracklistbg or map.genlist_bg or map.col_arrangebg or defaults.bg)
-  local l=M.luma(bg);local dark=l<.50
-  local panel=first_near(map,bg,panel_keys,.16) or shift(bg,dark and math.min(.92,l+.040) or math.max(.08,l-.040))
-  local field=first_near(map,bg,field_keys,.14) or shift(bg,dark and math.min(.92,l+.018) or math.min(.96,l+.020))
-  panel=surface(panel,bg,1.48,.030,.105);field=surface(field,bg,1.38,.020,.085)
-  if dark and M.luma(panel)<=l+.022 then panel=shift(panel,math.min(.94,l+.038))
-  elseif not dark and M.luma(panel)>=l-.022 then panel=shift(panel,math.max(.06,l-.038)) end
-  local generated,light=generated_text(bg)
-  local text=M.mix(generated,best_color(map,bg,text_keys,'text') or generated,.18)
-  if BLTThemeColors.contrast(text,bg)<4.5 then text=generated end
-  local accent=boost(best_color(map,bg,accent_keys,'accent') or defaults.accent,dark and 1.18 or 1.14)
-  accent=M.fit(accent,bg,light)
-  if dark and M.luma(accent)<l+.22 then accent=shift(accent,math.min(.82,l+.26))
-  elseif not dark and M.luma(accent)>l-.22 then accent=shift(accent,math.max(.12,l-.28)) end
-  local edge=M.mix(bg,text,dark and .20 or .18);local edge2=M.mix(accent,text,dark and .12 or .09)
-  local hi=best_color(map,bg,hi_keys,'hi',dark);local sh=best_color(map,bg,sh_keys,'sh',dark)
-  if sh then edge=M.mix(edge,sh,.28) end;if hi then edge2=M.mix(edge2,hi,.24) end
-  local out={bg=bg,bg2=M.mix(bg,accent,dark and .080 or .065),panel=panel,panel2=M.mix(panel,accent,dark and .105 or .085),field=field,
-   text=text,muted=M.mix(text,bg,dark and .28 or .30),faint=M.mix(text,bg,dark and .50 or .52),edge=edge,edge2=edge2,
-   accent=accent,accent2=M.mix(accent,text,dark and .14 or .09),accent3=M.mix(accent,bg,dark and .48 or .46),
-   focus=M.mix(accent,text,dark and .06 or .04),focus2=M.mix(accent,text,dark and .20 or .12),
-   ink=M.mix(bg,accent,dark and .16 or .12),hover=M.mix(accent,text,dark and .15 or .10)}
-  if defaults.green then out.green=M.copy(out.accent2) end
-  for _,key in ipairs({'warn','red','gold','purple','lock'}) do
-   if defaults[key] then out[key]=M.fit(defaults[key],bg,light) end
-  end
-  if out.lock and defaults.lock2 then out.lock2=M.mix(out.lock,text,dark and .22 or .16) end
-  return out
- end
- local function hsv(c)
-  local r,g,b=c[1],c[2],c[3];local mx=math.max(r,g,b);local d=mx-math.min(r,g,b);local h=0
-  if d>1e-6 then h=(mx==r and ((g-b)/d)%6 or mx==g and (b-r)/d+2 or (r-g)/d+4)/6 end
-  return h,mx<=1e-6 and 0 or d/mx,mx
- end
- local function rgb(h,s,v)
-  h=h%1;local i=math.floor(h*6);local f=h*6-i
-  local p,q,t=v*(1-s),v*(1-f*s),v*(1-(1-f)*s)
-  i=i%6
-  if i==0 then return {v,t,p} elseif i==1 then return {q,v,p} elseif i==2 then return {p,v,t}
-  elseif i==3 then return {p,q,v} elseif i==4 then return {t,p,v} else return {v,p,q} end
- end
- function M.new(api,colors,options)
-  options=options or {};local defaults={};local chrome_defaults
-  for k,c in pairs(colors) do if type(c)=='table' and type(c[1])=='number' then defaults[k]=M.copy(c) end end
-  local theme={enabled=api.GetExtState(options.section,'chameleon')=='1',poll_at=0,poll_interval=3,keys=M.keys}
-  local cache,pending=nil,false
-  local function chrome()
-   local c=options.chrome;if type(c)=='function' then c=c() end
-   if c and not chrome_defaults then chrome_defaults={mint=M.copy(c.mint),ice=M.copy(c.ice)} end
-   return c
-  end
-  chrome()
-  local function updated(restored,palette)
-   theme.bltIcon=nil
-   if options.applied then options.applied(restored,palette) end
-   if options.changed then options.changed() end
-  end
-  function theme.apply(palette)
-   for key in pairs(defaults) do
-    local c=palette[options.roles and options.roles[key] or key]
-    if c then colors[key]=c end
-   end
-   local c=chrome();if c then c.mint=M.copy(palette.accent2);c.ice=M.copy(palette.focus2) end
-   updated(false,palette)
-  end
-  function theme.restore()
-   for key,c in pairs(defaults) do colors[key]=M.copy(c) end
-   local c=chrome();if c then c.mint=M.copy(chrome_defaults.mint);c.ice=M.copy(chrome_defaults.ice) end
-   updated(true)
-  end
-  function theme.refresh(force)
-   if not theme.enabled then return false end
-   local map,changed;map,changed,cache=M.snapshot(api,cache,force)
-   if not force and not changed and not pending then return false end
-   pending=true;theme.apply(M.palette(map,defaults));pending=false
-   if force then theme.poll_at=api.time_precise()+theme.poll_interval end
-   return true
-  end
-  function theme.set(on)
-   theme.enabled=on and true or false;cache=nil;pending=false
-   local value=theme.enabled and '1' or '0'
-   if options.store then options.store(options.section,'chameleon',value,true)
-   else api.SetExtState(options.section,'chameleon',value,true) end
-   if theme.enabled then theme.refresh(true) else theme.restore() end
-   if options.notify then options.notify(theme.enabled and 'CHAMELEON  REAPERテーマに擬態' or 'CHAMELEON  オリジナル配色') end
-  end
-  function theme.toggle() theme.set(not theme.enabled) end
-  function theme.tick(now)
-   if not theme.enabled or now<theme.poll_at then return false end
-   theme.poll_at=now+theme.poll_interval
-   return theme.refresh(false)
-  end
-  function theme.sample() local map=M.snapshot(api);return map,M.palette(map,defaults) end
-  function theme.icon_colors()
-   local c=theme.bltIcon;local a=colors.accent
-   if c and c.on==theme.enabled and c.r==a[1] and c.g==a[2] and c.b==a[3] then return c[1],c[2],c[3] end
-   local x,y,z
-   if theme.enabled then
-    local h,s,v=hsv(a);s=math.max(s,.46)
-    x,y,z=rgb(h,s,v),rgb(h+.19,math.max(.42,s*.90),v),rgb(h-.19,math.max(.42,s*.86),v)
-   else
-    x,y,z=M.copy(colors.muted),M.copy(colors.faint),M.copy(colors.edge)
-    for _,color in ipairs({x,y,z}) do
-     local gray=M.luma(color);for i=1,3 do color[i]=gray+(color[i]-gray)*.12 end
-    end
-   end
-   theme.bltIcon={x,y,z,on=theme.enabled,r=a[1],g=a[2],b=a[3]};return x,y,z
-  end
-  return theme
- end
- return M
-end)()
--- END BLT CHAMELEON
-
-Chameleon=BLTChameleon.new(R,C,{
- section=SECTION,
- store=BLT.store,
- chrome=Chrome,
- changed=wake_visuals
-})
-
-
-local function titlebar_api_ready()
-  local required={"JS_Window_Find","JS_Window_IsWindow","JS_Window_GetRect","JS_Window_SetPosition","JS_Window_SetStyle"}
-  if Chrome.isWindows then
-    required[#required+1]="JS_Mouse_LoadCursor"
-    required[#required+1]="JS_Mouse_SetCursor"
-  end
-  for _,name in ipairs(required) do
-    if type(R[name])~="function" then
-      return false,"カスタムタイトルバーには js_ReaScriptAPI が必要です。\nReaPack から js_ReaScriptAPI をインストールしてください。"
-    end
-  end
-  return true
-end
-
-local function gfx_window_handle()
-  if Chrome.window and R.JS_Window_IsWindow(Chrome.window) then return Chrome.window end
-  Chrome.window=R.JS_Window_Find(Chrome.windowTitle,true)
-  return Chrome.window
-end
-
-local function apply_custom_window_style(target_w,target_h)
-  local hwnd=gfx_window_handle()
-  if not hwnd then return false end
-  local ok,l,t=WindowGeometry.JS_Window_GetRect(hwnd)
-  if not R.JS_Window_SetStyle(hwnd,"POPUP") then return false end
-  if ok then BLT.position(hwnd,l,t,target_w,target_h,"","") end
-  return true
-end
-
-local function reset_window_size()
-  local hwnd=gfx_window_handle()
-  if not hwnd then return end
-  local ok,l,t=WindowGeometry.JS_Window_GetRect(hwnd)
-  if ok then BLT.position(hwnd,l,t,BASE_W,BASE_H+Chrome.titleH,"","") end
-  BLT.store(SECTION,"window_w",tostring(BASE_W),true)
-  BLT.store(SECTION,"window_h",tostring(BASE_H+Chrome.titleH),true)
-  last_window_w,last_window_h=BASE_W,BASE_H+Chrome.titleH
-
-end
-
-local function chrome_resize_hit(mx,my)
-  local w,h=gfx.w,gfx.h
-  if not w or not h or w<=0 or h<=0 then return nil end
-  if mx<0 or mx>=w or my<0 or my>=h then return nil end
-  local edge=Chrome.resizeEdge
-  local band=Chrome.resizeCornerBand
-  local span=Chrome.resizeCornerSpan
-  local bottomBand=my>=h-band
-  local bottomSpan=my>=h-span
-  local leftBand=mx<band
-  local rightBand=mx>=w-band
-  local leftSpan=mx<span
-  local rightSpan=mx>=w-span
-  if (bottomBand and leftSpan) or (leftBand and bottomSpan) then return "lb" end
-  if (bottomBand and rightSpan) or (rightBand and bottomSpan) then return "rb" end
-  if my<Chrome.titleH then
-    if mx<Chrome.resizeTopLeftGuard or mx>=w-Chrome.resizeTopRightGuard then return nil end
-  end
-  local nearL=mx<edge
-  local nearR=mx>=w-edge
-  local nearT=my<edge
-  local nearB=my>=h-edge
-  if nearL then return "l" end
-  if nearR then return "r" end
-  if nearT then return "t" end
-  if nearB then return "b" end
-  return nil
-end
-
-local function resize_cursor_kind(mode)
-  if mode=="l" or mode=="r" then return "we" end
-  if mode=="t" or mode=="b" then return "ns" end
-  if mode=="lt" or mode=="rb" then return "nwse" end
-  if mode=="rt" or mode=="lb" then return "nesw" end
-  return nil
-end
-local function set_resize_cursor(mode)
-  if not Chrome.isWindows then return end
-  local kind=resize_cursor_kind(mode)
-  if kind then
-    local cursor=Chrome.resizeCursors[kind]
-    if not cursor then cursor=R.JS_Mouse_LoadCursor(Chrome.cursorId[kind]); Chrome.resizeCursors[kind]=cursor end
-    if cursor then R.JS_Mouse_SetCursor(cursor) end
-    Chrome.resizeCursorMode=kind
-  elseif Chrome.resizeCursorMode then
-    local cursor=Chrome.resizeCursors.arrow
-    if not cursor then cursor=R.JS_Mouse_LoadCursor(Chrome.cursorId.arrow); Chrome.resizeCursors.arrow=cursor end
-    if cursor then R.JS_Mouse_SetCursor(cursor) end
-    Chrome.resizeCursorMode=nil
-  end
-end
-local function titlebar_cleanup() set_resize_cursor(nil) end
-
-local function begin_window_resize(mode)
-  local hwnd=gfx_window_handle()
-  if not hwnd or not mode then return false end
-  local ok,l,t,r,b=WindowGeometry.JS_Window_GetRect(hwnd)
-  if not ok then return false end
-  local sx,sy=WindowGeometry.GetMousePosition()
-  Chrome.resize={mode=mode,mouseX=sx,mouseY=sy,left=l,top=t,right=r,bottom=b}
-  Chrome.drag=nil
-  return true
-end
-
-local function update_window_resize()
-  local d=Chrome.resize
-  if not d then return end
-  local hwnd=gfx_window_handle()
-  if not hwnd then Chrome.resize=nil; return end
-  local sx,sy=WindowGeometry.GetMousePosition()
-  local dx,dy=sx-d.mouseX,sy-d.mouseY
-  local l,t,r,b=d.left,d.top,d.right,d.bottom
-  if d.mode:find("l",1,true) then l=math.min(d.left+dx,r-Chrome.minW) end
-  if d.mode:find("r",1,true) then r=math.max(d.right+dx,l+Chrome.minW) end
-  if d.mode:find("t",1,true) then t=math.min(d.top+dy,b-Chrome.minH) end
-  if d.mode:find("b",1,true) then b=math.max(d.bottom+dy,t+Chrome.minH) end
-  BLT.position(hwnd,math.floor(l+.5),math.floor(t+.5),math.max(Chrome.minW,math.floor(r-l+.5)),math.max(Chrome.minH,math.floor(b-t+.5)),"","")
-end
-
-local function clear_chrome_tooltip() BLT.clearTooltip() end
-
-local function custom_titlebar() BLT.bar() end
-
-local marker_particles,marker_clock,marker_serial={},0,0
-local particle_source_x={66,67,65}
-local particle_source_y={21,38.5,52.5}
-local particle_line_y={{21,25},{37,41},{53,57}}
-local particle_line_end_x={{99,91},{99,95},{96,88}}
-local function list_energy_path(t,lane,subline,slot,spread)
-  local u=1-t
-  local sx0=particle_source_x[lane];local sy0=particle_source_y[lane]
-  local ey=particle_line_y[lane][subline]
-  local ex=75+(particle_line_end_x[lane][subline]-75)*slot
-  return u*u*u*sx0+3*u*u*t*(sx0+7)+3*u*t*t*(ex-6)+t*t*t*ex,
-    u*u*u*sy0+3*u*u*t*(sy0+spread)+3*u*t*t*(ey+spread*.16)+t*t*t*ey
-end
-local function marker_icon(x,y)
-  local ice=C.focus2;local blue=C.accent;local tint=C.accent2
-  local breath=.85+.15*math.sin(anim_time*.72)
-  for i=7,1,-1 do
-    disc(x+64,y+34,3+i*3.3,blue,(.002+(7-i)*.0018)*breath)
-    disc(x+75,y+24,2+i*1.7,tint,.0025*breath)
-  end
-  if animations_active then marker_clock=marker_clock+frame_dt end
-  while animations_active and marker_clock>=.060 and #marker_particles<34 do
-    marker_clock=marker_clock-.060;marker_serial=marker_serial+1
-    local n=marker_serial;local z=particle_hash(n,75)
-    marker_particles[#marker_particles+1]={age=0,life=1.05+particle_hash(n,71)*.70,
-      lane=1+(n-1)%3,subline=particle_hash(n,69)>.68 and 2 or 1,
-      slot=.22+particle_hash(n,70)*.78,spread=(particle_hash(n,72)-.5)*5.5,
-      phase=particle_hash(n,73)*6.28,
-      radius=.28+z*.77,depth=z,spark=particle_hash(n,74)>.90}
-  end
-  for i=#marker_particles,1,-1 do
-    local p=marker_particles[i];p.age=p.age+particle_dt
-    if p.age>=p.life then table.remove(marker_particles,i) end
-  end
-  local function particles()
-    for _,p in ipairs(marker_particles) do
-      local t=p.age/p.life;local fade=math.sin(math.pi*t)^2
-      local px,py=list_energy_path(t,p.lane,p.subline,p.slot,p.spread)
-      py=py+math.sin(t*8+p.phase)*(1-t)*(1-t)*(.7+p.depth*1.1)
-      local light=fade*(.25+.55*p.depth)
-      local trail=p.spark and .085 or .040
-      for j=1,3 do
-        local tx,ty=list_energy_path(max(0,t-trail*j/3),p.lane,p.subline,p.slot,p.spread)
-        local ex,ey=list_energy_path(max(0,t-trail*(j-1)/3),p.lane,p.subline,p.slot,p.spread)
-        line(x+tx,y+ty,x+ex,y+ey,tint,light*(4-j)*.07)
-      end
-      local settle=clamp((t-.46)/.54,0,1)
-      line(x+px-2.6*settle,y+py,x+px+1.1*settle,y+py,tint,.18*light*settle)
-      disc(x+px,y+py,p.radius+3.0,blue,.028*fade)
-      disc(x+px,y+py,p.radius+1.0,tint,.11*light)
-      disc(x+px,y+py,p.radius,ice,.90*light)
-      if p.spark then
-        local flash=math.sin(math.pi*t)^8*.24
-        line(x+px-3,y+py,x+px+3,y+py,ice,flash)
-        line(x+px,y+py-1.7,x+px,y+py+1.7,ice,flash*.7)
-      end
-    end
-  end
-  local function polygon(points,c,a)
-    local cx,cy=0,0
-    for _,p in ipairs(points) do cx=cx+p[1];cy=cy+p[2] end
-    cx,cy=cx/#points,cy/#points;color(c,a)
-    for i=1,#points do
-      local p,q=points[i],points[i%#points+1]
-      gfx.triangle(sx(x+cx),sy(y+cy),sx(x+p[1]),sy(y+p[2]),sx(x+q[1]),sy(y+q[2]))
-    end
-  end
-  local card={{44,12},{102,12},{110,20},{110,57},{103,64},{44,64},{39,59},{39,17}}
-  polygon(card,C.bg,.97)
-  polygon({{45,14},{101,14},{108,21},{108,56},{101,62},{45,62},{41,58},{41,18}},C.panel2,.82)
-
-  rect(x+46,y+17,57,11,C.field,.48)
-  rect(x+46,y+33,57,11,C.field,.37)
-  rect(x+46,y+49,57,10,C.field,.48)
-  line(x+44,y+30,x+105,y+30,C.edge2,.22)
-  line(x+44,y+46,x+105,y+46,C.edge2,.22)
-
-  glow_line(x+53,y+18,x+53,y+27,tint,.44)
-  polygon({{54,18},{66,21},{54,24}},blue,.72)
-  line(x+54,y+18,x+66,y+21,ice,.70)
-  line(x+66,y+21,x+54,y+24,tint,.48)
-  line(x+66,y+21,x+72,y+21,tint,.28)
-
-  rect(x+54,y+36,12,5,blue,.30)
-  glow_line(x+53,y+38.5,x+67,y+38.5,tint,.48)
-  line(x+53,y+34.5,x+53,y+42.5,ice,.76)
-  line(x+67,y+34.5,x+67,y+42.5,ice,.76)
-  disc(x+60,y+38.5,1.05,ice,.82)
-  line(x+67,y+38.5,x+72,y+38.5,tint,.28)
-
-  line(x+55,y+50,x+55,y+59,tint,.68)
-  polygon({{55,50},{65,52.5},{55,55}},tint,.54)
-  line(x+55,y+50,x+65,y+52.5,ice,.52)
-  line(x+65,y+52.5,x+72,y+52.5,tint,.28)
-
-  glow_line(x+73,y+21,x+99,y+21,tint,.28)
-  line(x+73,y+25,x+91,y+25,C.edge2,.40)
-  glow_line(x+73,y+37,x+99,y+37,tint,.25)
-  line(x+73,y+41,x+95,y+41,C.edge2,.40)
-  glow_line(x+73,y+53,x+96,y+53,tint,.26)
-  line(x+73,y+57,x+88,y+57,C.edge2,.40)
-
-  glow_line(x+44,y+12,x+102,y+12,ice,.30)
-  line(x+102,y+12,x+110,y+20,tint,.64)
-  line(x+110,y+20,x+110,y+57,C.edge2,.36)
-  glow_line(x+110,y+57,x+103,y+64,tint,.25)
-  line(x+103,y+64,x+44,y+64,C.edge2,.28)
-  line(x+39,y+59,x+39,y+17,tint,.42)
-  disc(x+102,y+12,3.6,tint,.035);disc(x+102,y+12,.65,ice,.92)
-  particles()
-end
-
-local function display_name(s) return s=="" and "〈空欄〉" or s:gsub("[\r\n\t]"," ") end
-
-local T={x=24,y=180,w=492,h=32+32*LIST_ROWS,row=32,header=32,bar=14}
-local function visible() return floor((T.h-T.header)/T.row) end
-local function max_offset() return max(0,#A.rows-visible()) end
-local function scroll(delta) A.offset=clamp(A.offset+delta,0,max_offset()) end
-local open_rename
--- Native project-default formatting follows the active project's primary ruler,
--- including its tempo map, time offset, sample rate and frame-rate settings.
-local function update_row_time(row)
-  local v=row.info
-  local first=R.format_timestr_pos(v.pos,"",-1)
-  local last=v.isrgn and R.format_timestr_pos(v.ending,"",-1) or "—"
-  local text=row.text
-  if not text then
-    row.text={string.format("%.0f",v.id),first,last,display_name(v.before)}
-    return true
-  end
-  if text[2]==first and text[3]==last then return false end
-  text[2],text[3]=first,last
-  return true
-end
--- Check only the visible rows, even when idle. A ruler-only change need not
--- alter marker data or the project revision, so content polling is not enough.
-local function poll_time_display(now)
-  if now<(A.time_display_poll or 0) then return false end
-  A.time_display_poll=now+.12
-  if R.EnumProjects(-1,"")~=A.project then return false end
-  local first=clamp(A.offset,0,max_offset())+1
-  local changed=false
-  for i=first,min(#A.rows,first+visible()-1) do
-    if update_row_time(A.rows[i]) then changed=true end
-  end
-  return changed
-end
-local function table_columns()
-  local width=clamp(T.time_width or 75,75,max(75,(W-289)/2))
-  return {T.x+34,T.x+78,T.x+115,T.x+117+width,T.x+119+2*width},
-    {42,35,width,width,W-189-2*width}
-end
-local fitted_labels,fitted_count={},0
-local function fit_label(text,x,y,size,c,w,bold) font(size,1,bold);label(BLT.ui.fit(tostring(text),w*scale),x,y,size,c,1,w,size+8,0,bold,true) end
-local function time_label(text,x,y,c,w)
-  local size=13.5
-  local measured=measure(text,size,1,false)
-  if measured>w then size=max(9,size*w/measured) end
-  fit_label(text,x,y+(13.5-size)/2,size,c,w,false)
-end
-
-local function checkbox(id,text,x,y,w,checked,fn)
-  rect(x,y+6,15,15,C.field,.95)
-  line(x,y+6,x+15,y+6,C.edge2,.85);line(x,y+21,x+15,y+21,C.edge2,.85)
-  line(x,y+6,x,y+21,C.edge2,.85);line(x+15,y+6,x+15,y+21,C.edge2,.85)
-  if checked then
-    rect(x+1,y+7,13,13,C.accent3,.80)
-    line(x+3,y+13,x+6,y+17,C.focus2,1);line(x+6,y+17,x+12,y+10,C.focus2,1)
-  end
-  if text~="" then label(text,x+23,y+6,11,C.text,1,w-23,23,0,false) end
-  widget(id,x,y,w,28,fn,true)
-end
-
-local function slide_switch(id,text,x,y,w,on,fn)
- BLT.switch(x,y+3,animate('switch_'..id,on and 1 or 0),true)
- label(text,x+34,y,14,C.text,1,w-34,30,4,true);widget(id,x,y,w,30,fn,true)
-end
-local IME={active=false}
-local function valid_input_text(text,limit)
-  return type(text)=='string' and #text<=limit and utf8.len(text)~=nil
-    and not text:find('[%z\1-\8\11\12\14-\31\127]')
-end
-local function flash_input(rename,target)
-  local now=R.time_precise()
-  if rename and target then A.name_flash={guid=target.guid,time=now} else A.query_flash=now end
-  wake_visuals(now);next_draw_time=0
-end
-local function ime_color(c,alpha)
-  return (floor(c[1]*255+.5)<<24)|(floor(c[2]*255+.5)<<16)|(floor(c[3]*255+.5)<<8)|floor((alpha or 1)*255+.5)
-end
-local function draw_ime_focus(I,ctx,unit)
-  local list=I.GetWindowDrawList(ctx)
-  local x,y=I.GetItemRectMin(ctx)
-  local right,bottom=I.GetItemRectMax(ctx)
-  local px=max(.5,unit)
-  -- Constant light while editing: no extra timer or animation frames.
-  I.DrawList_AddRect(list,x+px*.5,y+px*.5,right-px*.5,bottom-px*.5,ime_color(C.accent2,.90),0,0,px)
-  I.DrawList_AddRect(list,x+px*1.5,y+px*1.5,right-px*1.5,bottom-px*1.5,ime_color(C.accent2,.20),0,0,px)
-  I.DrawList_AddRect(list,x+px*2.5,y+px*2.5,right-px*2.5,bottom-px*2.5,ime_color(C.accent2,.07),0,0,px)
-  I.DrawList_AddRectFilled(list,x+px,y+px,x+px*7,bottom-px,ime_color(C.accent2,.10))
-  I.DrawList_AddRectFilled(list,x+px,y+px,x+px*3,bottom-px,ime_color(C.focus2,.95))
-end
-local function match_name_font(I,ctx,unit,base_size)
-  local dpi=I.GetWindowDpiScale(ctx)
-  local cached=IME.name_font
-  if cached and cached.scale==scale and cached.unit==unit and cached.dpi==dpi then return cached.size end
-  -- gfx and ImGui interpret the nominal font size differently. Match measured
-  -- glyph advances using the same font family, rather than copying "18".
-  local sample="あいうえお漢字ABC012345"
-  local target=measure(sample,18,1,false)*unit
-  local measured=I.CalcTextSize(ctx,sample)
-  local size=measured>0 and clamp(base_size*target/measured,1,96) or base_size
-  IME.name_font={scale=scale,unit=unit,dpi=dpi,size=size}
-  return size
-end
-local function draw_name_edit_hint(I,ctx,unit)
-  local list=I.GetWindowDrawList(ctx)
-  local x,y=I.GetItemRectMin(ctx)
-  local right,bottom=I.GetItemRectMax(ctx)
-  I.DrawList_AddRectFilled(list,x,bottom-max(.5,unit),right,bottom,ime_color(C.accent2,.48))
-end
-function IME.stop(restore_focus)
-  IME.active=false;IME.ctx=nil;IME.font=nil;IME.target=nil;IME.text=nil;IME.valid_text=nil;IME.mode=nil;IME.name_font=nil;IME.refocus=nil;IME.flash_until=nil;IME.reset_serial=nil
-  wake_visuals();next_draw_time=0
-  if restore_focus then
-    local hwnd=gfx_window_handle()
-    if hwnd then R.JS_Window_SetFocus(hwnd) end
-  end
-end
-function IME.finish(commit,restore_focus)
-  local target,text=IME.target,IME.text
-  IME.stop(restore_focus)
-  if not commit or not target or text==target.before then return true end
-  if not valid_input_text(text,Core.MAX_NAME) then
-    flash_input(true,target)
-    report_error("名前が長すぎるか、使用できない制御文字があります。");return false
-  end
-  local rows,changes=Core.rename_rows(target.items,{[target.guid]=text})
-  if changes>0 then
-    local n,err=Core.apply(target.project,target.items,rows)
-    if not n then report_error(err);sync_selection();return false end
-  end
-  local offset=A.offset;sync_selection();A.offset=clamp(offset,0,max_offset())
-  return true
-end
-function IME.open(mode,target)
- if not BLT.requireInput(IME) then return false end
-  if IME.active then return end
-  local ok,err=pcall(function()
-    local I=IME.api
-    IME.ctx=I.CreateContext(APP_NAME.." input")
-    IME.font=I.CreateFont(fonts[1]);I.Attach(IME.ctx,IME.font)
-    IME.active=true;IME.frames=0;IME.first=true;IME.mode=mode or "filter"
-    IME.target=target;IME.text=target and target.before or Core.scope.query;IME.valid_text=IME.text
-  end)
-  if not ok then IME.stop(false);report_error("日本語入力欄を初期化できません。\n"..tostring(err)) end
-end
-function IME.frame()
-  if not IME.active then return end
-  local I,ctx=IME.api,IME.ctx
-  local rename=IME.mode=="rename"
-  local left,top,width,height=24,140,W-144,30
-  if rename then
-    if R.EnumProjects(-1,"")~=IME.target.project then IME.stop(false);return end
-    local index
-    for i,v in ipairs(A.items) do if v.guid==IME.target.guid then index=i;break end end
-    if not index then IME.stop(false);return end
-    if index<=A.offset or index>A.offset+visible() then IME.finish(true,false);return end
-    local cols,widths=table_columns()
-    left,top,width,height=cols[5],T.y+T.header+(index-A.offset-1)*T.row,widths[5]-8,T.row
-  end
-  local nx,ny=gfx.clienttoscreen(sx(left),sy(top))
-  local ex,ey=gfx.clienttoscreen(sx(left+width),sy(top+height))
-  local x,y=I.PointConvertNative(ctx,nx,ny)
-  local x2,y2=I.PointConvertNative(ctx,ex,ey)
-  local w,h=math.abs(x2-x),math.abs(y2-y)
-  x,y=min(x,x2),min(y,y2)
-  local unit=w/width
-  local size=max(8,(rename and 18 or 13)*unit)
-  -- A newly submitted ImGui window has no native HWND until the frame ends.
-  -- For cell editing, focus on the following frame, after gfx releases capture.
-  local focus_now=IME.refocus or rename and IME.frames==1 or (not rename and IME.first)
-  IME.refocus=false
-  I.SetNextWindowPos(ctx,x,y,I.Cond_Always)
-  I.SetNextWindowSize(ctx,w,h,I.Cond_Always)
-  if focus_now then I.SetNextWindowFocus(ctx) end
-  I.PushStyleVar(ctx,I.StyleVar_WindowPadding,0,0)
-  I.PushStyleVar(ctx,I.StyleVar_WindowMinSize,1,1)
-  I.PushStyleVar(ctx,I.StyleVar_WindowRounding,0)
-  I.PushStyleVar(ctx,I.StyleVar_WindowBorderSize,0)
-  I.PushStyleVar(ctx,I.StyleVar_FrameRounding,0)
-  I.PushStyleVar(ctx,I.StyleVar_FrameBorderSize,0)
-  I.PushStyleVar(ctx,I.StyleVar_FramePadding,rename and max(2,2*unit) or 10*unit,max(0,(h-size)/2))
-  I.PushStyleColor(ctx,I.Col_WindowBg,ime_color(C.field))
-  local input_flash=IME.flash_until and R.time_precise()<IME.flash_until
-  I.PushStyleColor(ctx,I.Col_FrameBg,ime_color(input_flash and {0.65,0.07,0.08} or C.field))
-  I.PushStyleColor(ctx,I.Col_Text,ime_color(C.text))
-  I.PushStyleColor(ctx,I.Col_TextDisabled,ime_color(C.faint))
-  I.PushStyleColor(ctx,I.Col_TextSelectedBg,ime_color(C.accent3))
-  I.PushFont(ctx,IME.font,size)
-  local flags=I.WindowFlags_NoDecoration|I.WindowFlags_NoMove|I.WindowFlags_NoSavedSettings|I.WindowFlags_NoDocking
-  local shown=I.Begin(ctx,rename and "BLT Name IME##BLT_Name_IME" or "BLT Filter IME##BLT_Filter_IME",nil,flags)
-  local finish,focused,cancel=false,true,false
-  if shown then
-    if rename then
-      local matched=match_name_font(I,ctx,unit,size)
-      I.PopFont(ctx);I.PushFont(ctx,IME.font,matched)
-      I.PushStyleVar(ctx,I.StyleVar_FramePadding,max(2,2*unit),max(0,(h-I.GetTextLineHeight(ctx))/2))
-    end
-    I.SetNextItemWidth(ctx,w)
-    if focus_now then I.SetKeyboardFocusHere(ctx) end
-    local input_flags=0
-    if rename then input_flags=input_flags|I.InputTextFlags_AutoSelectAll end
-    local _,text=I.InputTextWithHint(ctx,(rename and "##name" or "##query")..tostring(IME.reset_serial or 0),rename and "" or Language.text("文字列でフィルター…"),rename and IME.text or Core.scope.query,input_flags)
-    finish=I.IsItemDeactivated(ctx)
-    if rename then
-      cancel=finish and I.IsKeyPressed(ctx,I.Key_Escape,false)
-      draw_name_edit_hint(I,ctx,unit)
-    else draw_ime_focus(I,ctx,unit) end
-    -- Invalid backend text never reaches the project or filter. Keep the last
-    -- valid value so composition errors revert visibly instead of lingering.
-    local limit=rename and Core.MAX_NAME or 1024
-    if not valid_input_text(text,limit) then
-      flash_input(rename,IME.target)
-      IME.flash_until=R.time_precise()+.25;IME.reset_serial=(IME.reset_serial or 0)+1;IME.refocus=true
-      report_error(rename and "名前が長すぎるか、使用できない制御文字があります。" or "検索文字列が長すぎるか、使用できない制御文字があります。")
-      text=IME.valid_text or (rename and IME.target.before or Core.scope.query);IME.text=text
-    else
-      IME.valid_text=text;IME.text=text
-      if not rename and text~=Core.scope.query then scope_change("query",text);wake_visuals();next_draw_time=0 end
-    end
-    focused=I.IsWindowFocused(ctx)
-    if rename then I.PopStyleVar(ctx) end
-    I.End(ctx)
-  end
-  I.PopFont(ctx);I.PopStyleColor(ctx,5);I.PopStyleVar(ctx,7)
-  IME.first=false;IME.frames=IME.frames+1
-  if cancel then IME.finish(false,true)
-  elseif finish then IME.finish(true,true)
-  elseif IME.frames>2 then
-    local mx,my=R.GetMousePosition()
-    local outside=mx<min(nx,ex) or mx>max(nx,ex) or my<min(ny,ey) or my>max(ny,ey)
-    local clicked=(gfx.mouse_cap&1)~=0 or I.IsMouseClicked(ctx,0)
-    if not focused or (clicked and outside) then IME.finish(true,false) end
-  end
-end
-open_rename=function(row)
-  if not row then return end
-  if (gfx.mouse_cap&1)~=0 then
-    A.pending_rename={guid=row.info.guid,project=A.project,x=gfx.mouse_x,y=gfx.mouse_y}
-    A.last_row_click=nil
-    return
-  end
-  if IME.active and not IME.finish(true,false) then return end
-  local guid=row.info.guid
-  sync_selection()
-  for _,v in ipairs(A.items) do if v.guid==guid then
-    A.last_row_click=nil
-    IME.open("rename",{guid=guid,before=v.before,project=A.project,items=A.items})
-    return
-  end end
-end
-local function release_pending_rename()
-  local pending=A.pending_rename
-  if not pending then return end
-  if R.EnumProjects(-1,"")~=pending.project or math.abs(gfx.mouse_x-pending.x)>6 or math.abs(gfx.mouse_y-pending.y)>6 then
-    A.pending_rename=nil;return
-  end
-  if (gfx.mouse_cap&1)~=0 then return end
-  A.pending_rename=nil
-  for _,row in ipairs(A.rows) do if row.info.guid==pending.guid then open_rename(row);return end end
-end
-local function draw_filter()
-  local x,y,w,h=24,140,W-144,30
-  rect(x,y,w,h,C.field,.98)
-  local editing=IME.active and IME.mode=="filter"
-  local flash=A.query_flash and max(0,1-(R.time_precise()-A.query_flash)/.85) or 0
-  if flash>0 then rect(x-4,y-4,w+8,h+8,C.red,.04*flash);rect(x,y,w,h,C.red,.18*flash) end
-  line(x,y+h,x+w,y+h,flash>0 and C.red or (editing and C.accent2 or C.edge2),flash>0 and .95 or (editing and .92 or .40))
-  local text=Core.scope.query
-  label(text=="" and "文字列でフィルター…" or text,x+10,y+6,13,text=="" and C.faint or C.text,1,w-20,23,0,false,text~="")
-  widget("query",x,y,w,h,IME.open,true)
-end
-
-local function draw_table()
-  A.offset=clamp(A.offset,0,max_offset())
-  gradient(T.x,T.y,T.w,T.h,C.field,C.panel,1,.30,true)
-  rect(T.x,T.y,T.w,T.header,C.panel2,.94)
-  line(T.x,T.y,T.x+T.w,T.y,C.edge2,.65)
-  local time_width=75
-  for i=A.offset+1,min(#A.rows,A.offset+visible()) do
-    local row=A.rows[i];update_row_time(row)
-    time_width=max(time_width,math.ceil(measure(row.text[2],13.5,1,false))+4,
-      math.ceil(measure(row.text[3],13.5,1,false))+4)
-  end
-  -- Make room for timecode/samples without moving a live name editor.
-  if not (IME.active and IME.mode=="rename") then T.time_width=time_width end
-  local cols,widths=table_columns()
-  local heads={"種別","ID","開始","終了","名前"}
-
-  label("表示",T.x+2,T.y+7,13,C.text,1,30,20,0,true)
-  local keys={"isrgn","id","pos","ending","before"}
-  for i=1,5 do
-    local key=keys[i];local active=Core.scope.sort==key
-    local title=heads[i]..(active and (Core.scope.desc and " ↓" or " ↑") or "")
-    if active then rect(cols[i]-2,T.y,widths[i]+2,T.header,C.accent3,.50) end
-    local flash=A.column_flash
-    if flash and flash.key==key then
-      local alpha=max(0,1-(R.time_precise()-flash.time)/.55)
-      rect(cols[i]-2,T.y,widths[i]+2,T.h,C.accent2,.22*alpha)
-    end
-    label(title,cols[i],T.y+7,14,C.text,1,widths[i],20,0,true)
-    widget("sort_"..key,cols[i]-2,T.y,widths[i]+2,T.header,function() sort_column(key) end,true)
-  end
-  for slot=1,visible() do
-    local ri=A.offset+slot;local row=A.rows[ri]
-    if row then
-      local v=row.info;local y=T.y+T.header+(slot-1)*T.row
-      local text=row.text
-      if v.selected then
-        local x,w=T.x+1,T.w-T.bar-1
-        gradient(x,y,w,T.row,C.accent3,C.panel,.54,.88)
-        gradient(x,y,w,T.row/2,C.accent2,C.accent2,.10,0,true)
-        gradient(x,y+T.row/2,w,T.row/2,C.accent2,C.accent2,0,.05,true)
-        gradient(x,y,3,T.row,C.focus2,C.accent2,.90,.38,true)
-        gradient(x+3,y,13,T.row,C.accent2,C.accent2,.18,0)
-        gradient(x+3,y,w-3,1,C.focus2,C.accent2,.50,.05)
-        gradient(x+3,y+T.row-1,w-3,1,C.accent2,C.accent2,.27,.02)
-      elseif slot%2==0 then rect(T.x+1,y,T.w-T.bar-1,T.row,C.panel,.50) end
-      local input_flash=A.name_flash and A.name_flash.guid==v.guid and max(0,1-(R.time_precise()-A.name_flash.time)/.85) or 0
-      if input_flash>0 then rect(cols[5]-4,y+2,widths[5],T.row-4,C.red,.22*input_flash) end
-      line(T.x+4,y+T.row,T.x+T.w-T.bar,y+T.row,C.edge,.16)
-      if v.color~=0 then local r,g,b=R.ColorFromNative(v.color);rect(T.x+3,y+9,3,14,{r/255,g/255,b/255}) end
-      label(v.isrgn and "R" or "M",cols[1],y+6,16,v.isrgn and C.accent2 or C.text,3,widths[1],24,0,true)
-      fit_label(text[1],cols[2],y+6,16,C.text,widths[2]-2,false)
-      time_label(text[2],cols[3],y+7,C.text,widths[3]-2)
-      time_label(text[3],cols[4],y+7,v.isrgn and C.text or C.faint,widths[4]-2)
-      fit_label(text[4],cols[5],y+4,18,C.text,widths[5]-8,false)
-      widget("row_"..ri,T.x+30,y,T.w-T.bar-30,T.row,function()
-        local now=R.time_precise()
-        local double=A.last_row_guid==v.guid and A.last_row_click and now-A.last_row_click<.4
-        local mods=A.click_mods or 0
-        local name_click=A.selected[v.guid] and mx>=cols[5] and mx<cols[5]+widths[5]
-        if mods==0 and (double or name_click) then
-          open_rename(row)
-        else
-          select_row(v.guid,mods);A.last_row_click=now;A.last_row_guid=v.guid
-        end
-      end,true)
-      checkbox("visible_"..ri,"",T.x+8,y+2,20,v.visible,function() toggle_visibility(v.guid) end)
-    end
-  end
-  local blank_y=T.y+T.header+min(visible(),max(0,#A.rows-A.offset))*T.row
-  if blank_y<T.y+T.h then
-    widget("list_blank",T.x,blank_y,T.w-T.bar,T.y+T.h-blank_y,clear_row_selection,true)
-  end
-  if #A.rows==0 then
-    local project_empty=#(A.snapshot or {})==0
-    local message=project_empty and "プロジェクトにマーカー/リージョンがありません" or "該当するマーカー/リージョンはありません"
-
-  end
-  local bx,by,bh=T.x+T.w-T.bar,T.y+T.header,T.h-T.header
-  rect(bx,by,T.bar,bh,C.panel,.95)
-  local th=#A.rows>0 and max(26,bh*min(1,visible()/#A.rows)) or bh
-  local ty=by+(max_offset()>0 and A.offset/max_offset()*(bh-th) or 0)
-  rect(bx+4,ty+1,T.bar-8,th-2,{.40,.42,.45},.75)
-  A.scrollbar={x=bx,y=by,w=T.bar,h=bh,thumb_y=ty,thumb_h=th}
-end
-
-local function draw()
-  local contentH=max(1,gfx.h-Chrome.titleH)
-  scale=max(.30,min(gfx.w/BASE_W,1))
-  H=contentH/scale
-  T.h=max(T.header+T.row,H-258)
-  LIST_ROWS=visible();A.offset=clamp(A.offset,0,max_offset())
-  W=gfx.w/scale;T.w=W-48
-  ox,oy=0,Chrome.titleH-22*scale
- BLT.viewport(scale,gfx.ext_retina or 1);  mx,my=(gfx.mouse_x-ox)/scale,(gfx.mouse_y-oy)/scale
-  widgets={};gfx.clear=-1;gfx.set(C.bg[1],C.bg[2],C.bg[3],1);gfx.rect(0,0,gfx.w,gfx.h,1)
-  local now=R.time_precise();particle_dt=max(0,min(.10,now-frame_clock));frame_clock=now
-  frame_dt=animations_active and particle_dt*animation_speed or 0;anim_time=anim_time+frame_dt
-  cached_background()
-  BLT.title(NAME,'MARKER / REGION / LOOP LIST  マーカー・リージョン・ループのリスト',W)
-  BLT.drawIcon()
-  local s=Core.scope
-  for i,v in ipairs({{"all","すべて"},{"marker","マーカー"},{"region","リージョン"}}) do
-    segment_button("scope_"..v[1],v[2],24+(i-1)*90,102,84,28,s.kind==v[1],function() scope_change("kind",v[1]) end,true)
-  end
-
-  slide_switch("exclude_loop","ループリージョンを除外",302,102,212,s.exclude_loop,function()
-    scope_change("exclude_loop",not Core.scope.exclude_loop)
-    BLT.store(SECTION,"exclude_loop",Core.scope.exclude_loop and "1" or "0",true)
-  end)
-  draw_filter()
-  small_button("reset","クリア",W-108,140,84,30,function()
-    Core.scope.kind="all";Core.scope.query=""
-    refresh();A.flashes.reset=R.time_precise()
-  end,true,true)
-  draw_table()
-
-  slide_switch("seek","シーク再生",24,H-72,138,S.seek,function() S.seek=not S.seek;persist() end)
-  slide_switch("move","選択位置へ移動",172,H-72,176,S.move,function() S.move=not S.move;persist() end)
-  scroll_button("top","↑ 先頭",W-180,H-72,72,function() A.offset=0 end,#A.rows>0)
-  scroll_button("bottom","↓ 末尾",W-96,H-72,72,function() A.offset=max_offset() end,#A.rows>0)
-  small_button("copy_names","全名前をコピー",24,H-32,142,30,function() copy_information(true) end,#A.items>0,true)
-  small_button("copy_info","全情報をコピー",178,H-32,142,30,function() copy_information(false) end,#A.items>0,true)
-  small_button("paste_all","名前を貼付（先頭から）",332,H-32,W-356,30,function() paste_names(false) end,#A.items>0,true)
-
-  BLT.footer(A.blt_status or (#A.items==0 and 'マーカー／リージョンがありません。' or string.format('%d件  選択 %d件',#A.items,A.selected_count)),A.blt_bad,W,H+22,'0.5.17')
-  custom_titlebar()
-  drawn_layout={w=gfx.w,h=gfx.h,generation=A.generation,offset=A.offset}
-end
-local function interact()
- if BLT.blocked() then last_down=(gfx.mouse_cap&1)~=0;A.pressed=nil;gfx.mouse_wheel=0;return end
-
-  if Chrome.mouseActive then last_down=(gfx.mouse_cap&1)~=0;A.pressed=nil;scroll_drag=nil;return end
-  local bar=A.scrollbar;local down=(gfx.mouse_cap&1)~=0
-  local right=(gfx.mouse_cap&2)~=0
-  do
-    local row_id=nil
-    for _,w in ipairs(widgets) do
-      if w.id:match("^row_%d+$") and inside(w.x,w.y,w.w,w.h) then row_id=tonumber(w.id:match("%d+"));break end
-    end
-    local guid=row_id and A.rows[row_id] and A.rows[row_id].info.guid
-    if right and not A.right_down then A.context_guid=guid end
-    if not right and A.right_down then
-      local captured=A.context_guid;A.context_guid=nil;A.right_down=false
-      if guid and guid==captured then context_menu(guid);A.pressed=nil;return end
-    end
-  end
-  A.right_down=right
-  local hit=nil
-  for i=#widgets,1,-1 do local w=widgets[i];if inside(w.x,w.y,w.w,w.h) then hit=w;break end end
-  if down and not last_down then
-    pressed_generation=A.generation;A.click_mods=gfx.mouse_cap&28
-    if IME.active and (IME.mode=="rename" or not hit or hit.id~="query") then IME.finish(true,false) end
-    if bar and inside(bar.x,bar.y,bar.w,bar.h) then
-      if my>=bar.thumb_y and my<=bar.thumb_y+bar.thumb_h then scroll_drag=my-bar.thumb_y
-      else scroll(my<bar.thumb_y and -visible() or visible()) end
-      A.pressed=nil
-    else
-      A.pressed=hit and hit.id or nil
-      if hit and hit.enabled and hit.id:match("^row_%d+$") then
-        hit.fn();A.pressed=nil -- Select on mouse-down; do not repeat on release.
-      end
-    end
-  elseif down and scroll_drag and bar then
-    local travel=bar.h-bar.thumb_h
-    if travel>0 then A.offset=floor(clamp((my-bar.y-scroll_drag)/travel,0,1)*max_offset()+.5) end
-  elseif not down and last_down then
-    if not scroll_drag and hit and hit.enabled and hit.id==A.pressed and pressed_generation==A.generation then hit.fn() end
-    scroll_drag=nil;A.pressed=nil
-  end
-  last_down=down
-  local wheel=gfx.mouse_wheel or 0
-  if wheel~=0 then
-    gfx.mouse_wheel=0
-    if inside(T.x,T.y,T.w,T.h) then scroll((wheel>0 and -1 or 1)*((gfx.mouse_cap&8)~=0 and visible() or 3)) end
-  end
-end
-local function keypress(k)
- k=BLT.key(k);if k==0 then return end
-
-  if IME.active then return end
-  if k==27 then A.manualClose=true;A.closing=true
-  elseif k==1 then select_all_rows()
-  elseif k==6579564 then delete_selected()
-  elseif k==3 then copy_information(true,true)
-  elseif k==22 then paste_selected()
-  elseif k==13 and A.focus then open_rename(A.rows[A.focus])
-  elseif k==1752132965 then A.offset=0
-  elseif k==6647396 then A.offset=max_offset()
-  elseif k==1885828464 then scroll(-visible())
-  elseif k==1885824110 then scroll(visible())
-  elseif k==30064 then scroll(-1)
-  elseif k==1685026670 then scroll(1) end
 end
 
 -- Shared BLT app restoration protocol. Each app owns one registry ID.
@@ -3284,6 +3921,7 @@ end
 function BLTRestore.start(api)
  local section,id=BLTRestore.section,BLTRestore.id
  local _,path,actionSection,command=api.get_action_context()
+ if actionSection==-1 and command==-1 and api.BLT_ProfileTarget==path then return end
  assert(actionSection==0 and path~='','BLT restore requires a Main action')
  local root=api.GetResourcePath()..'/Scripts'
  api.RecursiveCreateDirectory(root..'/BLT ReaScripts',0)
@@ -3323,60 +3961,7 @@ function BLTRestore.finish(api,manual)
  BLTRestore.started=false
 end
 
-local saved_window={}
-local function save_window()
-  local _,x,y,w,h=gfx.dock(-1,0,0,0,0)
-  for key,v in pairs({window_x=x,window_y=y,window_w=w,window_h=h}) do
-    if finite(v) then
-      local value=tostring(floor(v+.5))
-      if saved_window[key]~=value then BLT.store(SECTION,key,value,true);saved_window[key]=value end
-    end
-  end
-end
-local function close()
- -- Teardown errors must not leave a dead graphics window on screen.
- BLTRestore.finish(R,A.manualClose or Chrome.requestClose)
- local ok,err=xpcall(function()
-  IME.active=false;IME.ctx=nil;IME.font=nil
-  if A.closed then return end
-  persist(); save_window(); clear_chrome_tooltip(); titlebar_cleanup()
-  gfx.setimgdim(BACKGROUND_IMAGE,0,0);A.closed=true;gfx.quit()
- end,debug.traceback)
- if not ok then
-  A.closed=true
-  pcall(gfx.quit)
-  if R.TrackCtl_SetToolTip then pcall(R.TrackCtl_SetToolTip,'',0,0,true) end
-  BLT.logError(err)
- end
-end
-function BLT.captureScope() local v=BLT.scopeView or {};BLT.scopeView=v;v.seek=S.seek;v.move=S.move;v.kind=Core.scope.kind;v.query=Core.scope.query;v.exclude_loop=Core.scope.exclude_loop;return v end
-
-BLT.attach({
- R=R,C=C,Chrome=Chrome,Chameleon=Chameleon,section=SECTION,faces=fonts,font=font,
- geometry=function() return scale,ox,oy end,active=function() local f=gfx.getchar(65536);return (f&1)==0 or (f&2)~=0 end,
- wake=function() A.content_dirty=true;redraw_dirty=true;next_draw_time=0;wake_visuals() end,
- defaults={seek=false,move=false,kind='all',query='',exclude_loop=true},capture=function() return BLT.captureScope() end,
- valid=function(v) return (v.kind=='all' or v.kind=='marker' or v.kind=='region') and #v.query<=1024 end,apply=function(v) S.seek=v.seek;S.move=v.move;Core.scope.kind=v.kind;Core.scope.query=v.query;Core.scope.exclude_loop=v.exclude_loop;persist();BLT.store(SECTION,"exclude_loop",v.exclude_loop and "1" or "0",true);refresh() end,
- undoAction=undo_project,
- busy=function() return false end,commit=function() return not IME.active or IME.finish(true,false) end,
- cancelEdit=function() if IME.active then IME.finish(false,false) end end,editing=function() return IME.active end,
- modal=function() return false end,
- handle=gfx_window_handle,resizeHit=function(x,y) if y<26 and x>=gfx.w-234 then return nil end;return chrome_resize_hit(x,y) end,
- cursor=set_resize_cursor,beginResize=begin_window_resize,resize=update_window_resize,
-
-})
-if ...=='blt_test' then function BLT.testDraw(now) draw(now or R.time_precise()) end end
-function BLT.drawIcon()
-
- local bs,bx,by=scale,ox,oy;ox,oy=ox+(W-102)*scale,oy+(53-38*.78)*scale;scale=scale*.78
- marker_icon(0,0)
-
- scale,ox,oy=bs,bx,by
-end
-
-BLTWindowPlacement.onMoved=function() BLT.lastRect=nil end
-
--- BEGIN BLT SHORTCUTS 1.0.0 (generated from _shared/BLT_Shortcuts.lua)
+-- BEGIN BLT SHORTCUTS 1.0.2 (generated from _shared/BLT_Shortcuts.lua)
 local BLTShortcuts=(function()
 local M={}
 local special={[8]=8,[9]=9,[13]=13,[27]=27,[32]=32,
@@ -3391,7 +3976,7 @@ function M.decode(k,cap)
  local char=k;local mods=cap&60
  if k>=257 and k<=282 then return k-192,mods|20,char
  elseif k>=321 and k<=346 or k>=353 and k<=378 then k=k-256;mods=mods|16 end
- if k>=1 and k<=26 and not special[k] then return k+64,mods|4,char end
+ if k>=1 and k<=26 and not special[k] then return k+64,(mods&36)~=0 and mods or mods|4,char end
  if (k>>24)==117 then char=k&0xffffff;k=char end
  if k>=97 and k<=122 then return k-32,mods,char end
  if k>=65 and k<=90 or k>=48 and k<=57 then return k,mods,char end
@@ -3441,18 +4026,18 @@ function M.install(api,view,options)
   local needs_physical=not vk or ambiguous
   if needs_physical and type(api.JS_VKeys_GetState)=='function' then
    local ok,value=pcall(api.JS_VKeys_GetState,0)
-   if ok and type(value)=='string' and #value>=256 then physical=value end
+   if ok and type(value)=='string' and #value>=255 then physical=value end
   end
   local section=(api.GetPlayState()&4)~=0 and 1 or 0
   local found,score=nil,-1
   for _,row in ipairs(state.rows) do
    if row.section<=section and (row.flags&62)==flags then
     local virtual=(row.flags&1)~=0
-    local held=virtual and physical and (physical:byte((row.key&0x7fff)+1) or 0)~=0
+    local held=virtual and physical and (physical:byte(row.key&0x7fff) or 0)~=0
     local matched=virtual and vk and (row.key&0x7fff)==(vk&0x7fff) and (not ambiguous or held) or not virtual and row.key==char
     local base=row.key&0x7fff
     local layout_key=base>=96 and base<=111 or base>=186 and base<=226
-    local ctrl_letter=(mods&4)~=0 and (k==8 or k==9 or k==13) and base==k+64
+    local ctrl_letter=(mods&36)~=0 and (k==8 or k==9 or k==13) and base==k+64
     if matched or held and (not vk and layout_key or vk and vk>=48 and vk<=57 and base>=96 and base<=105 or ctrl_letter) then
      local rank=row.section*4+(held and 2 or 0)+(matched and 1 or 0)
      if rank>score then found,score=row,rank
@@ -3487,116 +4072,429 @@ return M
 end)()
 -- END BLT SHORTCUTS
 
-BLTShortcuts.install(R,gfx,{
- blocked=function() return BLT.presets.open or (BLT.host and (BLT.host.editing() or BLT.host.modal() or BLT.host.busy())) end,
- beforeGlobal=function(k) if BLT.host and BLT.host.beforeKey then BLT.host.beforeKey(k) end end,
- localKey=function(k,cap)
-  return k==27 or ((cap&24)==0 and (k==26 or (cap&4)~=0 and (k==90 or k==122))) or (k==1 or k==3 or k==22 or k==13 or k==6579564 or k==1752132965 or k==6647396 or k==1885828464 or k==1885824110 or k==30064 or k==1685026670)
- end
-})
-
-if ...=='blt_test' then return {BLT=BLT,A=A,Core=Core,S=S} end
-local api_ok,api_err=pcall(Core.require_api)
-if not api_ok then Language.mb(BLT.publicError(api_err),APP_NAME,0);return end
-local chrome_ok,chrome_err=titlebar_api_ready()
-if not chrome_ok then Language.mb(BLT.publicError(chrome_err),APP_NAME,0); return end
-local x,y=tonumber(R.GetExtState(SECTION,"window_x")),tonumber(R.GetExtState(SECTION,"window_y"))
-local w,h=tonumber(R.GetExtState(SECTION,"window_w")),tonumber(R.GetExtState(SECTION,"window_h"))
-w=finite(w) and clamp(w,486,1600) or BASE_W; h=finite(h) and clamp(h,Chrome.minH,1400+Chrome.titleH) or (BASE_H+Chrome.titleH)
--- Match native window/input coordinates in logical points on Mac.
-gfx.ext_retina=1
-if finite(x) and finite(y) then gfx.init(Chrome.windowTitle,w,h,0,x,y)
-else gfx.init(Chrome.windowTitle,w,h,0) end
-if not apply_custom_window_style(w,h) then gfx.quit(); Language.mb("カスタムタイトルバーを初期化できません。",APP_NAME,0); return end
-if Chameleon.enabled then Chameleon.refresh(true) end
-R.atexit(close)
-if R.set_action_options then R.set_action_options(2)end
-local restoreOK,restoreError=pcall(BLTRestore.start,R)
-if not restoreOK then Language.mb('自動復元の登録に失敗しました。\n'..tostring(restoreError),APP_NAME,0)end
-guarded(refresh)
-local function loop()
-  guarded(function()
- BLT.tick(R.time_precise())
-
-  local k=BLT.key(gfx.getchar()); if k<0 or A.closing then A.closing=true; return end
-    local now=R.time_precise()
-    release_pending_rename()
-    local ime_was_active=IME.active
-    if IME.active then
-      local ok,err=pcall(IME.frame)
-      if not ok then IME.stop(false);report_error("日本語入力欄でエラーが発生しました。\n"..tostring(err)) end
-    end
-    Chameleon.tick(now)
-    local flags=gfx.getchar(65537)
-    local window_active=((flags & 1)==0) or ((flags & 2)~=0)
-    if last_window_active==nil or window_active~=last_window_active then last_window_active=window_active; wake_visuals(now) end
-
-    local key_activity=false; local count=0
-    while k>0 and count<32 do key_activity=true; if not ime_was_active then keypress(k) end; count=count+1; k=BLT.key(gfx.getchar()) end
-    if key_activity then wake_visuals(now) end
-    if A.closing then return end
-
-    local selection_changed=poll_selection(now)
-    local time_changed=poll_time_display(now)
-    if selection_changed or time_changed then wake_visuals(now);next_draw_time=now end
-    if now>=window_poll_at then window_poll_at=now+.25; save_window() end
-
-    local raw_x,raw_y,raw_cap=gfx.mouse_x,gfx.mouse_y,gfx.mouse_cap
-    local raw_wheel=gfx.mouse_wheel or 0
-
-    local cap_changed=raw_cap~=last_raw_mouse_cap
-    local wheel_activity=raw_wheel~=0
-    local pointer_activity=raw_x~=last_raw_mouse_x or raw_y~=last_raw_mouse_y or cap_changed or wheel_activity
-    if pointer_activity then wake_visuals(now) end
-    if cap_changed or wheel_activity then next_draw_time=now end
-    last_raw_mouse_x,last_raw_mouse_y,last_raw_mouse_cap=raw_x,raw_y,raw_cap
-    if gfx.w~=last_window_w or gfx.h~=last_window_h then last_window_w,last_window_h=gfx.w,gfx.h; wake_visuals(now) end
-
-    local dragging=Chrome.drag~=nil or Chrome.resize~=nil or ((raw_cap or 0)&1)~=0
-    if dragging then wake_visuals(now) end
-    animation_speed=visual_speed(now)
-    animations_active=window_active and animation_speed>0
-    local particle_tail=window_active and #marker_particles>0
-    local input_flash=false
-    if A.query_flash then if now-A.query_flash<.85 then input_flash=true else A.query_flash=nil end end
-    if A.name_flash then if now-A.name_flash.time<.85 then input_flash=true else A.name_flash=nil end end
-    local frame_interval
-    if dragging then frame_interval=1/60
-    elseif animations_active then frame_interval=1/(8+22*animation_speed)
-    elseif input_flash then frame_interval=1/30
-    elseif particle_tail then frame_interval=1/20 end
-    if frame_interval and next_draw_time==math.huge then next_draw_time=now end
-    local frame_due=frame_interval and now>=next_draw_time or (not frame_interval and (redraw_dirty))
-    if frame_due then
-      local layout=drawn_layout
-      local content_input=layout and layout.w==gfx.w and layout.h==gfx.h
-        and layout.generation==A.generation and layout.offset==A.offset
-        and not Chrome.drag and not Chrome.resize
-        and not Chrome.closePressed and not Chrome.resetPressed and not Chrome.chameleonPressed
-        and raw_x>8 and raw_x<gfx.w-8 and raw_y>Chrome.titleH+8 and raw_y<gfx.h-8
-      if content_input then
-        mx,my=(raw_x-ox)/scale,(raw_y-oy)/scale
-        Chrome.mouseActive=false
-        interact();draw()
-      else
-        draw();interact()
-        if cap_changed or wheel_activity then draw() end
-      end
-      gfx.update(); redraw_dirty=false
-      next_draw_time=frame_interval and now+frame_interval or math.huge
-
-      if Chrome.requestReset then Chrome.requestReset=false; reset_window_size(); wake_visuals(now) end
-      if Chrome.requestClose then Chrome.requestClose=false; A.manualClose=true;A.closing=true end
-    end
-    if not frame_due and (pointer_activity or key_activity or dragging) then redraw_dirty=true end
-    -- Native timeline redraws may be expensive in a large project. Present our
-    -- verified selection first, then refresh REAPER within this same defer pass.
-    if Core.selection_redraw then
-      Core.selection_redraw=nil;R.UpdateTimeline();R.UpdateArrange()
-    end
-  end)
-  if A.closing then close(); return end
-  R.defer(loop)
+local apiOK,apiError=pcall(Core.require_api)
+if not apiOK then Language.mb(BLT.publicError(apiError),APP_NAME,0);return end
+if not R.ImGui_GetBuiltinPath or not R.JS_LICE_CreateBitmap then
+ Language.mb('ReaImGui 0.10以降と js_ReaScriptAPI が必要です。ReaPackで導入・更新してください。',APP_NAME,0)
+ return
 end
-
-loop()
+local BASE_W,BASE_H=540,962
+local ok,Host=pcall(BLT.CanvasHost.new,R,APP_NAME,BASE_W,BASE_H+26,SECTION)
+if not ok then Language.mb(BLT.publicError(Host),APP_NAME,0);return end
+Host.minWidth,Host.minHeight,Host.persistSize=486,500,true
+local savedW,savedH=tonumber(R.GetExtState(SECTION,'window_w')),tonumber(R.GetExtState(SECTION,'window_h'))
+Host.width=finite(savedW) and clamp(savedW,486,1600) or BASE_W
+Host.height=finite(savedH) and clamp(savedH,500,1426) or BASE_H+26
+local I,ctx,g=Host.I,Host.ctx,Host.g
+local C={bg={.018,.030,.055},bg2={.030,.090,.180},panel={.040,.068,.110},panel2={.055,.125,.205},
+ field={.018,.040,.080},edge={.145,.285,.445},edge2={.360,.650,.900},text={.955,.980,1},
+ muted={.690,.780,.875},faint={.390,.505,.635},disabled={.43,.46,.51},accent={.120,.490,.980},
+ accent2={.650,.895,1},accent3={.045,.235,.520},ice={.650,.895,1},focus={.225,.610,1},
+ focus2={.690,.900,1},ink={.018,.075,.160},hover={.430,.790,1},warn={1,.755,.490},red={1,.18,.26}}
+local U=BLT.Controls.new(g,R.time_precise,C)
+U.font,U.minFontSize=Host.faces[1],7
+local awakeUntil=R.time_precise()+6.5
+local displayDirty=true
+local function wake() awakeUntil=R.time_precise()+6.5 end
+BLT.host={wake=wake}
+local shell,menu,list
+local W,H,scale,ox,oy,mx,my=BASE_W,BASE_H,1,0,4,-1,-1
+local density=BLT.Controls.compactScale
+local T={x=24,y=180,w=492,h=704,row=32,header=32,bar=14}
+local renameTarget,contextGUID,contextOpen,scrollDrag,rowPress,rightPress
+local function visible() return floor((T.h-T.header)/T.row) end
+local function max_offset() return max(0,#A.rows-visible()) end
+local function inside(x,y,w,h) return mx>=x and mx<x+w and my>=y and my<y+h end
+local function valid_text(value,limit)
+ return type(value)=='string' and #value<=limit and utf8.len(value)~=nil and not value:find('[%z\1-\8\11\12\14-\31\127]')
+end
+local function applyQuery(value)
+ if not valid_text(value,1024) then
+  U:flash('query');report_error('検索文字列が長すぎるか、使用できない制御文字があります。');return false
+ end
+ if value~=Core.scope.query then scope_change('query',value);wake() end
+ return true
+end
+local function applyRename(value)
+ local target=renameTarget;renameTarget=nil
+ if not target or value==target.before then return true end
+ if not valid_text(value,Core.MAX_NAME) then
+  U:flash('rename');A.name_flash=target.guid
+  report_error('名前が長すぎるか、使用できない制御文字があります。');return false
+ end
+ local rows,changes=Core.rename_rows(target.items,{[target.guid]=value})
+ if changes>0 then
+  local n,err=Core.apply(target.project,target.items,rows)
+  if not n then report_error(err);sync_selection();return false end
+ end
+ local offset=A.offset;sync_selection();A.offset=clamp(offset,0,max_offset());wake()
+ return true
+end
+local function pending()
+ local state=U.states.query
+ if state and state.pending~=nil then local value=state.pending;state.pending=nil;applyQuery(value) end
+ state=U.states.rename
+ if state and state.pending~=nil then local value=state.pending;state.pending=nil;applyRename(value) end
+end
+local function commit()
+ if U.editor and U.editor.edit then U.editor:close(false) end
+ pending();return true
+end
+local function cancelEdit()
+ U.editor:close(true);renameTarget=nil;A.pending_rename=nil;U.capture=nil
+end
+local function scroll(delta)
+ if renameTarget then commit() end
+ A.offset=clamp(A.offset+delta,0,max_offset());wake()
+end
+local function open_rename(row)
+ if not row then return end
+ if (g.mouse_cap&1)~=0 then
+  A.pending_rename={guid=row.info.guid,project=A.project,x=g.mouse_x,y=g.mouse_y}
+  A.last_row_click=nil;return
+ end
+ commit();local guid=row.info.guid;sync_selection()
+ for _,v in ipairs(A.items) do if v.guid==guid then
+  renameTarget={guid=guid,before=v.before,project=A.project,items=A.items}
+  A.last_row_click=nil;U.focus=nil;U.editor:open('rename',v.before,applyRename);wake();return
+ end end
+end
+local popupLayout={width=292,rowHeight=29,headerHeight=36,visiblePresets=8,hoverDelay=1}
+menu=BLT.PresetMenu.new(Host,U,{presets=Presets,language=Language,layout=popupLayout,commit=commit})
+shell=BLT.Shell.new(Host,U,R,{
+ title=NAME,subtitle='MARKER / REGION / LOOP LIST  マーカー・リージョン・ループのリスト',
+ barTitle='M A R K E R   R E G I O N   D E S K',section=SECTION,persist=true,
+ layout={iconY=31-38*.78,iconScale=.78,footerSize=8},
+ language=Language.code,languageChanged=Language.set,translate=Language.message,store=BLT.store,
+ headerIcon=BLT.MarkerDeskIcon,iconMode=function() return 'list' end,
+ stepPreset=function(direction) commit();Presets.step(direction) end,
+ drawPresets=function(owner) menu:draw(owner) end,presetSize=function() return menu:size() end,dirty=Presets.dirty})
+U.editor=BLT.TextInput.new(Host,U,shell.typography)
+list=BLT.MarkerDeskList.new(Host,R,shell.typography,Language,C)
+BLT.attachPresets({R=R,section=SECTION,wake=wake,
+ defaults={seek=false,move=false,kind='all',query='',exclude_loop=true},
+ capture=function()
+  local v=BLT.scopeView or {};BLT.scopeView=v
+  v.seek,v.move,v.kind,v.query,v.exclude_loop=S.seek,S.move,Core.scope.kind,Core.scope.query,Core.scope.exclude_loop
+  return v
+ end,
+ valid=function(v) return (v.kind=='all' or v.kind=='marker' or v.kind=='region') and valid_text(v.query,1024) end,
+ apply=function(v)
+  S.seek,S.move=v.seek,v.move;Core.scope.kind,Core.scope.query,Core.scope.exclude_loop=v.kind,v.query,v.exclude_loop
+  persist();BLT.store(SECTION,'exclude_loop',v.exclude_loop and '1' or '0',true);refresh()
+ end,busy=function() return false end,commit=commit,cancelEdit=cancelEdit})
+BLT.recoverInput=function(_,err)
+ cancelEdit();U.down=false;scrollDrag,rowPress,rightPress=nil,nil,nil;wake();BLT.logError(err)
+end
+local function update_row_time(row)
+ local v=row.info;local first=R.format_timestr_pos(v.pos,'',-1)
+ local last=v.isrgn and R.format_timestr_pos(v.ending,'',-1) or '—'
+ local text=row.text
+ if not text then
+  row.text={string.format('%.0f',v.id),first,last,v.before=='' and '〈空欄〉' or v.before:gsub('[\r\n\t]',' ')}
+  return true
+ end
+ if text[2]==first and text[3]==last then return false end
+ text[2],text[3]=first,last;return true
+end
+local function poll_time_display(now)
+ if now<(A.time_display_poll or 0) then return false end
+ A.time_display_poll=now+.12
+ if R.EnumProjects(-1,'')~=A.project then return false end
+ local changed=false
+ for index=A.offset+1,min(#A.rows,A.offset+visible()) do if update_row_time(A.rows[index]) then changed=true end end
+ return changed
+end
+local segmentOptions={led='top',ledScale=28/(44*density),size=14/density,bold=true}
+local switchOptions={background=false,showState=false,switchScale=30/(44*density),size=14/density,bold=true}
+local smallOptions={size=14/density,bold=true}
+local scrollOptions={size=13/density}
+local clearOptions={variant='clear',size=14/density,bold=true}
+local queryOptions={size=13/density}
+local function button(id,text,x,y,w,h,enabled,action,options)
+ options=options or smallOptions;options.enabled=enabled~=false
+ local stamp=A.flashes[id];local flash=stamp and U.now-stamp<.65
+ if flash and (id=='copy_names' or id=='copy_info') then text='コピーしました' end
+ if U:button(id,Language.text(text),x/density,y/density,w/density,h/density,options) then
+  commit();guarded(action);wake()
+ end
+end
+local function toggle(id,text,x,y,w,on,action)
+ local value,clicked=U:toggle(id,Language.text(text),on,x/density,y/density,w/density,30/density,true,switchOptions)
+ if clicked and value~=on then commit();guarded(action);wake() end
+end
+local function drawContext()
+ I.PushStyleColor(ctx,I.Col_PopupBg,Host.rgba(C.panel[1],C.panel[2],C.panel[3],1))
+ I.PushStyleColor(ctx,I.Col_Text,Host.rgba(C.text[1],C.text[2],C.text[3],1))
+ local shown=I.BeginPopup(ctx,'BLT_MARKER_ROW_CONTEXT')
+ contextOpen=shown
+ if not shown then I.PopStyleColor(ctx,2);contextGUID=nil;return end
+ I.PushFont(ctx,Host.font,13)
+ for i,text in ipairs({'コピー','一覧情報をコピー','名前を貼り付け'}) do
+  if I.Selectable(ctx,Language.text(text),false,0,180,25) then
+   guarded(function()
+    sync_selection()
+    local target
+    for _,v in ipairs(A.items) do if v.guid==contextGUID then target=v;break end end
+    if not target then return end
+    if not target.selected then select_row(target.guid,0,true) end
+    if i==1 then copy_information(true,true) elseif i==2 then copy_information(false,true) else paste_selected() end
+   end);wake()
+  end
+ end
+ I.PopFont(ctx);I.EndPopup(ctx);I.PopStyleColor(ctx,2)
+end
+local function releaseRename()
+ local p=A.pending_rename;if not p then return end
+ if R.EnumProjects(-1,'')~=p.project or math.abs(g.mouse_x-p.x)>6 or math.abs(g.mouse_y-p.y)>6 then A.pending_rename=nil;return end
+ if U.down then return end
+ A.pending_rename=nil
+ for _,row in ipairs(A.rows) do if row.info.guid==p.guid then open_rename(row);return end end
+end
+local function tableInput(cols,widths)
+ if max_offset()>0 then g.wheelRegion(ox+T.x*scale,oy+T.y*scale,T.w*scale,T.h*scale)end
+ if U.blocked or U.editor.edit then rowPress,rightPress,scrollDrag=nil,nil,nil;return end
+ local inTable=inside(T.x,T.y,T.w,T.h)
+ local rowIndex=inTable and my>=T.y+T.header and my<T.y+T.header+visible()*T.row and A.offset+floor((my-T.y-T.header)/T.row)+1 or nil
+ local row=rowIndex and A.rows[rowIndex]
+ local bar=A.scrollbar
+ if U.pressed and inTable then
+  U.hit=true;U.focus=nil
+  if bar and inside(bar.x,bar.y,bar.w,bar.h) then
+   if my>=bar.thumb_y and my<bar.thumb_y+bar.thumb_h then scrollDrag=my-bar.thumb_y
+   else scroll(my<bar.thumb_y and -visible() or visible()) end
+  elseif my<T.y+T.header then
+   for i,key in ipairs(BLT.MarkerDeskList.keys) do if inside(cols[i]-2,T.y,widths[i]+2,T.header) then
+    rowPress={sort=key,generation=A.generation};break
+   end end
+  elseif row then
+   local v=row.info;local mods=g.mouse_cap&28
+   if Host.mac and (g.mouse_cap&32)~=0 then mods=mods|4 end
+   if mx<T.x+30 then rowPress={guid=v.guid,visible=true,generation=A.generation}
+   else
+    local double=A.last_row_guid==v.guid and A.last_row_click and U.now-A.last_row_click<.4
+    local nameClick=A.selected[v.guid] and mx>=cols[5] and mx<cols[5]+widths[5]
+    if mods==0 and (double or nameClick) then open_rename(row)
+    else guarded(function() select_row(v.guid,mods) end);A.last_row_click=U.now;A.last_row_guid=v.guid end
+   end
+  else guarded(clear_row_selection) end
+  wake()
+ elseif U.down and scrollDrag and bar then
+  local travel=bar.h-bar.thumb_h
+  if travel>0 then A.offset=floor(clamp((my-bar.y-scrollDrag)/travel,0,1)*max_offset()+.5) end
+  wake()
+ elseif U.released then
+  if rowPress and rowPress.generation==A.generation then
+   local captured=rowPress
+   if captured.sort then
+    for i,key in ipairs(BLT.MarkerDeskList.keys) do if key==captured.sort and inside(cols[i]-2,T.y,widths[i]+2,T.header) then guarded(function() sort_column(key) end) end end
+   elseif captured.visible and row and row.info.guid==captured.guid and mx<T.x+30 then guarded(function() toggle_visibility(captured.guid) end) end
+  end
+  rowPress,scrollDrag=nil,nil
+ end
+ local right=I.IsMouseDown(ctx,1)
+ if right and not A.right_down and inTable then rightPress=row and row.info.guid or nil end
+ if not right and A.right_down then
+  if rightPress and row and row.info.guid==rightPress then
+   contextGUID=rightPress;guarded(function() if not row.info.selected then select_row(contextGUID,0,true) end end)
+   I.OpenPopup(ctx,'BLT_MARKER_ROW_CONTEXT');contextOpen=true;wake()
+  end
+  rightPress=nil
+ end
+ A.right_down=right
+ if inTable and U.wheel~=0 then scroll((U.wheel>0 and -1 or 1)*((g.mouse_cap&8)~=0 and visible() or 3));U.wheel=0 end
+end
+local function drawTable()
+ A.offset=clamp(A.offset,0,max_offset())
+ if renameTarget then
+  local found
+  for index,row in ipairs(A.rows) do if row.info.guid==renameTarget.guid then found=index;break end end
+  if not found then cancelEdit()
+  elseif found<=A.offset or found>A.offset+visible() then commit() end
+ end
+ for index=A.offset+1,min(#A.rows,A.offset+visible()) do if not A.rows[index].text then update_row_time(A.rows[index]) end end
+ local flashState=U.states.rename
+ if A.name_flash and not (flashState and (flashState.flash or flashState.flashPending)) then A.name_flash=nil end
+ local editGUID=renameTarget and renameTarget.guid or A.name_flash
+ list:prepare(A,T,W,scale,Core.scope.sort,Core.scope.desc,renameTarget~=nil)
+ local cols,widths=list.cols,list.widths
+ local bx,by,bh=T.x+T.w-T.bar,T.y+T.header,T.h-T.header
+ local thumb=#A.rows>0 and max(26,bh*min(1,visible()/#A.rows)) or bh
+ A.scrollbar={x=bx,y=by,w=T.bar,h=bh,thumb_y=by+(max_offset()>0 and A.offset/max_offset()*(bh-thumb) or 0),thumb_h=thumb}
+ local oldRows,oldOffset=A.rows,A.offset
+ tableInput(cols,widths)
+ if A.rows~=oldRows or A.offset~=oldOffset then
+  for index=A.offset+1,min(#A.rows,A.offset+visible()) do if not A.rows[index].text then update_row_time(A.rows[index]) end end
+ end
+ editGUID=renameTarget and renameTarget.guid or A.name_flash
+ if A.rows~=oldRows or A.offset~=oldOffset then list:prepare(A,T,W,scale,Core.scope.sort,Core.scope.desc,renameTarget~=nil) end
+ list:draw(ox+T.x*scale,oy+T.y*scale)
+ U:rect(bx/density,by/density,T.bar/density,bh/density,C.panel,.95)
+ thumb=#A.rows>0 and max(26,bh*min(1,visible()/#A.rows)) or bh
+ local ty=by+(max_offset()>0 and A.offset/max_offset()*(bh-thumb) or 0)
+ U:rect((bx+4)/density,(ty+1)/density,(T.bar-8)/density,(thumb-2)/density,C.muted,.62)
+ local flash=A.column_flash
+ if flash then
+  local alpha=max(0,1-(U.now-flash.time)/.55)
+  if alpha==0 then A.column_flash=nil else
+   for i,key in ipairs(BLT.MarkerDeskList.keys) do if key==flash.key then
+    U:rect((cols[i]-2)/density,T.y/density,(widths[i]+2)/density,T.h/density,C.ice,.12*alpha)
+   end end
+  end
+ end
+ if editGUID then
+  for index=A.offset+1,min(#A.rows,A.offset+visible()) do if A.rows[index].info.guid==editGUID then
+   local y=T.y+T.header+(index-A.offset-1)*T.row
+   U:fieldFrame('rename',(cols[5]-4)/density,(y+1)/density,(widths[5]-4)/density,(T.row-2)/density,true,renameTarget~=nil)
+   local bounds={x=ox+cols[5]*scale,y=oy+y*scale,w=(widths[5]-8)*scale,h=T.row*scale,size=18*scale,
+    hit={x=ox+(cols[5]-4)*scale,y=oy+y*scale,w=(widths[5]-4)*scale,h=T.row*scale}}
+   U.editor:queue('rename',A.rows[index].info.before,bounds,true)
+   break
+  end end
+ end
+end
+local function keypress(key)
+ if U.editor.edit or shell.popupOpen or contextOpen then return end
+ local cap=g.mouse_cap
+ if (cap&24)==0 and (key==26 or (cap&36)~=0 and (key==90 or key==122)) then guarded(undo_project);wake();return end
+ if key==27 then A.manualClose=true;A.closing=true
+ elseif key==1 then guarded(select_all_rows)
+ elseif key==6579564 then guarded(delete_selected)
+ elseif key==3 then guarded(function() copy_information(true,true) end)
+ elseif key==22 then guarded(paste_selected)
+ elseif key==13 and A.focus and not U.focus then open_rename(A.rows[A.focus])
+ elseif key==1752132965 then A.offset=0
+ elseif key==6647396 then A.offset=max_offset()
+ elseif key==1885828464 then scroll(-visible())
+ elseif key==1885824110 then scroll(visible())
+ elseif key==30064 then scroll(-1)
+ elseif key==1685026670 then scroll(1) end
+ if key~=0 then wake() end
+end
+local scopes={{'all','すべて'},{'marker','マーカー'},{'region','リージョン'}}
+local function draw()
+ shell:begin();U.themeEnabled=shell.theme.enabled
+ scale=max(.30,min(g.w/BASE_W,1));H=max(1,g.h-26)/scale;W=g.w/scale
+ ox,oy=0,26-22*scale;mx,my=(g.mouse_x-ox)/scale,(g.mouse_y-oy)/scale
+ T.w,T.h=W-48,max(T.header+T.row,H-258);LIST_ROWS=visible()
+ g.set(C.bg[1],C.bg[2],C.bg[3],1);g.rect(0,0,g.w,g.h,1)
+ U.scale,U.ox,U.oy=scale,ox,oy+22*scale
+ shell:header(W)
+ local key=g.getchar();local editing=U.editor.edit~=nil
+ U:begin(density*scale,ox,oy,key);U.blocked=U.blocked or contextOpen
+ releaseRename();keypress(key)
+ if editing then U.key=0 end
+ local scope=Core.scope
+ for i,v in ipairs(scopes) do
+  segmentOptions.selected=scope.kind==v[1]
+  button('scope_'..v[1],v[2],24+(i-1)*90,102,84,28,true,function() scope_change('kind',v[1]) end,segmentOptions)
+ end
+ toggle('exclude_loop','ループリージョンを除外',302,102,212,scope.exclude_loop,function()
+  scope_change('exclude_loop',not Core.scope.exclude_loop)
+  BLT.store(SECTION,'exclude_loop',Core.scope.exclude_loop and '1' or '0',true)
+ end)
+ local query=U:field('query',scope.query,24/density,140/density,(W-144)/density,30/density,queryOptions)
+ if query~=scope.query then applyQuery(query) end
+ if scope.query=='' and not (U.editor.edit and U.editor.edit.id=='query') then
+  U:text(Language.text('文字列でフィルター…'),(24+12*density)/density,140/density,(W-144-24*density)/density,30/density,13/density,C.faint,false)
+ end
+ local clearable=scope.kind~='all' or scope.query~=''
+ button('reset','クリア',W-108,140,84,30,clearable,function()
+  Core.scope.kind,Core.scope.query='all','';refresh();A.flashes.reset=U.now
+ end,clearOptions)
+ drawTable()
+ toggle('seek','シーク再生',24,H-72,138,S.seek,function() S.seek=not S.seek;persist() end)
+ toggle('move','選択位置へ移動',172,H-72,176,S.move,function() S.move=not S.move;persist() end)
+ button('top','↑ 先頭',W-180,H-72,72,30,#A.rows>0,function() A.offset=0 end,scrollOptions)
+ button('bottom','↓ 末尾',W-96,H-72,72,30,#A.rows>0,function() A.offset=max_offset() end,scrollOptions)
+ button('copy_names','全名前をコピー',24,H-32,142,30,#A.items>0,function() copy_information(true) end)
+ button('copy_info','全情報をコピー',178,H-32,142,30,#A.items>0,function() copy_information(false) end)
+ button('paste_all','名前を貼付（先頭から）',332,H-32,W-356,30,#A.items>0,function() paste_names(false) end)
+ U:finish();pending()
+ if renameTarget and not U.editor.edit then renameTarget=nil end
+ if U.editor.edit and U.editor.edit.id=='query' then
+  if not applyQuery(U.editor.edit.text) then U.editor:close(true) end
+ elseif U.editor.edit and U.editor.edit.id=='rename' and not valid_text(U.editor.edit.text,Core.MAX_NAME) then
+  local value=U.editor.edit.text;U.editor:close(true);applyRename(value)
+ end
+ U.scale,U.ox,U.oy=scale,ox,oy
+ local message=A.blt_status or (#A.items==0 and 'マーカー／リージョンがありません。' or string.format('%d件  選択 %d件',#A.items,A.selected_count or 0))
+ local bad=A.blt_bad
+ if BLT.notice then message,bad=BLT.notice,BLT.noticeBad end
+ shell:footer(message,bad,W,H+22,'0.6.5')
+ shell:drawBar();drawContext()
+ U.scale,U.ox,U.oy=density*scale,ox,oy
+end
+Host:bindShortcuts()
+g.getchar=function(query)
+ if query==65536 or query==65537 then return Host.focused and 6 or 4 end
+ local key=Host.key
+ if key>=97 and key<=122 then
+  local primary=(g.mouse_cap&4)~=0 or Host.mac and (g.mouse_cap&32)~=0 and (key==97 or key==99 or key==118 or key==122)
+  if primary then key=key-96 elseif (g.mouse_cap&8)~=0 then key=key-32 end
+ end
+ return key,0
+end
+BLTShortcuts.install(R,g,{
+ blocked=function() return U.editor.edit~=nil or shell.popupOpen or contextOpen or A.closing end,
+ localKey=function(key,cap)
+  return key==27 or key==9 or key==1 or key==3 or key==22 or key==13 or key==6579564 or
+   key==1752132965 or key==6647396 or key==1885828464 or key==1885824110 or key==30064 or key==1685026670 or
+   ((cap&24)==0 and (key==26 or (cap&36)~=0 and (key==90 or key==122)))
+ end,beforeGlobal=commit})
+local finalized=false
+local function close()
+ if finalized then return end;finalized=true
+ BLT.cleanup(commit);BLT.cleanup(persist)
+ BLT.cleanup(BLTRestore.finish,R,A.manualClose or Host.requestClose)
+ BLT.cleanup(list.close,list);BLT.cleanup(Host.close,Host);BLT.cleanup(shell.close,shell)
+ A.closed=true
+end
+R.atexit(close)
+if R.set_action_options then R.set_action_options(2) end
+local restoreOK,restoreError=pcall(BLTRestore.start,R)
+if not restoreOK then Language.mb('自動復元の登録に失敗しました。\n'..tostring(restoreError),APP_NAME,0) end
+local inputState,worldState={},{}
+local function changed(state,...)
+ local different=false
+ for i=1,select('#',...) do local value=select(i,...);if state[i]~=value then state[i]=value;different=true end end
+ return different
+end
+local function poll(now)
+ local previous=A.project
+ local selectionChanged=poll_selection(now)
+ if A.project~=previous and U.editor.edit then cancelEdit() end
+ if selectionChanged then displayDirty=true end
+ if poll_time_display(now) then displayDirty=true end
+ if BLT.noticeUntil and now>=BLT.noticeUntil then BLT.notice,BLT.noticeUntil=nil,nil;displayDirty=true end
+end
+local function run()
+ if finalized then return end
+ local begun=false
+ local success,err=xpcall(function()
+  local now=R.time_precise();poll(now);shell.theme.tick(now)
+  if changed(worldState,A.rows,A.offset,A.generation,A.selected_count,A.blt_status,Language.code,C.bg,
+   Presets.current,BLT.noticeUntil,Host.requestReset,shell.icon.dirty) then displayDirty=true end
+  local interactive=U.editor.edit or shell.popupOpen or contextOpen or Host.drag or shell.hoverID or U.capture or scrollDrag or A.pending_rename
+  if not displayDirty and now>=awakeUntil and not interactive and not shell.icon:animating(now) and Host:idle(now) then U.now=now;shell.icon.lastTime=now;R.defer(run);return end
+  if Host.idleWake then wake();Host.idleWake=nil end
+  if Host.requestReset then Host.width,Host.height=BASE_W,BASE_H+26 end
+  local shown=Host:begin();begun=true
+  if shown then
+   local cap=(Host.hovered or Host.focused or U.capture or Host.drag) and g.mouse_cap or 0
+   if changed(inputState,g.mouse_x,g.mouse_y,cap,Host.key,g.w,g.h,Host.dpi,Host.originX,Host.originY,Host.focused) or
+    g.mouse_wheel~=0 or (cap&1)~=0 or I.IsMouseDown(ctx,1) or interactive then wake() end
+   draw();displayDirty=false
+   if not Host.focused then awakeUntil=min(awakeUntil,now+.5) end
+  end
+  local keep=Host:finish();begun=false
+  if Core.selection_redraw then Core.selection_redraw=nil;R.UpdateTimeline();R.UpdateArrange() end
+  if not keep or A.closing then close() else R.defer(run) end
+ end,debug.traceback)
+ if not success then
+  if begun then pcall(Host.finish,Host) end
+  close();Language.mb(BLT.publicError(err),APP_NAME..' | エラー',0)
+ end
+end
+guarded(refresh)
+run()
