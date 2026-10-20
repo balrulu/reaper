@@ -1,6 +1,6 @@
 @description BLT EXTEND MARQUEE TO MARKERS / REGIONS
 @author Balrulu
-@version 0.2.16
+@version 0.2.17
 @changelog Initial public release
 @provides
   [win64] reaper_blt_extend_marquee_to_markers_regions.dll
