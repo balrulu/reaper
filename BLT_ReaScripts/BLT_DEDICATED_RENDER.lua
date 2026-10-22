@@ -1,5 +1,5 @@
 -- @description BLT DEDICATED RENDER
--- @version 0.14.13
+-- @version 0.14.14
 -- @author Balrulu
 -- @provides
 --   . > ../
@@ -1986,7 +1986,7 @@ function Embed.write_aiff(path,plan,source)
  if not ok then if exists(temp)then os.remove(temp)end;error(err,0)end
 end
 
-local Model={VERSION='0.14.13',SOURCE_MASK=1|2|8|32|64|128|4096}
+local Model={VERSION='0.14.14',SOURCE_MASK=1|2|8|32|64|128|4096}
 Model.numbers={'RENDER_SETTINGS','RENDER_BOUNDSFLAG','RENDER_CHANNELS','RENDER_SRATE','RENDER_STARTPOS','RENDER_ENDPOS','RENDER_TAILFLAG','RENDER_TAILMS','RENDER_ADDTOPROJ','RENDER_DITHER','RENDER_NORMALIZE','RENDER_NORMALIZE_TARGET','RENDER_BRICKWALL','RENDER_FADEIN','RENDER_FADEOUT','RENDER_FADEINSHAPE','RENDER_FADEOUTSHAPE','RENDER_FADELPF','RENDER_PADSTART','RENDER_PADEND','RENDER_TRIMSTART','RENDER_TRIMEND','RENDER_DELAY'}
 Model.strings={'RENDER_FILE','RENDER_PATTERN','RENDER_EXTRAFILEDIR','RENDER_FORMAT2','RENDER_FORMAT'}
 Model.configs={'projrenderlimit','projrenderresample','projrenderrateinternal','renderclosewhendone','projrenderqdelay','renderbsnew'}
@@ -6153,7 +6153,8 @@ end
 local function small_button(id,text,x,y,w,h,fn,enabled)
  enabled=enabled~=false and not A.controlsDisabled
  local opt=render_options(id);opt.enabled,opt.selected,opt.led=enabled,nil,nil
- opt.size,opt.labelInset=13/density,5/density;opt.variant=id=='embedClear' and 'clear' or nil
+ opt.size,opt.labelInset=13/density,5/density
+ opt.variant=(id=='embedClear' or id=='embedMono' or id=='embedStereo' or id=='embedCustom') and 'clear' or nil
  RenderUI.C=C;RenderUI:button(id,Language.message(text),x/density,y/density,w/density,h/density,opt)
  widget(id,x,y,w,h,fn,enabled)
 end

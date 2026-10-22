@@ -1,5 +1,5 @@
 -- @description ACTION - Auto select tracks of selected items (toggle)
--- @version 1.0.4
+-- @version 1.1.1
 -- @author Balrulu
 -- @provides
 --   . > ../
@@ -8,122 +8,216 @@
 -- @about
 --   BLT SERIES Beta TEST UPLOAD
 
-local reaper=reaper
+-- BEGIN BLT TOGGLE RESTORE EMBEDDED 1.0.0
 do
--- BEGIN BLT NATIVE DIALOGS 1.0.0 (generated from _shared/BLT_NativeDialogs.lua)
-local BLTNativeDialogs=(function()
- local M={}
- function M.install(api,view)
-  local P=setmetatable({}, {__index=api})
-  local title,depth=nil,0
-  local windowsOS=api.GetOS and (api.GetOS() or ''):match('Win')~=nil
-  if view and view.init then
-   local init=view.init
-   view.init=function(name,...)
-    title=name;return init(name,...)
-   end
-  end
-  local function valid(hwnd)
-   if not hwnd or hwnd==0 then return false end
-   local value=api.JS_Window_IsWindow(hwnd);return value==true or value==1
-  end
-  local function owned(hwnd,main)
-   if not main then return false end
-   local seen={}
-   for _=1,32 do
-    if hwnd==main then return true end
-    if not hwnd or seen[hwnd] then return false end;seen[hwnd]=true
-    local parent=api.JS_Window_GetParent and api.JS_Window_GetParent(hwnd)
-    if parent==0 or parent==hwnd then parent=nil end
-    hwnd=parent or (api.JS_Window_GetRelated and api.JS_Window_GetRelated(hwnd,'OWNER'))
-   end
-   return false
-  end
-  local function suspend(session)
-   if not api.JS_Window_Find or not api.JS_Window_IsWindow then return end
-   local own=title and api.JS_Window_Find(title,true)
-   local main=api.GetMainHwnd and api.GetMainHwnd()
-   local candidates,seen={},{}
-   local function add(hwnd)
-    if hwnd~=main and valid(hwnd) and not seen[hwnd] then candidates[#candidates+1]=hwnd;seen[hwnd]=true end
-   end
-   add(own)
-   if api.JS_Window_ListAllTop and api.JS_Window_HandleFromAddress and api.JS_Window_GetTitle then
-    local _,list=api.JS_Window_ListAllTop()
-    for address in (list or ''):gmatch('[^,]+') do
-     local n=tonumber(address) or tonumber(address,16)
-     local hwnd=n and api.JS_Window_HandleFromAddress(n)
-     if valid(hwnd) then
-      local caption=api.JS_Window_GetTitle(hwnd) or ''
-      if (caption:match('^BLT[%s_:]') or caption=='LOUDNESS TRACE') and owned(hwnd,main) then add(hwnd) end
-     end
-    end
-   end
-   if #candidates==0 then return end
-   assert(api.JS_Window_Enable and api.JS_Window_GetLong,'Native dialogs require JS_Window_Enable and JS_Window_GetLong (js_ReaScriptAPI).')
-   session.foreground=api.JS_Window_GetForeground and api.JS_Window_GetForeground()
-   session.main=main
-   for _,hwnd in ipairs(candidates) do
-    local style=api.JS_Window_GetLong(hwnd,'STYLE')
-    assert(type(style)=='number','Cannot read BLT window input state.')
-    local topmost=windowsOS and (math.floor(api.JS_Window_GetLong(hwnd,'EXSTYLE'))&8)~=0
-    local enabled=(math.floor(style)&0x08000000)==0
-    if enabled or topmost then
-     local entry={hwnd=hwnd,enabled=enabled,topmost=topmost};session.windows[#session.windows+1]=entry
-     if topmost then
-      assert(api.JS_Window_SetZOrder,'Native dialogs require JS_Window_SetZOrder (js_ReaScriptAPI).')
-      assert(api.JS_Window_SetZOrder(hwnd,'NOTOPMOST'),'Cannot suspend BLT always-on-top state.')
-     end
-     if enabled then
-      api.JS_Window_Enable(hwnd,false)
-      assert((math.floor(api.JS_Window_GetLong(hwnd,'STYLE'))&0x08000000)~=0,'Cannot suspend BLT window input.')
-     end
-    end
-   end
-  end
-  local function restore(session)
-   for i=#session.windows,1,-1 do
-    local entry=session.windows[i]
-    local checked,exists=pcall(valid,entry.hwnd)
-    if not checked or exists then
-     if entry.enabled then pcall(api.JS_Window_Enable,entry.hwnd,true) end
-     if entry.topmost then pcall(api.JS_Window_SetZOrder,entry.hwnd,'TOPMOST') end
-    end
-   end
-   -- Do not take focus back if the user switched to another application.
-   pcall(function()
-    local current=api.JS_Window_GetForeground and api.JS_Window_GetForeground()
-    if session.foreground and valid(session.foreground) and (current==session.main or owned(current,session.main)) then
-     for _,entry in ipairs(session.windows) do
-      if entry.enabled and (session.foreground==entry.hwnd or owned(session.foreground,entry.hwnd)) then
-       if api.JS_Window_SetForeground then api.JS_Window_SetForeground(entry.hwnd) end
-       break
-      end
-     end
-    end
-   end)
-  end
-  local function call(fn,...)
-   if depth>0 then return fn(...) end
-   local args=table.pack(...);local session={windows={}};depth=depth+1
-   local result=table.pack(xpcall(function() suspend(session);return fn(table.unpack(args,1,args.n)) end,debug.traceback))
-   depth=depth-1;restore(session)
-   if not result[1] then error(result[2],0) end
-   return table.unpack(result,2,result.n)
-  end
-  for _,name in ipairs({'GetUserInputs','MB','ShowMessageBox','GetUserFileNameForRead','JS_Dialog_BrowseForSaveFile','JS_Dialog_BrowseForOpenFiles','JS_Dialog_BrowseForFolder','GR_SelectColor'}) do
-   local fn=api[name]
-   if type(fn)=='function' then P[name]=function(...) return call(fn,...) end end
-  end
-  return P
- end
- return M
-end)()
--- END BLT NATIVE DIALOGS
+local BLTToggleRestoreSource = [====[
+-- BLT toggle persistence 1.0.0. Embedded in each supported action.
+-- The public action is a dispatcher; its private worker owns the defer loop.
+-- Only a dispatcher's explicit OFF writes OFF. Worker shutdown never does.
+local M = {}
+local SECTION = 'BLT_TOGGLE_RESTORE'
+local IDS = {'folder_covers', 'selected_tracks', 'video_hover', 'cover_name_markers'}
+local BEGIN = '-- BEGIN BLT TOGGLE RESTORE'
+local ENDING = '-- END BLT TOGGLE RESTORE'
 
-reaper=BLTNativeDialogs.install(reaper,gfx)
+local function valid_id(id)
+  for _, value in ipairs(IDS) do if value == id then return true end end
+  return false
 end
 
+local function root(api)
+  return api.GetResourcePath() .. '/Scripts/BLT ReaScripts'
+end
+
+local function worker_path(api, id)
+  assert(valid_id(id), 'Unknown BLT toggle action.')
+  return root(api) .. '/BLT_Toggle_Worker_' .. id .. '.lua'
+end
+
+local function read(path)
+  local file, err, code = io.open(path, 'rb')
+  if not file then
+    if code == 2 then return nil end
+    error(err or ('Cannot read ' .. path), 0)
+  end
+  local data = assert(file:read('*a'));assert(file:close());return data
+end
+
+local function bytes(path, data)
+  local file, err = io.open(path, 'wb');assert(file, err)
+  local ok, why = file:write(data);local closed, close_error = file:close()
+  assert(ok and closed, why or close_error or 'Cannot save BLT startup file.')
+  assert(read(path) == data, 'BLT startup file verification failed: ' .. path)
+end
+
+local function write(path, data)
+  local previous = read(path)
+  if previous == data then return end
+  if previous then
+    local backup, suffix = path .. '.blt-toggle-backup', 0
+    while true do
+      local saved = read(backup)
+      if not saved then bytes(backup, previous);break end
+      if saved == previous then break end
+      suffix = suffix + 1;assert(suffix <= 100, 'Too many BLT startup backups.')
+      backup = path .. '.blt-toggle-backup-' .. suffix
+    end
+  end
+  local ok, err = pcall(bytes, path, data)
+  if not ok then
+    if previous then
+      local restored, reason = pcall(bytes, path, previous)
+      if not restored then error(tostring(err) .. '\nCannot restore startup file: ' .. tostring(reason), 0) end
+    end
+    error(err, 0)
+  end
+end
+
+local function save(api, key, value, persist)
+  if api.GetExtState(SECTION, key) ~= value then api.SetExtState(SECTION, key, value, persist) end
+end
+
+local function named(api, command)
+  local value = api.ReverseNamedCommandLookup(command) or ''
+  return value ~= '' and ('_' .. value:gsub('^_', '')) or ''
+end
+
+local function command_for(api, id)
+  local saved = api.GetExtState(SECTION, id .. '_worker_command')
+  local command = saved ~= '' and api.NamedCommandLookup(saved) or 0
+  if not command or command <= 0 then
+    command = api.AddRemoveReaScript(true, 0, worker_path(api, id), true)
+    assert(command and command > 0, 'Cannot register the BLT background worker.')
+    save(api, id .. '_worker_command', named(api, command), true)
+  end
+  return command
+end
+
+local function log(api, message)
+  if api.ShowConsoleMsg then pcall(api.ShowConsoleMsg, 'BLT toggle restore: ' .. tostring(message) .. '\n') end
+end
+
+function M.install(api, id, module_source)
+  assert(valid_id(id) and type(module_source) == 'string', 'Invalid BLT restore installation.')
+  api.RecursiveCreateDirectory(root(api), 0)
+  write(root(api) .. '/BLT_Toggle_Restore.lua', module_source)
+  local worker = 'local R=reaper\nlocal fn,err=loadfile(R.GetResourcePath().."/Scripts/BLT ReaScripts/BLT_Toggle_Restore.lua")\n'
+    .. 'if not fn then if R.ShowConsoleMsg then R.ShowConsoleMsg(tostring(err).."\\n")end;return end\n'
+    .. 'fn().worker(R,' .. string.format('%q', id) .. ')\n'
+  write(worker_path(api, id), worker)
+  local startup = api.GetResourcePath() .. '/Scripts/__startup.lua'
+  local original = read(startup) or ''
+  local bom = original:sub(1, 3) == '\239\187\191' and original:sub(1, 3) or ''
+  local body = bom ~= '' and original:sub(4) or original
+  local block = BEGIN .. '\ndo\n local fn,err=loadfile(reaper.GetResourcePath().."/Scripts/BLT ReaScripts/BLT_Toggle_Restore.lua")\n'
+    .. ' if fn then local ok,why=pcall(function()fn().restore(reaper)end);if not ok and reaper.ShowConsoleMsg then reaper.ShowConsoleMsg(tostring(why).."\\n")end\n'
+    .. ' elseif reaper.ShowConsoleMsg then reaper.ShowConsoleMsg(tostring(err).."\\n")end\nend\n' .. ENDING .. '\n'
+  local first = body:find(BEGIN, 1, true)
+  if first then
+    local last = assert(body:find(ENDING, first + #BEGIN, true), 'Incomplete BLT startup block; original file was kept.')
+    local after = last + #ENDING
+    if body:sub(after, after + 1) == '\r\n' then after = after + 2
+    elseif body:sub(after, after) == '\n' then after = after + 1 end
+    write(startup, bom .. body:sub(1, first - 1) .. block .. body:sub(after))
+  else
+    -- Run before a foreign top-level return without changing foreign code.
+    write(startup, bom .. block .. body)
+  end
+end
+
+function M.enter(api, id, module_source)
+  if api.BLT_ToggleRestoreWorker == id then return true end
+  local _, path, section, command = api.get_action_context()
+  -- Profilers/unregistered loadfile callers have no public action to dispatch.
+  if section ~= 0 or not command or command <= 0 then return true end
+  api.defer(function() end)
+  if api.set_action_options then api.set_action_options(1) end
+  local ok, err = xpcall(function()
+    if api.GetExtState(SECTION, id .. '_running') == '1' then
+      -- Turning OFF must not depend on rewriting/reading startup files.
+      save(api, id .. '_enabled', '0', true)
+      local worker = api.NamedCommandLookup(api.GetExtState(SECTION, id .. '_worker_command'))
+      if worker and worker > 0 then api.Main_OnCommand(worker, 0) end
+      api.SetToggleCommandState(0, command, 0);api.RefreshToolbar2(0, command)
+      return
+    end
+    M.install(api, id, module_source)
+    save(api, id .. '_path', path, true)
+    save(api, id .. '_command', named(api, command), true)
+    local worker = command_for(api, id)
+    save(api, id .. '_enabled', '1', true)
+    api.Main_OnCommand(worker, 0)
+    local on = api.GetExtState(SECTION, id .. '_running') == '1'
+    api.SetToggleCommandState(0, command, on and 1 or 0);api.RefreshToolbar2(0, command)
+  end, debug.traceback)
+  if not ok then log(api, err) end
+  return false
+end
+
+function M.worker(api, id)
+  assert(valid_id(id), 'Unknown BLT toggle worker.')
+  if api.GetExtState(SECTION, id .. '_enabled') ~= '1' or api.GetExtState(SECTION, id .. '_running') == '1' then return end
+  local path = api.GetExtState(SECTION, id .. '_path')
+  local command = api.NamedCommandLookup(api.GetExtState(SECTION, id .. '_command'))
+  if not command or command <= 0 then
+    command = api.AddRemoveReaScript(true, 0, path, true)
+    assert(command and command > 0, 'Cannot register restored BLT action.')
+    save(api, id .. '_command', named(api, command), true)
+  end
+  local exits, ended = {}, false
+  local function finish()
+    if ended then return end
+    ended = true
+    for i = #exits, 1, -1 do local ok, err = pcall(exits[i]);if not ok then log(api, err) end end
+    -- Session-only running state is cleared on either stop or host shutdown.
+    -- The persisted enabled state belongs exclusively to the public dispatcher.
+    save(api, id .. '_running', '', false)
+    pcall(api.SetToggleCommandState, 0, command, 0);pcall(api.RefreshToolbar2, 0, command)
+  end
+  api.atexit(finish)
+  local context = table.pack(api.get_action_context())
+  context[2], context[3], context[4] = path, 0, command
+  local proxy = setmetatable({BLT_ToggleRestoreWorker = id}, {__index = api})
+  proxy.get_action_context = function() return table.unpack(context, 1, context.n) end
+  proxy.atexit = function(fn) assert(type(fn) == 'function');exits[#exits + 1] = fn end
+  proxy.defer = function(fn)
+    api.defer(function()
+      if ended then return end
+      if api.GetExtState(SECTION, id .. '_enabled') ~= '1' then finish();return end
+      local ok, err = xpcall(fn, debug.traceback)
+      if not ok then finish();log(api, err) end
+    end)
+  end
+  proxy.runloop = proxy.defer
+  save(api, id .. '_running', '1', false)
+  if api.set_action_options then api.set_action_options(5) end
+  local env = setmetatable({reaper = proxy}, {__index = _G})
+  local fn, err = loadfile(path, 't', env)
+  if not fn then finish();log(api, err);return end
+  local ok, reason = xpcall(fn, debug.traceback)
+  if not ok then finish();log(api, reason) end
+end
+
+function M.restore(api)
+  if api.GetExtState(SECTION, 'startup_done') == '1' then return end
+  save(api, 'startup_done', '1', false)
+  api.defer(function()
+    for _, id in ipairs(IDS) do
+      if api.GetExtState(SECTION, id .. '_enabled') == '1' and api.GetExtState(SECTION, id .. '_running') ~= '1' then
+        local ok, err = pcall(function() api.Main_OnCommand(command_for(api, id), 0) end)
+        if not ok then log(api, err) end
+      end
+    end
+  end)
+end
+
+return M
+
+]====]
+local module = assert(load(BLTToggleRestoreSource, "@BLT_Toggle_Restore.lua", "t", _ENV))()
+if not module.enter(reaper, 'selected_tracks', BLTToggleRestoreSource) then return end
+end
+-- END BLT TOGGLE RESTORE EMBEDDED
 local R = reaper
 local _, _, section, command = R.get_action_context()
 local has_action = section and command and section >= 0 and command > 0
@@ -149,7 +243,7 @@ end
 local function sync_tracks(p, n)
   for track in pairs(wanted) do wanted[track] = nil end
   for i = 1, n do
-    local track = R.GetMediaItemTrack(items[i])
+    local track = selected[items[i]]
     if not track then count = -1; return end
     wanted[track] = true
   end
@@ -204,23 +298,22 @@ local function update(now)
   end
   local f = R.GetSelectedMediaItem(p, 0)
   local l = n > 1 and R.GetSelectedMediaItem(p, n - 1) or f
-  if not changed and n <= 2 and f == first and l == last then return end
+  if not changed and n <= 2 and f == first and l == last
+      and R.GetMediaItemTrack(f) == selected[f] and R.GetMediaItemTrack(l) == selected[l] then return end
   local s = R.GetProjectStateChangeCount(p)
   if not changed and s == state and f == first and l == last and now < next_audit then return end
   for i = 1, n do
     local item = i == 1 and f or (i == n and l or R.GetSelectedMediaItem(p, i - 1))
     if not item then count = -1; return end
-    if item ~= items[i] then
-      if not selected[item] then changed = true end
-      items[i] = item
-    end
+    if selected[item] ~= R.GetMediaItemTrack(item) then changed = true end
+    items[i] = item
   end
   for i = n + 1, #items do items[i] = nil end
   project, count, state, first, last = p, n, s, f, l
   next_audit = now + 0.3
   if changed then
     for item in pairs(selected) do selected[item] = nil end
-    for i = 1, n do selected[items[i]] = true end
+    for i = 1, n do selected[items[i]] = R.GetMediaItemTrack(items[i]) end
     sync_tracks(p, n)
   end
 end
