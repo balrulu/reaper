@@ -1,9 +1,13 @@
 -- @description MINIMAL INFO PANEL
--- @version 0.2.20
+-- @version 0.2.24
 -- @author Balrulu
 -- @provides
 --   . > ../
 -- @changelog
+--   リネームの二重取得・不要な音声参照を削除。Undo範囲と更新処理を整理し、例外時の後始末を保護。
+--   名前が未変更でもEnterで明示確定した場合はリネームを適用。
+--   名前入力が未変更なら確定時もリネーム・連番付与・トラック名変更を行わないよう修正。
+--   名前欄の右クリックに連番付与・トラック名の同時変更を追加。
 --   BLT SERIES Beta TEST UPLOAD
 -- @about
 --   BLT SERIES Beta TEST UPLOAD
@@ -1746,6 +1750,9 @@ local LanguageCatalog={en={
  ["選択が変更されました。もう一度操作してください。"]="Selection changed. Please try again.",
  ["対象アイテムが変更または削除されました。"]="An item was changed or deleted.",
  ["名前は改行なし・4096バイト以内で入力してください。"]="Use a single-line name, up to 4096 bytes.",
+ ["複数選択状態でリネームした場合、連番を付与"]="Number names when renaming multiple selected items",
+ ["リネーム時、トラック名を同時に変更"]="Also rename the items' tracks",
+ ["トラック名を取得できませんでした。"]="Could not read the track name.",
  ["数値が範囲外です。元の値を保持しました。"]="Value out of range. Original value retained.",
  ["この項目は選択アイテムでは編集できません。"]="This property is unavailable for the selected item.",
  ["選択内にこの項目を編集できないアイテムがあります。"]="Some selected items do not support this property.",
@@ -2571,14 +2578,24 @@ function Core.valid_settings(v)
  return true
 end
 function Core.valid(project,p,kind) return p and R.ValidatePtr2(project,p,kind) end
-function Core.row(project,item)
+function Core.row(project,item,key,trackNumbers)
  local take=R.GetActiveTake(item)
+ local track=R.GetMediaItemTrack(item)
+ local number=trackNumbers and trackNumbers[track]
+ if number==nil then
+  number=R.GetMediaTrackInfo_Value(track,'IP_TRACKNUMBER')
+  if trackNumbers then trackNumbers[track]=number end
+ end
  local v={item=item,take=take,project=project,pos=R.GetMediaItemInfo_Value(item,'D_POSITION'),
-  track=R.GetMediaTrackInfo_Value(R.GetMediaItemTrack(item),'IP_TRACKNUMBER'),index=R.GetMediaItemInfo_Value(item,'IP_ITEMNUMBER'),
-  length=R.GetMediaItemInfo_Value(item,'D_LENGTH'),gain=R.GetMediaItemInfo_Value(item,'D_VOL'),
-  mute=R.GetMediaItemInfo_Value(item,'B_MUTE_ACTUAL')~=0,lockBits=floor(R.GetMediaItemInfo_Value(item,'C_LOCK') or 0)}
- v.volume=v.gain>0 and max(Core.specs.volume.lo,20*math.log(v.gain,10)) or Core.specs.volume.lo
+  track=number,index=R.GetMediaItemInfo_Value(item,'IP_ITEMNUMBER'),lockBits=floor(R.GetMediaItemInfo_Value(item,'C_LOCK') or 0)}
  v.lock=(v.lockBits&1)~=0
+ if key=='name'then
+  v.trackPtr=track;if take then v.name=R.GetTakeName(take)or''end
+  return v
+ end
+ v.length=R.GetMediaItemInfo_Value(item,'D_LENGTH');v.gain=R.GetMediaItemInfo_Value(item,'D_VOL')
+ v.mute=R.GetMediaItemInfo_Value(item,'B_MUTE_ACTUAL')~=0
+ v.volume=v.gain>0 and max(Core.specs.volume.lo,20*math.log(v.gain,10)) or Core.specs.volume.lo
  if take then
   v.midi=R.TakeIsMIDI(take)
   v.name=R.GetTakeName(take) or '';v.pitch=R.GetMediaItemTakeInfo_Value(take,'D_PITCH');v.pan=R.GetMediaItemTakeInfo_Value(take,'D_PAN')*100
@@ -2590,11 +2607,11 @@ function Core.row(project,item)
  end
  return v
 end
-function Core.collect(project)
- local rows={}
+function Core.collect(project,key)
+ local rows={};local trackNumbers=key=='name'and{}or nil
  for i=0,R.CountSelectedMediaItems(project)-1 do
   local item=R.GetSelectedMediaItem(project,i)
-  if Core.valid(project,item,'MediaItem*') then rows[#rows+1]=Core.row(project,item) end
+  if Core.valid(project,item,'MediaItem*') then rows[#rows+1]=Core.row(project,item,key,trackNumbers) end
  end
  table.sort(rows,function(a,b)
   if a.track~=b.track then return a.track<b.track end
@@ -2603,9 +2620,9 @@ function Core.collect(project)
  end)
  return rows
 end
-function Core.snapshot()
+function Core.snapshot(key)
  local project=R.EnumProjects(-1,'')
- return {project=project,revision=R.GetProjectStateChangeCount(project),rows=Core.collect(project)}
+ return {project=project,revision=R.GetProjectStateChangeCount(project),rows=Core.collect(project,key)}
 end
 function Core.display(project,selection)
  local first,track,pos,index
@@ -2685,18 +2702,28 @@ function Core.format(key,v)
  if key=='pan' then return abs(v)<.0001 and 'C' or string.format('%s %.1f%%',v<0 and 'L' or 'R',abs(v)) end
  return v and 'ON' or 'OFF'
 end
-function Core.plan(s,key,value,absolute)
+function Core.plan(s,key,value,absolute,rename)
  if #s.rows==0 then return nil,'アイテムを選択してください。' end
  local spec=Core.specs[key];local changes={};local first=s.rows[1][key]
  if first==nil then return nil,'この項目は選択アイテムでは編集できません。' end
  if spec and not finite(value) then return nil,'数値が不正です。' end
  if spec then value=Core.precision(key,value);first=Core.control_value(key,first) end
  if not spec and key~='name' and type(value)~='boolean' then return nil,'値が不正です。' end
- for _,v in ipairs(s.rows) do
+ local nameFormat
+ if key=='name'then
+  local parsed,err=Core.parse(key,value);if parsed==nil then return nil,err end
+  if rename and rename.numbered and #s.rows>1 then
+   local digits=max(2,#tostring(#s.rows))
+   if #value+1+digits>4096 then return nil,'名前は改行なし・4096バイト以内で入力してください。'end
+   nameFormat='%s_%0'..digits..'d'
+  end
+ end
+ for i,v in ipairs(s.rows) do
   if v[key]==nil then return nil,'選択内にこの項目を編集できないアイテムがあります。' end
   if key~='lock' and v.lock then return nil,'ロックされたアイテムがあります。先にロックを解除してください。' end
   local current=spec and Core.control_value(key,v[key]) or v[key]
   local target=value
+  if nameFormat then target=string.format(nameFormat,value,i)end
   if spec then
    target=Core.precision(key,clamp(absolute and value or current+(value-first),spec.lo,spec.hi))
   end
@@ -2709,10 +2736,24 @@ function Core.plan(s,key,value,absolute)
   local changed=target~=current or (key=='volume' and absolute and target<=-150 and v.gain~=0)
   if changed then changes[#changes+1]={row=v,before=v[key],after=target} end
  end
+ if key=='name'and rename and rename.tracks then
+  local seen={}
+  for _,v in ipairs(s.rows)do
+   local track=v.trackPtr or R.GetMediaItemTrack(v.item)
+   if not seen[track]then
+    if not Core.valid(s.project,track,'MediaTrack*')then return nil,'トラック名を取得できませんでした。'end
+    local ok,name=R.GetSetMediaTrackInfo_String(track,'P_NAME','',false)
+    if not ok then return nil,'トラック名を取得できませんでした。'end
+    seen[track]=true
+    if name~=value then changes[#changes+1]={key='trackName',row={trackPtr=track},before=name,after=value}end
+   end
+  end
+ end
  return changes
 end
 function Core.set(v,key,value,restore)
  if key=='name' then return R.GetSetMediaItemTakeInfo_String(v.take,'P_NAME',value,true)
+ elseif key=='trackName'then return R.GetSetMediaTrackInfo_String(v.trackPtr,'P_NAME',value,true)
  elseif key=='length' then return R.SetMediaItemInfo_Value(v.item,'D_LENGTH',value)
  elseif key=='volume' then return R.SetMediaItemInfo_Value(v.item,'D_VOL',restore and v.gain or (value<=-150 and 0 or 10^(value/20)))
  elseif key=='pitch' then return R.SetMediaItemTakeInfo_Value(v.take,'D_PITCH',value)
@@ -2740,42 +2781,50 @@ function Core.set(v,key,value,restore)
  end
  return false
 end
-function Core.refresh_item(v,key)
- if key=='reverse' or key=='rate' then
-  local ok,err=pcall(R.UpdateItemInProject,v.item)
-  if not ok then
-   BLT.logError(err)
-   local track=R.GetMediaItemTrack(v.item)
-   if track and R.MarkTrackItemsDirty then
-    local worked,why=pcall(R.MarkTrackItemsDirty,track,v.item)
-    if not worked then BLT.logError(why) end
-   end
+function Core.refresh_item(v)
+ local ok,err=pcall(R.UpdateItemInProject,v.item)
+ if not ok then
+  BLT.logError(err)
+  local track=R.GetMediaItemTrack(v.item)
+  if track and R.MarkTrackItemsDirty then
+   local worked,why=pcall(R.MarkTrackItemsDirty,track,v.item)
+   if not worked then BLT.logError(why) end
   end
  end
 end
 function Core.commit(s,key,changes,defer_undo)
  if #changes==0 then return 0 end
- local attempted=0
- if not defer_undo then R.Undo_BeginBlock2(s.project) end
- R.PreventUIRefresh(1)
- local success,why=xpcall(function()
-  for i,c in ipairs(changes) do attempted=i;if not Core.set(c.row,key,c.after,false) then error('値を変更できませんでした。',0) end end
+ local attempted,undoFlags=0,0;local undoOpen,refreshHeld=false,false
+ local success=xpcall(function()
+  if not defer_undo then R.Undo_BeginBlock2(s.project);undoOpen=true end
+  R.PreventUIRefresh(1);refreshHeld=true
+  for i,c in ipairs(changes) do
+   attempted=i;local changeKey=c.key or key
+   undoFlags=undoFlags|(changeKey=='trackName'and 1 or 4)
+   if not Core.set(c.row,changeKey,c.after,false) then error('値を変更できませんでした。',0)end
+  end
  end,debug.traceback)
  local restored=true
- if not success then for i=attempted,1,-1 do local c=changes[i];local worked,result=pcall(Core.set,c.row,key,c.before,true);if not worked or not result then restored=false end end end
- for i=1,attempted do Core.refresh_item(changes[i].row,key) end
- R.PreventUIRefresh(-1);R.UpdateArrange()
- if not defer_undo then R.Undo_EndBlock2(s.project,'BLT MINIMAL INFO PANEL: '..key..(success and '' or ' (failed)'),-1) end
+ if not success then for i=attempted,1,-1 do local c=changes[i];local worked,result=pcall(Core.set,c.row,c.key or key,c.before,true);if not worked or not result then restored=false end end end
+ if key=='reverse'or key=='rate'then
+  for i=1,attempted do BLT.cleanup(Core.refresh_item,changes[i].row)end
+ end
+ -- End the transaction before any fallible window/arrange redraw.
+ if undoOpen then BLT.cleanup(R.Undo_EndBlock2,s.project,'BLT MINIMAL INFO PANEL: '..key..(success and '' or ' (failed)'),undoFlags)end
+ if refreshHeld then BLT.cleanup(R.PreventUIRefresh,-1)end
+ if(undoFlags&1)~=0 then BLT.cleanup(R.TrackList_AdjustWindows,false)end
+ BLT.cleanup(R.UpdateArrange)
  if not success then return nil,restored and '変更に失敗したため、元の値へ戻しました。' or '復元できない項目があります。REAPERのUndoで確認してください。' end
  return #changes
 end
-function Core.apply(s,key,value,absolute,defer_undo)
+function Core.apply(s,key,value,absolute,defer_undo,rename)
  local ok,err=Core.check(s);if not ok then return nil,err end
- local changes;changes,err=Core.plan(s,key,value,absolute);if not changes then return nil,err end
+ local changes;changes,err=Core.plan(s,key,value,absolute,rename);if not changes then return nil,err end
  return Core.commit(s,key,changes,defer_undo)
 end
 
 local S=BLT.copy(Core.defaults)
+local Rename={numbered=R.GetExtState(SECTION,'rename_numbering')=='1',tracks=R.GetExtState(SECTION,'rename_track_name')=='1'}
 local A={selection={},items={},project=nil,message='アイテムを選択してください。',bad=false,nextPoll=0,revision=nil,flash={},closing=false}
 local lengthMode=tonumber(R.GetExtState(SECTION,'length_mode')) or -1
 if not Core.valid_length_mode(lengthMode) then lengthMode=-1 end
@@ -2935,6 +2984,8 @@ local IME={};local E=nil;local gesture=nil
 local function status(text,bad) A.message=tostring(text or '');A.bad=bad==true;A.content_dirty=true end
 local function save_settings()
  S.lengthMode=lengthMode;BLT.store(SECTION,'length_mode',tostring(lengthMode),true)
+ BLT.store(SECTION,'rename_numbering',Rename.numbered and'1'or'0',true)
+ BLT.store(SECTION,'rename_track_name',Rename.tracks and'1'or'0',true)
 end
 local function extnum(key,default) local n=tonumber(R.GetExtState(SECTION,key));return finite(n) and n or default end
 local W,H=1230,44
@@ -3661,9 +3712,18 @@ local function apply_value(snapshot,key,value,absolute)
  WheelUndo.finish()
  if snapshot.revision==revision then snapshot.revision=R.GetProjectStateChangeCount(snapshot.project) end
  if key=='reverse' and not Media.ready(true) then fail(key,'音声がオンラインになるまでお待ちください。');return false end
- local n,err=Core.apply(snapshot,key,value,absolute)
+ local currentDisplay=key=='name'and A.project==snapshot.project and A.revision==snapshot.revision
+  and A.count==#snapshot.rows and A.items[1]and A.items[1].item==snapshot.rows[1].item
+ local n,err=Core.apply(snapshot,key,value,absolute,false,Rename)
  if not n then fail(key,err);return false end
- poll(true);wake_visuals();return true
+ -- A name change leaves source/flag/numeric display values intact. Stale
+ -- displays still use the normal full refresh instead of reusing old values.
+ if currentDisplay then
+  local first=A.items[1];first.name=R.GetTakeName(first.take)or''
+  A.display.name=Core.format('name',first.name);A.revision=R.GetProjectStateChangeCount(snapshot.project)
+  A.content_dirty=true
+ else poll(true)end
+ wake_visuals();return true
 end
 local function preview_length(g,absolute)
  local s=g.snapshot;local live=g.live
@@ -3705,10 +3765,10 @@ local function finish_gesture(cancel)
  if g.live then poll(true)end
  wake_visuals()
 end
-local function finish_edit(cancel,absolute)
+local function finish_edit(cancel,absolute,confirmed)
  if not E then return true end
  local e=E;E=nil;IME.active=false;IME.ctx=nil;IME.font=nil
- if cancel then wake_visuals();return true end
+ if cancel or(e.key=='name'and not confirmed and e.text==e.snapshot.rows[1].name)then wake_visuals();return true end
  local value,err
  if e.key=='length' then
   if lengthMode==6 then local n=tonumber(e.text);if finite(n) then value=n/frame_rate() end
@@ -3723,7 +3783,7 @@ local function row_y() return (Dock.state&1)~=0 and 0 or 28 end
 local function value_bounds(f) return f.x+7,row_y()+13,f.w-14,26 end
 local function open_edit(f)
  WheelUndo.finish()
- local snapshot=Core.snapshot();local first=snapshot.rows[1]
+ local snapshot=Core.snapshot(f.key);local first=snapshot.rows[1]
  if not first or first[f.key]==nil then fail(f.key,'この項目は選択アイテムでは編集できません。');return end
  local value=first[f.key]
  if Core.specs[f.key] then value=Core.control_value(f.key,value) end
@@ -3759,12 +3819,13 @@ local function ime_frame()
  E.text=text
  local mods=I.GetKeyMods(ctx);E.absolute=(mods&I.Mod_Ctrl)~=0 or ((gfx.mouse_cap or 0)&4)~=0 or (BLT_MAC and (mods&I.Mod_Super)~=0)
  local cancel=I.IsKeyPressed(ctx,I.Key_Escape,false)
- local done=I.IsItemDeactivated(ctx)or I.IsKeyPressed(ctx,I.Key_Enter,false)or I.IsKeyPressed(ctx,I.Key_KeypadEnter,false)
+ local confirmed=I.IsKeyPressed(ctx,I.Key_Enter,false)or I.IsKeyPressed(ctx,I.Key_KeypadEnter,false)
+ local done=confirmed or I.IsItemDeactivated(ctx)
  local focused=I.IsWindowFocused(ctx)
  I.PopFont(ctx);I.PopStyleColor(ctx,2);I.PopStyleVar(ctx,3)
  IME.frames=IME.frames+1
  if cancel then finish_edit(true)
- elseif IME.frames>1 and(done or not focused)then local absolute=E.absolute;finish_edit(false,absolute)end
+ elseif IME.frames>1 and(done or not focused)then local absolute=E.absolute;finish_edit(false,absolute,confirmed)end
 end
 
 local layoutWidth=nil
@@ -3916,8 +3977,18 @@ local function interact()
  end
  if PeakZoom.input(cap,down,right) then downLast=down;A.rightLast=right;gfx.mouse_wheel=0;return end
  local f=field_at(gfx.mouse_x,gfx.mouse_y)
- if right and not A.rightLast and f and Core.specs[f.key] then
-  if f.key=='length' then
+ if right and not A.rightLast and f then
+  if f.key=='name'then
+   local names={
+    (Rename.numbered and'!'or'')..Language.text('複数選択状態でリネームした場合、連番を付与'),
+    (Rename.tracks and'!'or'')..Language.text('リネーム時、トラック名を同時に変更')}
+   gfx.x,gfx.y=gfx.mouse_x,gfx.mouse_y
+   local choice=gfx.showmenu(table.concat(names,'|'))
+   if choice==1 then Rename.numbered=not Rename.numbered
+   elseif choice==2 then Rename.tracks=not Rename.tracks end
+   if choice==1 or choice==2 then save_settings();wake_visuals()end
+   gfx.mouse_wheel=0;A.rightLast=true;downLast=false;return
+  elseif f.key=='length' then
    local modes={3,0,4,5,6,2,-1};local names=Language.code=='JP' and {'秒','分秒','サンプル','時:分:秒:フレーム','フレーム','小節.拍','ルーラーと連動'} or {'Seconds','Time','Samples','Timecode (h:m:s:f)','Frames','Measures.beats','Follow ruler'}
    for i,m in ipairs(modes) do if m==lengthMode then names[i]='!'..names[i] end end
    gfx.x=gfx.mouse_x;gfx.y=gfx.mouse_y
@@ -3929,10 +4000,14 @@ local function interact()
  end
  A.rightLast=right
  if down and not downLast and f and not (f.key=='reverse' and A.hasMidi) then
-  local snap=Core.snapshot();local first=snap.rows[1]
-  if first and first[f.key]~=nil then
-   gesture={key=f.key,field=f,snapshot=snap,start=first[f.key],value=first[f.key],x=gfx.mouse_x,y=gfx.mouse_y,moved=false,reset=(cap&4)~=0}
-  elseif f.key=='reverse' and not R.BR_GetMediaSourceProperties then fail(f.key,'逆再生の切り替えにはSWS Extensionが必要です。') end
+  if f.key=='name'then
+   if A.items[1]and A.items[1].name~=nil then gesture={key=f.key,field=f}end
+  else
+   local snap=Core.snapshot();local first=snap.rows[1]
+   if first and first[f.key]~=nil then
+    gesture={key=f.key,field=f,snapshot=snap,start=first[f.key],value=first[f.key],x=gfx.mouse_x,y=gfx.mouse_y,moved=false,reset=(cap&4)~=0}
+   elseif f.key=='reverse' and not R.BR_GetMediaSourceProperties then fail(f.key,'逆再生の切り替えにはSWS Extensionが必要です。')end
+  end
  elseif down and gesture and Core.specs[gesture.key] then
   local dy=gesture.y-gfx.mouse_y;local dx=gfx.mouse_x-gesture.x
   if abs(dx)+abs(dy)>3 then gesture.moved=true end
@@ -4176,7 +4251,7 @@ local function tooltip(x,y)
  if f.key=='length' then return Language.code=='JP' and '右クリック: 尺度を選択 · 入力も選択した尺度を使用' or 'Right-click: units · Input uses selected units' end
  if f.key=='name' then
   local name=A.items[1] and A.items[1].name or ''
-  return name..'\n'..(Language.code=='JP' and 'クリックして入力 · 複数選択は同名に変更' or 'Click to type · Rename all selected takes')
+  return name..'\n'..(Language.code=='JP' and 'クリックして入力 · 右クリック: リネーム設定' or 'Click to type · Right-click: rename options')
  end
  return Language.code=='JP' and ('入力 / ホイール / ドラッグ · Shift: 1/10 · Ctrl: 絶対値 · Ctrl+クリック: 初期値')
   or ('Type / Wheel / Drag · Shift: 1/10 · Ctrl (Cmd): absolute · Ctrl (Cmd)+click: reset')
