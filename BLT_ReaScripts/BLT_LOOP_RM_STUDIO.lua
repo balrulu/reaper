@@ -1,5 +1,5 @@
 -- @description LOOP RM STUDIO
--- @version 0.6.14
+-- @version 0.6.15
 -- @author Balrulu
 -- @provides
 --   . > ../
