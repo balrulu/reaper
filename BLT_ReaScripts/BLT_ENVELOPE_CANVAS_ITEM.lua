@@ -1,5 +1,5 @@
 -- @description ENVELOPE CANVAS ITEM
--- @version 0.6.12
+-- @version 0.6.13
 -- @author Balrulu
 -- @provides
 --   . > ../
@@ -4506,7 +4506,7 @@ function Core.apply(v,layers,limit,joined)
  local selection_ok,selection_err=pcall(Core.restore_selection,v.project,selection)
  R.PreventUIRefresh(-1)
  if not selection_ok then ok=false;err=tostring(err or '')..' / '..tostring(selection_err) end
- if not joined then R.Undo_EndBlock2(v.project,ok and 'BLT Envelope Canvas Item: Apply curves' or 'BLT Envelope Canvas Item: Apply failed',-1) end;R.UpdateArrange()
+ if not joined then R.Undo_EndBlock2(v.project,ok and 'BLT Envelope Canvas Item: Apply curves' or 'BLT Envelope Canvas Item: Apply failed',4) end;R.UpdateArrange()
  if not ok then error(err,0) end
  return {before=before,after=Core.chunk(v.item),map=map,len=len,original=v,stats=stats}
 end
@@ -4586,7 +4586,7 @@ function Core.regenerate(v,layers,limit,record)
  local selection_ok,selection_err=pcall(Core.restore_selection,v.project,selection)
  R.PreventUIRefresh(-1)
  if not selection_ok then ok=false;err=tostring(err or '')..' / '..tostring(selection_err) end
- R.Undo_EndBlock2(v.project,'BLT Envelope Canvas Item: Regenerate',-1);R.UpdateArrange()
+ R.Undo_EndBlock2(v.project,'BLT Envelope Canvas Item: Regenerate',4);R.UpdateArrange()
  if not ok then error(err,0) end
  return result,reason
 end

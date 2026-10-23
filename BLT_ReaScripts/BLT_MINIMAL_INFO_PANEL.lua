@@ -1,13 +1,9 @@
 -- @description MINIMAL INFO PANEL
--- @version 0.2.24
+-- @version 0.2.25
 -- @author Balrulu
 -- @provides
 --   . > ../
 -- @changelog
---   リネームの二重取得・不要な音声参照を削除。Undo範囲と更新処理を整理し、例外時の後始末を保護。
---   名前が未変更でもEnterで明示確定した場合はリネームを適用。
---   名前入力が未変更なら確定時もリネーム・連番付与・トラック名変更を行わないよう修正。
---   名前欄の右クリックに連番付与・トラック名の同時変更を追加。
 --   BLT SERIES Beta TEST UPLOAD
 -- @about
 --   BLT SERIES Beta TEST UPLOAD

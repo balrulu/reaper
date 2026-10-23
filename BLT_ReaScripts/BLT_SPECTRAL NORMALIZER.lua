@@ -1,5 +1,5 @@
 -- @description SPECTRAL NORMALIZER
--- @version 0.6.7
+-- @version 0.6.8
 -- @author Balrulu
 -- @provides
 --   . > ../
@@ -3782,7 +3782,7 @@ function App.commit(j)
    if not safe or not removed then j.preserve=true end
   end
  end
- R.PreventUIRefresh(-1);R.Undo_EndBlock2(j.project,'BLT Spectral Normalizer: Render to new items',-1);R.UpdateArrange()
+ R.PreventUIRefresh(-1);R.Undo_EndBlock2(j.project,'BLT Spectral Normalizer: Render to new items',4);R.UpdateArrange()
  assert(ok,err);j.committed=true
 end
 function App.step(j)

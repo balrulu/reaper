@@ -1,5 +1,5 @@
 -- @description COLOR PALETTE
--- @version 0.6.6
+-- @version 0.6.7
 -- @author Balrulu
 -- @provides
 --   . > ../
@@ -2947,7 +2947,7 @@ local function create_color_core(api)
    end
   end
   api.PreventUIRefresh(-1)
-  api.Undo_EndBlock2(project,done and ('BLT COLOR PALETTE: '..(reset and 'Reset' or 'Set')..' selected '..kind..' colors') or 'BLT COLOR PALETTE: Restore color transaction',-1)
+  api.Undo_EndBlock2(project,done and ('BLT COLOR PALETTE: '..(reset and 'Reset' or 'Set')..' selected '..kind..' colors') or 'BLT COLOR PALETTE: Restore color transaction',kind=='track' and 1 or kind=='item' and 4 or 8)
   api.UpdateArrange();if kind=='ruler' then api.UpdateTimeline() end
   if not done then return false,restored and 'rollback' or 'restore_failed',0 end
   return true,'changed',#changes

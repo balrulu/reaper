@@ -1,5 +1,5 @@
 -- @description CR MINIM
--- @version 0.6.7
+-- @version 0.6.9
 -- @author Balrulu
 -- @provides
 --   . > ../
@@ -3166,6 +3166,7 @@ local LanguageCatalog={en={
  ["BLT CR MINIM: バリエーション生成"]="BLT CR MINIM: Generate variations",
  ["\n生成WAVは保存済みです。"]="\nGenerated WAV has been saved.",
  ["音声アイテムを選択してください。"]="Select audio items.",
+ ["波形を選択してください"]="Select a waveform.",
  ["CHAMELEON  REAPERテーマに擬態"]="CHAMELEON  REAPER theme",
  ["CHAMELEON  オリジナル配色"]="CHAMELEON  Original colors",
  ["カスタムタイトルバーには js_ReaScriptAPI が必要です。\nReaPack から js_ReaScriptAPI をインストールしてください。"]="The app bar requires js_ReaScriptAPI.\nInstall js_ReaScriptAPI via ReaPack.",
@@ -4006,7 +4007,7 @@ function Core.commit(j)
   R.SetMediaItemSelected(item,false);R.UpdateItemInProject(item)
  end,debug.traceback)
  if not ok and item then R.DeleteTrackMediaItem(track,item) end
- R.PreventUIRefresh(-1);R.Undo_EndBlock2(p.project,'BLT CR MINIM: バリエーション生成',-1);R.UpdateArrange()
+ R.PreventUIRefresh(-1);R.Undo_EndBlock2(p.project,'BLT CR MINIM: バリエーション生成',4);R.UpdateArrange()
  if not ok then error(tostring(err)..'\n生成WAVは保存済みです。',0) end
  j.committed=true;return item
 end
@@ -4513,8 +4514,9 @@ local function source_plot()
  local x,y,w,h=30,143,720,42
  local p=A.source;local duration=p and p.duration or 1
  local vs,ve=A.view_start or 0,A.view_end or duration;local span=max(.000001,ve-vs)
- rect(x,y,w,h,C.field);line(x,y+h/2,x+w,y+h/2,C.edge,.3)
+ rect(x,y,w,h,C.field)
  if not p then return end
+ line(x,y+h/2,x+w,y+h/2,C.edge,.3)
  for i=0,w-1 do
   local a,b=UI.wave_bin(vs+(i+.5)/w*span,true)
   line(x+i,y+h/2-clamp(b,-1,1)*(h/2-3),x+i,y+h/2-clamp(a,-1,1)*(h/2-3),C.accent2,.52)
@@ -4547,6 +4549,7 @@ local function wave_draw()
   A.source~=nil,A.view_start,A.view_end,A.offset,A.slice,A.slice_end,A.vary_length,A.retrigger_on,A.wave_target) then sourceRevision=sourceRevision+1 end
  if A.source and A.retrigger_on~=false and not A.busy then gfx.wheelRegion(ox+30*scale,oy+143*scale,720*scale,42*scale)end
  cached(sourceCanvas,30,143,720,42,sourceRevision,source_plot)
+ if not p then label('波形を選択してください',30,143,13,C.muted,1,720,42,5) end
  label(string.format('%.4f s',A.view_start or 0),30,190,9,C.faint,3,100,14)
  right_label(string.format('%.4f s',A.view_end or duration),750,190,9,C.faint,3)
 end

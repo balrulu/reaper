@@ -1,5 +1,5 @@
 -- @description INTERVAL
--- @version 0.6.21
+-- @version 0.6.22
 -- @author Balrulu
 -- @provides
 --   . > ../
@@ -3264,9 +3264,11 @@ function Core.apply(project, interval, mode, unit, scope, include_ruler)
   R.Undo_BeginBlock2(project)
   R.PreventUIRefresh(1)
   local touched = {}
+  local undo_flags = 0
   local ok, detail = xpcall(function()
     for _, change in ipairs(changes) do
       touched[#touched + 1] = change
+      undo_flags = undo_flags | (type(change.item)=="table" and change.item.ruler_guid and 8 or 4)
       if not Core.set_position(project,change.item,change.after) then
         error("Could not move alignment target")
       end
@@ -3286,7 +3288,7 @@ function Core.apply(project, interval, mode, unit, scope, include_ruler)
   local scope_name = scope == "track" and "by track" or scope == "block" and "overlap blocks" or "all items"
   local undo_name = mode == "gap" and ("Interval: space selected items by end-to-start gap (" .. unit_name .. ", " .. scope_name .. ")")
     or ("Interval: align selected item starts (" .. unit_name .. ", " .. scope_name .. ")")
-  R.Undo_EndBlock2(project, ok and undo_name or "Interval: failed alignment", include_ruler and -1 or 4)
+  R.Undo_EndBlock2(project, ok and undo_name or "Interval: failed alignment", undo_flags)
   if not ok then
     R.ShowConsoleMsg("Interval error:\n" .. public_error(detail) .. "\n")
     return false, restored and "整列に失敗しました。元の位置に戻しました。"

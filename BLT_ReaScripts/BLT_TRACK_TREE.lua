@@ -1,5 +1,5 @@
 -- @description TRACK TREE
--- @version 0.3.12
+-- @version 0.3.13
 -- @author Balrulu
 -- @provides
 --   . > ../
@@ -2548,11 +2548,11 @@ function Core.plan(tree,selected,targetId,mode)
  for i,r in ipairs(result)do r.delta=(result[i+1]and result[i+1].depth or 0)-r.depth end
  return result
 end
-local function transaction(api,project,title,fn)
+local function transaction(api,project,title,flags,fn)
  assert(api.EnumProjects(-1,'')==project,'プロジェクトが切り替わりました。')
  api.Undo_BeginBlock2(project);api.PreventUIRefresh(1)
  local ok,err=xpcall(fn,tostring)
- api.PreventUIRefresh(-1);api.Undo_EndBlock2(project,title,-1)
+ api.PreventUIRefresh(-1);api.Undo_EndBlock2(project,title,flags)
  if not ok then api.Undo_DoUndo2(project)end
  api.TrackList_AdjustWindows(false);api.UpdateArrange()
  assert(ok,err)
@@ -2605,7 +2605,7 @@ function Core.pastenames(api,text,ids)
   index=index+1
  end end
  if #changes==0 then return 0 end
- transaction(api,tree.project,'BLT Track Tree: Paste track names',function()
+ transaction(api,tree.project,'BLT Track Tree: Paste track names',1,function()
   for _,change in ipairs(changes)do assert(api.GetSetMediaTrackInfo_String(change.ptr,'P_NAME',change.name,true),'トラック名を変更できません。')end
  end)
  return #changes
@@ -2616,7 +2616,7 @@ function Core.move(api,tree,selected,target,mode)
  local result=Core.plan(live,selected,target,mode);local changed=false
  for i,r in ipairs(result)do if r.id~=live.rows[i].id or r.delta~=live.rows[i].delta then changed=true;break end end
  if not changed then return end
- transaction(api,tree.project,'BLT Track Tree: Move tracks',function()
+ transaction(api,tree.project,'BLT Track Tree: Move tracks',-1,function()
   for _,r in ipairs(live.rows)do assert(api.SetMediaTrackInfo_Value(r.ptr,'I_FOLDERDEPTH',0))end
   for i,r in ipairs(result)do
    if api.GetTrack(tree.project,i-1)~=r.ptr then
@@ -2638,7 +2638,7 @@ function Core.visibility(api,tree,ids,on)
   for _,r in ipairs(live.rows)do if r.shown~=on or r.mixer~=on then ids[r.id]=true end end
  end
  if not next(ids)then return end
- transaction(api,tree.project,'BLT Track Tree: Track visibility',function()
+ transaction(api,tree.project,'BLT Track Tree: Track visibility',1|8,function()
   if ids[live.master.id]then
    local flags=api.GetMasterTrackVisibility();api.SetMasterTrackVisibility((flags&~3)|(on and 1 or 2))
   end
@@ -2653,7 +2653,7 @@ function Core.pin(api,tree,ids,on)
  local targets={};if ids[live.master.id]and live.master.pinned~=on then targets[1]=live.master end
  for _,r in ipairs(live.rows)do if ids[r.id]and r.pinned~=on then targets[#targets+1]=r end end
  if #targets==0 then return end
- transaction(api,live.project,'BLT Track Tree: '..(on and 'Pin tracks'or'Unpin tracks'),function()
+ transaction(api,live.project,'BLT Track Tree: '..(on and 'Pin tracks'or'Unpin tracks'),1,function()
   for _,r in ipairs(targets)do assert(api.SetMediaTrackInfo_Value(r.ptr,'B_TCPPIN',on and 1 or 0),'トラックの固定状態を変更できません。')end
  end)
 end
@@ -2668,7 +2668,7 @@ function Core.reveal(api,tree,id)
   end
   node=node.parent
  end
- if #changes>0 then transaction(api,live.project,'BLT Track Tree: Reveal track',function()
+ if #changes>0 then transaction(api,live.project,'BLT Track Tree: Reveal track',1|8,function()
   for _,change in ipairs(changes)do
    if change.row.master then api.SetMasterTrackVisibility(api.GetMasterTrackVisibility()|1)
    else assert(api.SetMediaTrackInfo_Value(change.row.ptr,change.key,change.value))end

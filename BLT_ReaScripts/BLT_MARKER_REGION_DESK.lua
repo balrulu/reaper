@@ -1,5 +1,5 @@
 -- @description MARKER REGION DESK
--- @version 0.6.9
+-- @version 0.6.10
 -- @author Balrulu
 -- @provides
 --   . > ../
@@ -3521,7 +3521,7 @@ function Core.delete(project,items)
       if R.GetRegionOrMarker(project,-1,v.guid) then error("削除結果を確認できません。",0) end
     end
   end,debug.traceback)
-  R.PreventUIRefresh(-1);R.UpdateTimeline();R.UpdateArrange();R.Undo_EndBlock2(project,APP_NAME..": delete markers/regions",-1)
+  R.PreventUIRefresh(-1);R.UpdateTimeline();R.UpdateArrange();R.Undo_EndBlock2(project,APP_NAME..": delete markers/regions",8)
   if not ok then
     if count==0 then return nil,"削除できませんでした。一覧を確認してください。\n"..tostring(err) end
     R.Undo_DoUndo2(project)
@@ -3797,7 +3797,7 @@ local function toggle_visibility(guid)
   if not target then return end
   R.Undo_BeginBlock2(A.project)
   local ok,err=pcall(Core.set_flag,A.project,guid,"B_HIDDEN",target.visible)
-  R.UpdateTimeline();R.UpdateArrange();R.Undo_EndBlock2(A.project,APP_NAME..": visibility",-1)
+  R.UpdateTimeline();R.UpdateArrange();R.Undo_EndBlock2(A.project,APP_NAME..": visibility",8)
   sync_selection()
   if not ok then report_error(tostring(err));return end
   local ptr=Core.resolve(A.project,guid)

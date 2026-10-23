@@ -1,5 +1,5 @@
 -- @description ENVELOPE CANVAS TRACK
--- @version 0.6.5
+-- @version 0.6.6
 -- @author Balrulu
 -- @provides
 --   . > ../
@@ -4327,7 +4327,8 @@ function UI.load_settings()
  UI.sync_line_targets()
 end
 
-Track={tag='P_POOL_EXT:BLT_CANVAS_TRACK_V1'}
+-- Routing envelopes use TRACKCFG; include FX/non-FX envelopes and shared pool contents.
+Track={tag='P_POOL_EXT:BLT_CANVAS_TRACK_V1',undo_flags=1|32|64|128}
 function Track.required()
  if not R.BR_EnvAlloc or not R.BR_EnvGetProperties or not R.BR_EnvSetProperties or not R.BR_EnvFree then
   error('SWS拡張をインストールしてください。',0)
@@ -4501,7 +4502,7 @@ function Track.finish()
   local alive=R.EnumProjects(-1,'')==g.project
   if not alive then for i=0,1023 do local p=R.EnumProjects(i,'');if not p then break end;if p==g.project then alive=true;break end end end
   if not alive then return end
-  R.Undo_EndBlock2(g.project,'BLT Envelope Canvas Track: Draw',-1)
+  R.Undo_EndBlock2(g.project,'BLT Envelope Canvas Track: Draw',Track.undo_flags)
   if A.v and A.v.project==g.project then A.revision=R.GetProjectStateChangeCount(g.project) end
  end
 end
@@ -4924,7 +4925,7 @@ function Track.automate(v,bindings,layers)
   end
  end
  if previous and R.ValidatePtr2(v.project,previous,'TrackEnvelope*') then R.SetCursorContext(2,previous) else R.SetCursorContext(1,nil) end
- R.PreventUIRefresh(-1);R.Undo_EndBlock2(v.project,'BLT Envelope Canvas Track: Automation items',-1);R.UpdateArrange()
+ R.PreventUIRefresh(-1);R.Undo_EndBlock2(v.project,'BLT Envelope Canvas Track: Automation items',Track.undo_flags);R.UpdateArrange()
  if not ok then error(err,0) end
  return #plans
 end

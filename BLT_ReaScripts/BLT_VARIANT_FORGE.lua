@@ -1,5 +1,5 @@
 -- @description VARIANT FORGE
--- @version 0.6.5
+-- @version 0.6.6
 -- @author Balrulu
 -- @provides
 --   . > ../
@@ -3947,7 +3947,7 @@ end
 return B
 end)()
 
-local Core={VERSION='0.6.5',SOURCE_SR=48000,SOURCE_HOP=48,SOURCE_BLOCK=12000,SOURCE_PREVIEW_BINS=1400,SOURCE_MAX_REGIONS=16384,
+local Core={VERSION='0.6.6',SOURCE_SR=48000,SOURCE_HOP=48,SOURCE_BLOCK=12000,SOURCE_PREVIEW_BINS=1400,SOURCE_MAX_REGIONS=16384,
  GENERATED_TAG='P_EXT:BLT_VARIANT_FORGE',TEMP_TAG='P_EXT:BLT_VARIANT_FORGE_TEMP',SECTION='BLT_VARIANT_FORGE',EQ_FIXED_CACHE={}}
 Core.STALE_TEMP_PROJECTS={};Core.RUN_ID='';Core.TEMP_HEARTBEAT_TTL=8;Core.TEMP_HEARTBEAT_KEY='temp_live_registry_v1';Core.temp_heartbeat_at=0
 local abs,min,max,floor,ceil=math.abs,math.min,math.max,math.floor,math.ceil
@@ -5800,7 +5800,7 @@ function Core.apply(snapshot,groups,s,checkpoint,restore_selection)
   for track,mode in pairs(free_before) do local called,result=pcall(R.SetMediaTrackInfo_Value,track,'I_FREEMODE',mode);if not called or not result then restored=false end end
  end
  R.SelectAllMediaItems(project,false);for _,it in ipairs(originalSelection) do if R.ValidatePtr2(project,it,'MediaItem*') then R.SetMediaItemSelected(it,true) end end
- R.PreventUIRefresh(-1);if next(free_tracks) then R.UpdateTimeline() end;R.UpdateArrange();R.Undo_EndBlock2(project,ok and ('BLT Variant Forge: '..#groups..' variations') or 'BLT Variant Forge: failed (copies removed)',-1)
+ R.PreventUIRefresh(-1);if next(free_tracks) then R.UpdateTimeline() end;R.UpdateArrange();R.Undo_EndBlock2(project,ok and ('BLT Variant Forge: '..#groups..' variations') or 'BLT Variant Forge: failed (copies removed)',next(free_tracks) and (1|4) or 4)
  if not ok then R.ShowConsoleMsg('BLT Variant Forge:\n'..BLT.publicError(err)..'\n');return nil,restored and ('作成を中止し、今回のコピーを削除しました。\n'..BLT.publicError(err)) or '処理を中止しました。コピーの削除に失敗したためUndoで戻してください。',nil,nil,cleanup_failed,restored end
  return #created,created,free_before,original_before
 end

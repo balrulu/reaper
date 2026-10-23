@@ -1,9 +1,10 @@
 -- @description LOOP RM STUDIO
--- @version 0.6.12
+-- @version 0.6.14
 -- @author Balrulu
 -- @provides
 --   . > ../
 -- @changelog
+--   書出しは先頭のサステインのみを採用し、出力範囲内へ切り詰める。元のリージョンは維持。
 --   BLT SERIES Beta TEST UPLOAD
 -- @about
 --   BLT SERIES Beta TEST UPLOAD
@@ -3258,8 +3259,6 @@ local LanguageCatalog={en={
  ["リージョン位置が不正です。"]="Invalid region position.",
  ["不明なBLT接頭辞: "]="Unknown BLT prefix: ",
  ["未対応の区間種類です。"]="Unsupported section type.",
- ["ループが書き出し範囲をまたいでいます: "]="Loop crosses the export boundary: ",
- ["サステインループは1ファイルにつき1つまでです。"]="Only one sustain loop per file.",
  ["1サンプル未満のリージョンがあります: "]="Region shorter than one sample: ",
  ["名前が長すぎます。"]="Name too long.",
  ["REAPERから出力先を取得できません。"]="Cannot read output path from REAPER.",
@@ -3653,7 +3652,6 @@ local LanguageCatalog={en={
  {"^CP932に変換できない文字があります: (.-) — 名前を変更するかUTF%-8を選んでください。$","Character cannot be encoded in CP932: %s — Rename it or choose UTF-8."},
  {"^(.-) — 名前を変更するかUTF%-8を選んでください。$","%s — Rename it or choose UTF-8."},
  {"^不明なBLT接頭辞: (.-)$","Unknown BLT prefix: %s"},
- {"^ループが書き出し範囲をまたいでいます: (.-)$","Loop crosses the export boundary: %s"},
  {"^1サンプル未満のリージョンがあります: (.-)$","Region shorter than one sample: %s"},
  {"^作業ファイルが存在します: (.-)$","Work file exists: %s"},
  {"^レンダー対象リージョンが見つかりません: (.-)$","Render region not found: %s"},
@@ -3709,7 +3707,7 @@ local LanguageCatalog={en={
  {"^「(.*)」を上書きしますか？$","Overwrite \"%s\"?"},
  {"^(%d+)個インポートしました。$","Imported %s preset(s)."},
  {"^(%d+)件をノーマライズしました。選択を解除しました。$","Normalized %s items and deselected them."},
-},prefixes={"REAPERが予期しないWAV出力先を返しました: ","CP932に変換できない文字があります: ","レンダー対象リージョンが見つかりません: ","ループが書き出し範囲をまたいでいます: ","1サンプル未満のリージョンがあります: ","一括書き出しを中止しました。完了済み: "," 移動先の音声アイテムを選択へ追加: ","\n\nレンダー音声は保持しています:\n","日本語入力欄を初期化できません。\n","完了。一時WAVが残っています: ","レンダー設定を取得できません: ","レンダー設定を変更できません: ","プリセットを読み込みました: ","プリセットを保存しました: ","作業ファイルが存在します: ","不明なBLT接頭辞: ","書き出し完了: ","現在: "}}
+},prefixes={"REAPERが予期しないWAV出力先を返しました: ","CP932に変換できない文字があります: ","レンダー対象リージョンが見つかりません: ","1サンプル未満のリージョンがあります: ","一括書き出しを中止しました。完了済み: "," 移動先の音声アイテムを選択へ追加: ","\n\nレンダー音声は保持しています:\n","日本語入力欄を初期化できません。\n","完了。一時WAVが残っています: ","レンダー設定を取得できません: ","レンダー設定を変更できません: ","プリセットを読み込みました: ","プリセットを保存しました: ","作業ファイルが存在します: ","不明なBLT接頭辞: ","書き出し完了: ","現在: "}}
 
 LanguageCatalog.en["選択アイテム"]="Selected items"
 LanguageCatalog.en["個別"]="Each"
@@ -4328,30 +4326,39 @@ function Core.plan(rows,start,ending,sr,options)
  local first,last=floor(start*sr+.5),floor(ending*sr+.5)
  local p={start=first/sr,finish=last/sr,requested_start=start,requested_finish=ending,sr=sr,frames=last-first,entries={},outside=0,clipped=0,omitted=0,encoding=options.encoding or 'UTF-8'}
  assert(p.frames>0 and p.frames<=0xffffffff,'書き出し範囲がWAVの上限を超えています。')
- local function sample(t) return floor(t*sr+.5)-first end
- for _,row in ipairs(rows) do
-  assert(finite(row.start) and finite(row.finish),'リージョン位置が不正です。')
+ local sustainStart,sustainId,sustainIndex,sustainClipped
+ local function sample(t)return floor(t*sr+.5)-first end
+ for _,row in ipairs(rows)do
+  assert(finite(row.start)and finite(row.finish),'リージョン位置が不正です。')
   local isr=row.isr;local included=isr and row.finish>start and row.start<ending or not isr and row.start>=start and row.start<=ending
   if included then
    assert(row.kind~='invalid','不明なBLT接頭辞: '..row.raw)
-   assert(row.kind=='marker' or row.kind=='region' or row.kind=='sustain','未対応の区間種類です。')
-   local enabled=row.kind=='marker' and options.embed_markers~=false
-    or row.kind=='region' and options.embed_regions~=false
-    or row.kind=='sustain' and options.embed_loop_region~=false
-   if options.exclude_selected_region and row.kind=='region' and row.key==options.selected_key then enabled=false end
+   assert(row.kind=='marker'or row.kind=='region'or row.kind=='sustain','未対応の区間種類です。')
+   local loop=row.kind=='sustain'
+   local enabled=row.kind=='marker'and options.embed_markers~=false
+    or row.kind=='region'and options.embed_regions~=false
+    or loop and options.embed_loop_region~=false
+   if options.exclude_selected_region and row.kind=='region'and(row.key==options.selected_key or(options.selected_keys and options.selected_keys[row.key]))then enabled=false end
+   if(row.kind=='marker'and options.marker_hash_only or row.kind=='region'and options.region_hash_only)and row.raw:sub(1,1)~='#'then enabled=false end
    if not enabled then p.omitted=p.omitted+1;goto continue end
+   if loop and p.sustain and not(row.start<sustainStart or(row.start==sustainStart and row.id and sustainId and row.id<sustainId))then p.omitted=p.omitted+1;goto continue end
+   assert(not loop or row.finish>row.start,'リージョン位置が不正です。')
    local s,e=sample(row.start),sample(row.finish)
-   if row.kind=='sustain' then
-    assert(row.start>=start and row.finish<=ending,'ループが書き出し範囲をまたいでいます: '..row.name)
-    assert(not p.sustain,'サステインループは1ファイルにつき1つまでです。')
-   elseif isr and (s<0 or e>p.frames) then p.clipped=p.clipped+1 end
+   local clipped=isr and(s<0 or e>p.frames)
    s=clamp(s,0,p.frames);e=clamp(e,0,p.frames)
+   if loop then s=math.min(s,p.frames-1);e=math.max(e,s+1)end
    assert(not isr or e>s,'1サンプル未満のリージョンがあります: '..row.name)
-   local encoded=row.kind=='sustain' and '' or Core.encode_name(row.name,p.encoding)
+   local encoded=loop and''or Core.encode_name(row.name,p.encoding)
    local entry={kind=row.kind,name=row.name,start=s,finish=e,encoded=encoded,id=row.id,key=row.key}
    assert(#entry.encoded<=65535,'名前が長すぎます。')
-   p.entries[#p.entries+1]=entry
-   if row.kind=='sustain' then p.sustain=entry end
+   if loop then
+    if p.sustain then
+     p.omitted=p.omitted+1;if sustainClipped then p.clipped=p.clipped-1 end
+     p.entries[sustainIndex]=entry
+    else sustainIndex=#p.entries+1;p.entries[sustainIndex]=entry end
+    p.sustain,sustainStart,sustainId,sustainClipped=entry,row.start,row.id,clipped
+   else p.entries[#p.entries+1]=entry end
+   if clipped then p.clipped=p.clipped+1 end
   else p.outside=p.outside+1 end
   ::continue::
  end
@@ -4982,6 +4989,7 @@ function Core.crossfade_commit(j)
   end
  end
  if has_mixed then assert(type(R.Undo_DoUndo2)=='function','安全なクロスフェード置換に必要なUndo APIを利用できません。') end
+ local undo_flags=4
  j.commit_started=true;R.Undo_BeginBlock2(j.project)
  local created={}
  local function split(item,at)
@@ -5045,6 +5053,7 @@ function Core.crossfade_commit(j)
     assert(R.SetMediaItemInfo_Value(middle,'B_LOOPSRC',0),'加工素材のループ設定を更新できません。')
    end
    if p.region and (p.region.start~=p.loop_start or p.region.finish~=p.loop_finish) then
+    undo_flags=undo_flags|8
     assert(R.SetProjectMarker3(j.project,p.region.id,true,p.loop_start,p.loop_finish,p.region.raw,p.region.color),'サステインのサンプル位置を更新できません。')
    end
    p.peak_source=source;p.peak_item=middle
@@ -5069,7 +5078,7 @@ function Core.crossfade_commit(j)
    rollback_complete=not failed
   end
  end
- R.Undo_EndBlock2(j.project,'BLT LOOP RM STUDIO: クロスフェードループ',-1)
+ R.Undo_EndBlock2(j.project,'BLT LOOP RM STUDIO: クロスフェードループ',undo_flags)
  if not ok and has_mixed and j.commit_mutated then
   local called,result=pcall(R.Undo_DoUndo2,j.project);local restored=called and result~=0
   if not restored then err=err..'\n処理前のアイテムを自動復元できませんでした。REAPERのUndoを実行してください。' end
@@ -5480,7 +5489,7 @@ function Core.loop_adjust_commit(j)
   end
   if not restored then err=err..'\n一部を復元できませんでした。REAPERのUndoで戻してください。' end
  end
- R.Undo_EndBlock2(j.project,'BLT LOOP RM STUDIO: '..(j.mode=='zero' and 'ゼロクロスへ調整' or '周期へ調整'),-1);R.UpdateArrange()
+ R.Undo_EndBlock2(j.project,'BLT LOOP RM STUDIO: '..(j.mode=='zero' and 'ゼロクロスへ調整' or '周期へ調整'),4|8);R.UpdateArrange()
  if not ok then error(err,0) end
 end
 
@@ -6056,11 +6065,11 @@ function UI.choose_directory()
   end
  else UI.begin_edit('field_directory',A,'directory',nil) end
 end
-function UI.undo(label,fn)
+function UI.undo(label,flags,fn)
  assert(R.EnumProjects(-1,'')==A.project,'プロジェクトが変わりました。')
  R.Undo_BeginBlock2(A.project)
  local ok,err=xpcall(fn,debug.traceback)
- R.Undo_EndBlock2(A.project,'BLT LOOP RM STUDIO: '..label,-1);R.UpdateArrange();UI.poll(R.time_precise(),true)
+ R.Undo_EndBlock2(A.project,'BLT LOOP RM STUDIO: '..label,flags);R.UpdateArrange();UI.poll(R.time_precise(),true)
  if not ok then error(err,0) end
 end
 function UI.project_undo()
@@ -6080,7 +6089,7 @@ function UI.project_undo()
 end
 function UI.add_commit(kind,ranges,names,project)
  assert(project==R.EnumProjects(-1,''),'プロジェクトが変わりました。追加をやり直してください。')
- UI.undo(Core.names[kind]..'を追加',function()
+ UI.undo(Core.names[kind]..'を追加',8,function()
   local c=UI.insert_color(kind);local native=R.ColorToNative(floor(c[1]*255+.5),floor(c[2]*255+.5),floor(c[3]*255+.5))|0x1000000
   local added={}
   local ok,err=xpcall(function()
@@ -6564,7 +6573,7 @@ function UI.move_loop_drag(d)
  local items=UI.loop_target_items(A.project,'drag',false,d.selected)
  local p=Core.loop_move_plan(A.project,A.rows,d.selected,d.edge,d.delta,d.relative,items)
  local added=0
- UI.undo('波形ドラッグでループ範囲を移動',function()
+ UI.undo('波形ドラッグでループ範囲を移動',4|8,function()
   local r=p.row
   assert(R.SetProjectMarker3(A.project,r.id,true,p.new_start,p.new_end,r.raw,r.color),'サステインの更新に失敗しました。')
   for _,item in ipairs(p.auto_select) do
@@ -7537,7 +7546,7 @@ end,'ファイル名のみREAPER本体の設定を使用。ワイルドカード
  U.scale,U.ox,U.oy=scale,ox,oy+22*scale
  local footer=(A.warning or A.render_batch or completed) and A.status or (message~='' and message or A.status)
  if Media.waiting then footer=Media.message(SECTION) elseif BLT.notice then footer=BLT.notice end
- shell:footer(footer,A.warning or (not A.render_batch and A.problem),W,H,'0.6.5')
+ shell:footer(footer,A.warning or (not A.render_batch and A.problem),W,H,'0.6.13')
  U.scale,U.ox,U.oy=density*scale,ox,oy
  U.editor:frame()
  UI.draw_name_dialog();UI.draw_popup();UI.draw_period_notice(now)

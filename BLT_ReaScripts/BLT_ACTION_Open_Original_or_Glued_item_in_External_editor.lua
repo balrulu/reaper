@@ -1,5 +1,5 @@
 -- @description ACTION - Open selected item in external editor (original or glued range)
--- @version 1.0.2
+-- @version 1.0.3
 -- @author Balrulu
 -- @provides
 --   . > ../
@@ -333,7 +333,7 @@ local function execute(mode, expected)
     if not success then restored = false end
   end
   R.PreventUIRefresh(-1)
-  R.Undo_EndBlock2(0, "BLT_ACTION: " .. tr("表示範囲をグルー", "Glue visible item range"), -1)
+  R.Undo_EndBlock2(0, "BLT_ACTION: " .. tr("表示範囲をグルー", "Glue visible item range"), 1|4|8)
   R.UpdateArrange()
   if not restored then stop(tr("編集範囲またはグループ設定を復元できません。Ctrl+Zで今回の操作を戻してください。", "Cannot restore the editing areas or grouping settings. Undo this operation in REAPER.")) end
   if not ok then stop(message .. tr("\n外部エディタへの送信は行っていません。作成途中の変更はCtrl+Zで戻せます。", "\nNothing was sent to the external editor. You can undo any changes made in REAPER.")) end
