@@ -1,5 +1,5 @@
 -- @description ACTION - Auto-hide video window under mouse (toggle)
--- @version 1.1.1
+-- @version 1.1.2
 -- @author Balrulu
 -- @provides
 --   . > ../
@@ -8,10 +8,10 @@
 -- @about
 --   BLT SERIES Beta TEST UPLOAD
 
--- BEGIN BLT TOGGLE RESTORE EMBEDDED 1.0.0
+-- BEGIN BLT TOGGLE RESTORE EMBEDDED 1.0.1
 do
 local BLTToggleRestoreSource = [====[
--- BLT toggle persistence 1.0.0. Embedded in each supported action.
+-- BLT toggle persistence 1.0.1. Embedded in each supported action.
 -- The public action is a dispatcher; its private worker owns the defer loop.
 -- Only a dispatcher's explicit OFF writes OFF. Worker shutdown never does.
 local M = {}
@@ -82,14 +82,25 @@ local function named(api, command)
   return value ~= '' and ('_' .. value:gsub('^_', '')) or ''
 end
 
-local function command_for(api, id)
+local function cached_worker(api, id)
   local saved = api.GetExtState(SECTION, id .. '_worker_command')
   local command = saved ~= '' and api.NamedCommandLookup(saved) or 0
-  if not command or command <= 0 then
-    command = api.AddRemoveReaScript(true, 0, worker_path(api, id), true)
-    assert(command and command > 0, 'Cannot register the BLT background worker.')
-    save(api, id .. '_worker_command', named(api, command), true)
-  end
+  command = command or 0
+  return command, command > 0 and api.GetToggleCommandStateEx(0, command) or -1
+end
+
+local function worker_source(id)
+  return 'local R=reaper\nlocal fn,err=loadfile(R.GetResourcePath().."/Scripts/BLT ReaScripts/BLT_Toggle_Restore.lua")\n'
+    .. 'if not fn then if R.ShowConsoleMsg then R.ShowConsoleMsg(tostring(err).."\\n")end;return end\n'
+    .. 'fn().worker(R,' .. string.format('%q', id) .. ')\n'
+end
+
+local function command_for(api, id)
+  local path = worker_path(api, id)
+  write(path, worker_source(id))
+  local command = api.AddRemoveReaScript(true, 0, path, true)
+  assert(command and command > 0, 'Cannot register the BLT background worker.')
+  save(api, id .. '_worker_command', named(api, command), true)
   return command
 end
 
@@ -101,10 +112,7 @@ function M.install(api, id, module_source)
   assert(valid_id(id) and type(module_source) == 'string', 'Invalid BLT restore installation.')
   api.RecursiveCreateDirectory(root(api), 0)
   write(root(api) .. '/BLT_Toggle_Restore.lua', module_source)
-  local worker = 'local R=reaper\nlocal fn,err=loadfile(R.GetResourcePath().."/Scripts/BLT ReaScripts/BLT_Toggle_Restore.lua")\n'
-    .. 'if not fn then if R.ShowConsoleMsg then R.ShowConsoleMsg(tostring(err).."\\n")end;return end\n'
-    .. 'fn().worker(R,' .. string.format('%q', id) .. ')\n'
-  write(worker_path(api, id), worker)
+  write(worker_path(api, id), worker_source(id))
   local startup = api.GetResourcePath() .. '/Scripts/__startup.lua'
   local original = read(startup) or ''
   local bom = original:sub(1, 3) == '\239\187\191' and original:sub(1, 3) or ''
@@ -131,32 +139,62 @@ function M.enter(api, id, module_source)
   -- Profilers/unregistered loadfile callers have no public action to dispatch.
   if section ~= 0 or not command or command <= 0 then return true end
   api.defer(function() end)
-  if api.set_action_options then api.set_action_options(1) end
-  local ok, err = xpcall(function()
-    if api.GetExtState(SECTION, id .. '_running') == '1' then
-      -- Turning OFF must not depend on rewriting/reading startup files.
-      save(api, id .. '_enabled', '0', true)
-      local worker = api.NamedCommandLookup(api.GetExtState(SECTION, id .. '_worker_command'))
-      if worker and worker > 0 then api.Main_OnCommand(worker, 0) end
-      api.SetToggleCommandState(0, command, 0);api.RefreshToolbar2(0, command)
-      return
-    end
+  if api.set_action_options then api.set_action_options(3) end
+  local function display(on)
+    api.SetToggleCommandState(0, command, on and 1 or 0);api.RefreshToolbar2(0, command)
+  end
+  local function attempt(fn)
+    local ok, err = xpcall(fn, debug.traceback)
+    if not ok then pcall(display, false);log(api, err) end
+  end
+  local function start()
     M.install(api, id, module_source)
     save(api, id .. '_path', path, true)
     save(api, id .. '_command', named(api, command), true)
     local worker = command_for(api, id)
     save(api, id .. '_enabled', '1', true)
     api.Main_OnCommand(worker, 0)
-    local on = api.GetExtState(SECTION, id .. '_running') == '1'
-    api.SetToggleCommandState(0, command, on and 1 or 0);api.RefreshToolbar2(0, command)
-  end, debug.traceback)
-  if not ok then log(api, err) end
+    local on = api.GetExtState(SECTION, id .. '_running') == '1' and api.GetToggleCommandStateEx(0, worker) == 1
+    display(on)
+    assert(on, 'The BLT background worker did not start: ' .. id)
+  end
+  attempt(function()
+    local marked = api.GetExtState(SECTION, id .. '_running') == '1'
+    local worker, state = cached_worker(api, id)
+    if marked and (state == 1 or worker <= 0) then
+      -- Turning OFF must not depend on rewriting/reading startup files.
+      save(api, id .. '_enabled', '0', true)
+      if worker > 0 then api.Main_OnCommand(worker, 0)
+      end
+      if api.GetExtState(SECTION, id .. '_running') == '1' then api.defer(function() attempt(function()
+        if api.GetExtState(SECTION, id .. '_enabled') == '0' then
+          save(api, id .. '_running', '', false)
+          if worker > 0 then api.SetToggleCommandState(0, worker, 0);api.RefreshToolbar2(0, worker) end
+        end
+      end) end) end
+      display(false)
+      return
+    end
+    if marked or state == 1 then
+      save(api, id .. '_enabled', '0', true)
+      if state == 1 then api.Main_OnCommand(worker, 0) end
+      display(false)
+      -- Let a stopped or unregistered worker finish before creating its replacement.
+      api.defer(function() api.defer(function() attempt(function()
+        save(api, id .. '_running', '', false);start()
+      end) end) end)
+    else start() end
+  end)
   return false
 end
 
 function M.worker(api, id)
   assert(valid_id(id), 'Unknown BLT toggle worker.')
-  if api.GetExtState(SECTION, id .. '_enabled') ~= '1' or api.GetExtState(SECTION, id .. '_running') == '1' then return end
+  if api.GetExtState(SECTION, id .. '_enabled') ~= '1' then
+    if api.set_action_options then api.set_action_options(9) end
+    return
+  end
+  if api.GetExtState(SECTION, id .. '_running') == '1' then return end
   local path = api.GetExtState(SECTION, id .. '_path')
   local command = api.NamedCommandLookup(api.GetExtState(SECTION, id .. '_command'))
   if not command or command <= 0 then
@@ -172,6 +210,7 @@ function M.worker(api, id)
     -- Session-only running state is cleared on either stop or host shutdown.
     -- The persisted enabled state belongs exclusively to the public dispatcher.
     save(api, id .. '_running', '', false)
+    if api.set_action_options then pcall(api.set_action_options, 9) end
     pcall(api.SetToggleCommandState, 0, command, 0);pcall(api.RefreshToolbar2, 0, command)
   end
   api.atexit(finish)
@@ -203,8 +242,13 @@ function M.restore(api)
   save(api, 'startup_done', '1', false)
   api.defer(function()
     for _, id in ipairs(IDS) do
-      if api.GetExtState(SECTION, id .. '_enabled') == '1' and api.GetExtState(SECTION, id .. '_running') ~= '1' then
-        local ok, err = pcall(function() api.Main_OnCommand(command_for(api, id), 0) end)
+      if api.GetExtState(SECTION, id .. '_enabled') == '1' then
+        local ok, err = pcall(function()
+          local worker, state = cached_worker(api, id)
+          if state == 1 or worker <= 0 and api.GetExtState(SECTION, id .. '_running') == '1' then return end
+          save(api, id .. '_running', '', false)
+          api.Main_OnCommand(command_for(api, id), 0)
+        end)
         if not ok then log(api, err) end
       end
     end
