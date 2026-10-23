@@ -15,7 +15,7 @@ concurrency:
 
 jobs:
   reapack-index:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
 
     steps:
       - name: Fetch repository
