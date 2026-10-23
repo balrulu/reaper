@@ -4,7 +4,6 @@
 -- @provides
 --   . > ../
 -- @changelog
---   書出しは先頭のサステインのみを採用し、出力範囲内へ切り詰める。元のリージョンは維持。
 --   BLT SERIES Beta TEST UPLOAD
 -- @about
 --   BLT SERIES Beta TEST UPLOAD
