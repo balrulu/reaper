@@ -1,5 +1,5 @@
 -- @description ENVELOPE CANVAS TRACK
--- @version 0.6.6
+-- @version 0.7.3
 -- @author Balrulu
 -- @provides
 --   . > ../
@@ -289,7 +289,7 @@ local function create_external_storage(api,section,source,state_keys)
  return P
 end
 
-local reaper=create_external_storage(reaper,'BLT_ENVELOPE_CANVAS_TRACK',debug.getinfo(1,'S').source,{'preferences_v1'})
+local reaper=create_external_storage(reaper,'BLT_ENVELOPE_CANVAS_TRACK',debug.getinfo(1,'S').source,{'preferences_v1','background_mode','spectrum_scale'})
 
 local BLTPresetLimits={bytes=16777216,stringBytes=2097152,nodes=262144,entries=8192}
 function BLTPresetLimits.show(english)
@@ -1130,11 +1130,16 @@ function M.new(api,title,width,height,section)
  local imageCache,retiredImages={},{}
  local gradientFrame=0
  local retireEpoch,retireFrame=floor(api.time_precise()*10),0
+ local function detach(image)
+  if type(I.ValidatePtr)~='function' or I.ValidatePtr(ctx,'ImGui_Context*')then
+   pcall(I.Detach,ctx,image)
+  end
+ end
  function H:attachImage(image)
   I.Attach(ctx,image);imageCache[image]=true
  end
  function H:releaseImage(image,batched)
-  if self.closing or batched then retiredImages[image]=nil;imageCache[image]=nil;I.Detach(ctx,image)
+  if self.closing or batched then retiredImages[image]=nil;imageCache[image]=nil;detach(image)
   elseif not retiredImages[image] then retiredImages[image]={frame=gradientFrame,time=api.time_precise()} end
  end
  function H:retainImages()
@@ -1161,7 +1166,7 @@ function M.new(api,title,width,height,section)
   local now=api.time_precise()
   for image,retired in pairs(retiredImages) do
    if self.closing or gradientFrame-retired.frame>=2 and now-retired.time>=.1 then
-    imageCache[image]=nil;retiredImages[image]=nil;I.Detach(ctx,image)
+    imageCache[image]=nil;retiredImages[image]=nil;detach(image)
    end
   end
  end
@@ -1739,9 +1744,12 @@ function M.new(host,ui,reference)
   cached={size=calibrated,height=height};group[size]=cached;self.metricCount=self.metricCount+1
   return cached
  end
- function T:close(cancel)
+ function T:close(cancel,reason)
   local e=self.edit;self.edit=nil
-  if e and not cancel then e.done(e.text) end
+  if e and not cancel then
+   e.done(e.text)
+   if self.onCommit then self.onCommit(e.id,e.text,reason or'blur')end
+  end
  end
  function T:open(id,text,done)
   if self.edit then self:close(false) end
@@ -1806,7 +1814,9 @@ function M.new(host,ui,reference)
   I.PushStyleColor(ctx,I.Col_Text,item.enabled and self.textColor or self.disabledColor)
   I.BeginDisabled(ctx,not item.enabled);I.SetNextItemWidth(ctx,width)
   if e.frames==0 then I.SetKeyboardFocusHere(ctx) end
-  local _,text=I.InputText(ctx,item.label,e.text,I.InputTextFlags_AutoSelectAll)
+  local flags=I.InputTextFlags_AutoSelectAll
+  if self.onCommit then flags=flags|I.InputTextFlags_EnterReturnsTrue end
+  local accepted,text=I.InputText(ctx,item.label,e.text,flags)
   e.text=text;local deactivated=I.IsItemDeactivated(ctx)
   local cancel=deactivated and I.IsKeyPressed(ctx,I.Key_Escape,false)
   local focusLost=not I.IsWindowFocused(ctx);local outside
@@ -1818,6 +1828,7 @@ function M.new(host,ui,reference)
   I.EndDisabled(ctx);I.PopStyleColor(ctx);I.PopStyleVar(ctx);I.PopFont(ctx)
   e.frames=e.frames+1
   if cancel then self:close(true)
+  elseif self.onCommit and accepted and e.frames>1 then self:close(false,'enter')
   elseif e.frames>1 and (deactivated or outside or focusLost) then self:close(false) end
  end
  function T:frame()
@@ -3012,6 +3023,9 @@ function M.new(host,api,C)
  function G.rect(x,y,w,h) api.JS_LICE_FillRect(bitmap,floor(x*dpi+.5),floor(y*dpi+.5),max(1,ceil(w*dpi)),max(1,ceil(h*dpi)),color,alpha,'COPY') end
  function G.line(x,y,xx,yy,aa) api.JS_LICE_Line(bitmap,x*dpi,y*dpi,xx*dpi,yy*dpi,color,alpha,'COPY',aa~=0) end
  function G.circle(x,y,r) api.JS_LICE_FillCircle(bitmap,x*dpi,y*dpi,r*dpi,color,alpha,'COPY',true) end
+ function G.bitmap(source,x,y,w,h,srcx,srcy,srcw,srch,opacity)
+  api.JS_LICE_ScaledBlit(bitmap,floor(x*dpi+.5),floor(y*dpi+.5),max(1,ceil(w*dpi)),max(1,ceil(h*dpi)),source,srcx,srcy,srcw,srch,opacity or 1,'COPY')
+ end
  function V:begin(w,h,scale,revision,tones)
   dpi=ceil(host.dpi or 1)*scale
   local iw,ih=max(1,ceil(w*dpi)),max(1,ceil(h*dpi))
@@ -3068,6 +3082,459 @@ function M.new(host,api,C)
   if bitmap then api.JS_LICE_DestroyBitmap(bitmap);bitmap=nil end
  end
  return V
+end
+return M
+end)()
+
+BLT.EnvelopeSpectrogram=(function()
+local M={SR=48000,N=8192,ROWS=384,MIN_COLUMNS=512,MAX_COLUMNS=2048,HOP=256,HIGH=24000}
+local min,max,floor,ceil,log=math.min,math.max,math.floor,math.ceil,math.log
+local byte=string.byte
+M.scales={{id='linear',name='Linear'},{id='mel',name='Mel'},{id='bark',name='Bark'},{id='log',name='Log'},{id='extended_log',name='Extended Log'}}
+local definitions={};for i,scale in ipairs(M.scales) do scale.index=i;definitions[scale.id]=scale end
+local total_rows=M.ROWS*#M.scales
+local pack_format='<'..string.rep('f',total_rows)
+function M.scale_id(id) return definitions[id] and id or 'log' end
+function M.scale_name(id) return definitions[M.scale_id(id)].name end
+function M.low(id) return id=='log' and 100 or id=='extended_log' and 10 or 0 end
+local function transform(hz,id)
+ if id=='linear' then return hz
+ elseif id=='mel' then return log(1+hz/700)
+ elseif id=='bark' then local x=hz/650;return log(x+math.sqrt(x*x+1)) end
+ return log(max(M.low(id),hz))
+end
+function M.position(hz,id)
+ id=M.scale_id(id);local low=transform(M.low(id),id)
+ return (transform(hz,id)-low)/(transform(M.HIGH,id)-low)
+end
+function M.frequency(position,id)
+ id=M.scale_id(id);local low=transform(M.low(id),id)
+ local value=low+position*(transform(M.HIGH,id)-low)
+ if id=='linear' then return value
+ elseif id=='mel' then return 700*(math.exp(value)-1)
+ elseif id=='bark' then return 325*(math.exp(value)-math.exp(-value)) end
+ return math.exp(value)
+end
+local window,band_cache=nil,{}
+local function reference_window()
+ if not window then window={};for i=0,M.N-1 do window[i+1]=.5-.5*math.cos(2*math.pi*i/(M.N-1)) end end
+ return window
+end
+local function bands_for(id)
+ if band_cache[id] then return band_cache[id] end
+ local bands={}
+ for row=1,M.ROWS do
+  local lo,hi=M.frequency((row-1)/M.ROWS,id),M.frequency(row/M.ROWS,id)
+  local first,last=max(1,ceil(lo*M.N/M.SR)),min(M.N//2-1,floor(hi*M.N/M.SR))
+  if last<first then first=max(1,min(M.N//2-1,floor(M.frequency((row-.5)/M.ROWS,id)*M.N/M.SR+.5)));last=first end
+  bands[row]={first,last}
+ end
+ band_cache[id]=bands;return bands
+end
+local stops={{.010,.020,.042},{.045,.080,.240},{.180,.200,.540},{.440,.300,.780},{.290,.640,.910},{.790,.940,1}}
+local crc_table={}
+for i=0,255 do
+ local c=i;for _=1,8 do c=(c>>1)~((c&1)==1 and 0xedb88320 or 0) end;crc_table[i]=c
+end
+local crc1,crc2,crc3={},{},{}
+for i=0,255 do
+ local c=crc_table[i];c=(c>>8)~crc_table[c&255];crc1[i]=c
+ c=(c>>8)~crc_table[c&255];crc2[i]=c
+ c=(c>>8)~crc_table[c&255];crc3[i]=c
+end
+local function crc(bytes,value)
+ local c=value or 0xffffffff;local size=#bytes;local i=1
+ while i+3<=size do
+  local a,b,d,e=byte(bytes,i,i+3);c=c~(a|(b<<8)|(d<<16)|(e<<24))
+  c=crc3[c&255]~crc2[(c>>8)&255]~crc1[(c>>16)&255]~crc_table[c>>24];i=i+4
+ end
+ for k=i,size do c=(c>>8)~crc_table[(c~byte(bytes,k))&255] end
+ return c
+end
+local function chunk(kind,bytes)
+ return string.pack('>I4',#bytes)..kind..bytes..string.pack('>I4',crc(bytes,crc(kind))~0xffffffff)
+end
+local png_signature='\137PNG\13\10\26\10'
+local png_end=chunk('IEND','')
+local default_palette
+local function mix(a,b,t) return {a[1]+(b[1]-a[1])*t,a[2]+(b[2]-a[2])*t,a[3]+(b[3]-a[3])*t} end
+function M.configure_palette(C,enabled)
+ if not enabled and default_palette then
+  local changed=M.palette~=default_palette;M.palette=default_palette;return changed
+ end
+ local colors=stops
+ if enabled then
+  local base=mix(C.field,C.bg,.25);local accent=C.accent;local high=C.accent2
+  colors={base,mix(base,accent,.18),mix(base,accent,.45),mix(base,accent,.8),mix(accent,high,.35),mix(high,C.text,.8)}
+ end
+ local bytes={}
+ for i=0,255 do
+  local t=i/255*(#colors-1);local a=min(#colors-1,floor(t)+1);local f=t-(a-1)
+  for k=1,3 do bytes[#bytes+1]=floor(max(0,min(1,colors[a][k]+(colors[a+1][k]-colors[a][k])*f))*255+.5) end
+ end
+ local plte=chunk('PLTE',string.char(table.unpack(bytes)))
+ if M.palette and M.palette.chunk==plte then return false end
+ M.palette={chunk=plte};if not enabled then default_palette=M.palette end;return true
+end
+M.configure_palette(nil,false)
+local color_processor=[[
+function png_crc_byte(value) local(high) (
+ high=floor(crc_value/256);
+ crc_value=high ~ crc_table[(crc_value-high*256) ~ value];
+ crc_value<0 ? crc_value+=4294967296;
+);
+function png_put(value) (
+ str_setchar(#block,strlen(#block),value);png_crc_byte(value);
+);
+function png_put32(word) local(c a b d e high) (
+ word>=2147483648 ? word-=4294967296;
+ str_setchar(#block,strlen(#block),word,'i');
+ c=crc_value>=2147483648 ? crc_value-4294967296 : crc_value;
+ c=c ~ word;c<0 ? c+=4294967296;
+ high=floor(c/256);a=c-high*256;c=high;
+ high=floor(c/256);b=c-high*256;c=high;
+ high=floor(c/256);d=c-high*256;e=high;
+ crc_value=crc3[a] ~ crc2[b] ~ crc1[d] ~ crc_table[e];
+ crc_value<0 ? crc_value+=4294967296;
+);
+maxima=0;crc_table=groups;crc1=crc_table+256;crc2=crc1+256;crc3=crc2+256;pixels=crc3+256;
+operation<0 ? memset(pixels,0,rows*columns) : operation==0 ? (
+ row=0;loop(rows,
+  maximum=maxima[floor(row/height)];
+  value=floor(min(1,max(0,(10*log(max(str_getchar(#power,row*4,'f'),power_floor)/max(maximum,normal_floor))/log(10)+80)/80))*255+0.5);
+  pixels[row*columns+column_index]=value;row+=1;
+ );
+) : (
+ strcpy(#block,"");loop(min(row_count,height-row_index),
+ row_index==0 ? (crc_value=crc_start;adler_a=1;adler_b=0;);
+ n=columns+1;
+ png_put(row_index==height-1);png_put(n%256);png_put(floor(n/256));
+ n=65535-n;png_put(n%256);png_put(floor(n/256));png_put(0);
+ adler_b+=adler_a;source=(scale_index*height+height-1-row_index)*columns;x=0;
+ loop(floor(columns/4),
+  p0=pixels[source+x];p1=pixels[source+x+1];p2=pixels[source+x+2];p3=pixels[source+x+3];
+  png_put32(p0+p1*256+p2*65536+p3*16777216);
+  adler_b+=4*adler_a+4*p0+3*p1+2*p2+p3;adler_a+=p0+p1+p2+p3;x+=4;
+ );
+ loop(columns-x,value=pixels[source+x];png_put(value);adler_a+=value;adler_b+=adler_a;x+=1;);
+ adler_a%=65521;adler_b%=65521;
+ row_index==height-1 ? (
+  png_put(floor(adler_b/256));png_put(adler_b%256);png_put(floor(adler_a/256));png_put(adler_a%256);
+  png_crc=4294967295-crc_value;
+ );
+ row_index+=1;
+ );
+);
+]]
+local processor=[[
+input=0; spectrum=block*channels; window=spectrum+n; low=window+n; high=low+rows; output=high+rows; maxima=output+rows; bins=maxima+rows/height;
+operation==0 ? (
+ memset(maxima,0,rows/height);i=0;loop(n,window[i]=0.5-0.5*cos(2*$pi*i/(n-1));i+=1;);
+) : operation==1 ? (
+ memset(spectrum,0,n);i=0;
+ loop(count,p=i+offset;spectrum[p]=input[(i+source_offset)*channels+channel]*window[p];i+=1;);
+) : (
+ k=1;loop(n/2-1,re=spectrum[2*k];im=spectrum[2*k+1];bins[k]=re*re+im*im;k+=1;);
+ channel==channels-1 ? strcpy(#power,"");
+ row=0;loop(rows,
+  k=low[row];peak=0;
+  loop(high[row]-k+1,peak=max(peak,bins[k]);k+=1;);
+  output[row]=(channel==0 ? 0 : output[row])+peak/channels;
+  group=floor(row/height);maxima[group]=max(maxima[group],output[row]);
+  channel==channels-1 ? str_setchar(#power,row*4,output[row],'f');row+=1;
+ );
+);
+]]
+local function stop_processor(j)
+ if j.processor then j.host.I.Detach(j.host.ctx,j.processor);j.processor=nil end
+end
+local function start_processor(api,j,quantizing)
+ if not j.host then return end
+ local I=j.host.I
+ local ok,fn=pcall(I.CreateFunctionFromEEL,quantizing and color_processor or processor)
+ if not ok or not fn then return end
+ j.processor=fn;I.Attach(j.host.ctx,fn)
+ local values=quantizing and {maxima=0,crc_table=#M.scales,rows=total_rows,height=M.ROWS,groups=#M.scales,
+  columns=j.columns,row_count=max(1,floor(8192/(j.columns+6))),operation=0,power_floor=1e-30,normal_floor=1e-20,crc_start=crc('\120\1',crc('IDAT'))}
+  or {n=M.N,rows=total_rows,height=M.ROWS,block=j.block,channels=j.channels,operation=0}
+ for name,value in pairs(values) do I.Function_SetValue(fn,name,value) end
+ if not quantizing then
+  I.Function_Execute(fn)
+  local first,last={},{};for row,band in ipairs(j.bands) do first[row],last[row]=band[1],band[2] end
+  I.Function_SetValue_Array(fn,'low',api.new_array(first));I.Function_SetValue_Array(fn,'high',api.new_array(last))
+ end
+ if quantizing then
+  I.Function_SetValue_Array(fn,'maxima',api.new_array(j.data.maxima))
+  local values={}
+  for _,table in ipairs({crc_table,crc1,crc2,crc3}) do
+   for i=0,255 do local c=table[i];values[#values+1]=c>=0x80000000 and c-0x100000000 or c end
+  end
+  I.Function_SetValue_Array(fn,'crc_table',api.new_array(values));j.native_encoding=true;j.encode_batch=max(1,floor(8192/(j.columns+6)))
+  if j.coverage then I.Function_SetValue(fn,'operation',-1);I.Function_Execute(fn);I.Function_SetValue(fn,'operation',0) end
+ end
+end
+function M.start(v,view,span,map,lookup,scale,host,reader,coverage)
+ local duration=map and lookup(map,view+span,'u','t')-lookup(map,view,'u','t') or v.len*span
+ local columns=coverage and coverage.columns or max(M.MIN_COLUMNS,min(M.MAX_COLUMNS,ceil(duration*M.SR/M.HOP)))
+ local bands={};for _,choice in ipairs(M.scales) do for _,band in ipairs(bands_for(choice.id)) do bands[#bands+1]=band end end
+ return {v=v,view=view,span=span,map=map,lookup=lookup,host=host,reader=reader,coverage=coverage,scale=M.scale_id(scale),bands=bands,index=0,channel=1,phase='read',kind='analysis',
+  columns=columns,channels=min(64,v.channels),data={columns=columns,view=view,span=span,frames={},pngs={},maxima={0,0,0,0,0}}}
+end
+function M.render(v,data,scale,host)
+ assert(data.complete,'Spectrogram analysis is incomplete')
+ return {v=v,view=data.view,span=data.span,columns=data.columns,host=host,scale=M.scale_id(scale),data=data,index=0,phase='paint',kind='render',
+  done=data.empty or nil,palette=data.empty and M.palette or nil}
+end
+function M.release(api,result)
+ if result and result.bitmap then api.JS_LICE_DestroyBitmap(result.bitmap);result.bitmap=nil end
+ if result then result.data=nil end
+end
+function M.cancel(api,j)
+ if not j then return end
+ if j.accessor then local aa=j.accessor;j.accessor=nil;api.DestroyAudioAccessor(aa) end
+ stop_processor(j);M.release(api,j);j.buffer=nil;j.fft=nil;j.values=nil;j.time=nil;j.power=nil;j.bin_power=nil;j.bands=nil;j.blocks=nil;j.row_bytes=nil;j.native_encoding=nil;j.data=nil
+ j.read_cache=nil;j.stitch=nil;j.input_buffer=nil;j.coverage=nil
+end
+function M.create_accessor(api,v)
+ local mute=api.GetMediaItemInfo_Value(v.item,'B_MUTE')
+ if mute==0 then return api.CreateTakeAudioAccessor(v.take) end
+ assert(api.SetMediaItemInfo_Value(v.item,'B_MUTE',0),'解析用のミュート除外に失敗しました。')
+ local ok,aa=pcall(api.CreateTakeAudioAccessor,v.take)
+ local restored=api.SetMediaItemInfo_Value(v.item,'B_MUTE',mute)
+ if not restored then if ok and aa then api.DestroyAudioAccessor(aa) end;error('アイテムのミュート状態を復元できません。',0) end
+ if not ok then error(aa,0) end
+ return aa
+end
+local function sparse_block(api,j,range,first,last)
+ local cache=j.read_cache
+ for i,entry in ipairs(cache) do
+  if entry.range==range and entry.first<=first and entry.first+entry.count>=last then
+   if i>1 then table.remove(cache,i);table.insert(cache,1,entry) end
+   return entry
+  end
+ end
+ local entry=#cache>=2 and table.remove(cache) or {buffer=#cache==0 and j.buffer or api.new_array(j.block*j.channels)}
+ entry.range=range;entry.first=first;entry.count=min(j.block,range.last-first);entry.buffer.clear()
+ local rc=api.GetAudioAccessorSamples(j.accessor,M.SR,j.channels,j.first+first/M.SR,entry.count,entry.buffer)
+ assert(type(rc)=='number' and rc>=0,'スペクトログラムの音声読み出しに失敗しました。')
+ j.read_serial=(j.read_serial or 0)+1;entry.version=j.read_serial
+ entry.values=not j.processor and entry.buffer.table(1,entry.count*j.channels) or nil
+ table.insert(cache,1,entry);return entry
+end
+local function read_sparse_column(api,j)
+ local centers,ranges=j.coverage.centers,j.coverage.ranges
+ if centers[j.index+1]==false then
+  repeat j.index=j.index+1;j.data.frames[j.index]=false until j.index==j.columns or centers[j.index+1]~=false
+  return false
+ end
+ local start=centers[j.index+1]-M.N//2;local finish=start+M.N
+ local lo,hi=1,#ranges
+ while lo<hi do local mid=(lo+hi)//2;if ranges[mid].last<=start then lo=mid+1 else hi=mid end end
+ local range=ranges[lo];local first,last=max(start,range.first),min(finish,range.last)
+ local buffer,version
+ if not ranges[lo+1] or ranges[lo+1].first>=finish then
+  local entry=sparse_block(api,j,range,first,last)
+  buffer,version=entry.buffer,entry.version;j.values=entry.values
+  j.offset,j.count,j.source_offset=first-start,last-first,first-entry.first
+ else
+  j.stitch=j.stitch or api.new_array(M.N*j.channels);j.stitch.clear()
+  repeat
+   range=ranges[lo];first,last=max(start,range.first),min(finish,range.last)
+   local entry=sparse_block(api,j,range,first,last)
+   j.stitch.copy(entry.buffer,(first-entry.first)*j.channels+1,(last-first)*j.channels,(first-start)*j.channels+1)
+   lo=lo+1
+  until not ranges[lo] or ranges[lo].first>=finish
+  buffer=j.stitch;j.read_serial=(j.read_serial or 0)+1;version=j.read_serial
+  j.values=not j.processor and buffer.table(1,M.N*j.channels) or nil
+  j.offset,j.count,j.source_offset=0,M.N,0
+ end
+ if j.processor then
+  local I=j.host.I
+  if j.input_buffer~=buffer or j.input_version~=version then I.Function_SetValue_Array(j.processor,'input',buffer);j.input_buffer,j.input_version=buffer,version end
+  I.Function_SetValue(j.processor,'offset',j.offset);I.Function_SetValue(j.processor,'count',j.count);I.Function_SetValue(j.processor,'source_offset',j.source_offset)
+ else j.power={};for row=1,total_rows do j.power[row]=0 end end
+ j.column_ready=true;return true
+end
+local function read_column(api,j)
+ if j.coverage then return read_sparse_column(api,j) end
+ local u=j.view+(j.index+.5)/j.columns*j.span
+ local t=j.map and j.lookup(j.map,u,'u','t') or u*j.v.len
+ local start=floor(t*M.SR-M.N/2);local requested=max(0,start)
+ local offset=max(0,-start);local count=max(0,min(M.N-offset,j.samples-requested))
+ j.offset,j.count=offset,count
+ if count>0 and (not j.block_start or requested<j.block_start or requested+count>j.block_start+j.block_count) then
+  j.block_start=requested;j.block_count=min(j.block,j.samples-requested);j.buffer.clear()
+  local rc=api.GetAudioAccessorSamples(j.accessor,M.SR,j.channels,j.first+requested/M.SR,j.block_count,j.buffer)
+  assert(type(rc)=='number' and rc>=0,'スペクトログラムの音声読み出しに失敗しました。')
+  if j.processor then j.host.I.Function_SetValue_Array(j.processor,'input',j.buffer)
+  else j.values=j.buffer.table(1,j.block_count*j.channels) end
+ end
+ j.source_offset=requested-(j.block_start or requested);j.column_ready=true
+ if j.processor then
+  local I=j.host.I
+  I.Function_SetValue(j.processor,'offset',offset);I.Function_SetValue(j.processor,'count',count)
+  I.Function_SetValue(j.processor,'source_offset',j.source_offset)
+ else j.power={};for row=1,total_rows do j.power[row]=0 end end
+ return true
+end
+local function channel_fft(j)
+ if j.processor then
+  local I=j.host.I
+  I.Function_SetValue(j.processor,'channel',j.channel-1);I.Function_SetValue(j.processor,'operation',1);I.Function_Execute(j.processor)
+  I.Function_GetValue_Array(j.processor,'spectrum',j.fft);j.fft.fft_real(M.N,true)
+  I.Function_SetValue_Array(j.processor,'spectrum',j.fft)
+  I.Function_SetValue(j.processor,'operation',2);I.Function_Execute(j.processor)
+ else
+  local window=reference_window()
+  for n=0,M.N-1 do
+   local i=n-j.offset
+   j.time[n+1]=(i>=0 and i<j.count and j.values[(i+j.source_offset)*j.channels+j.channel] or 0)*window[n+1]
+  end
+  j.fft.copy(j.time);j.fft.fft_real(M.N,true)
+  local fft=j.fft.table(1,M.N);local bins=j.bin_power
+  for k=1,M.N//2-1 do local re,im=fft[2*k+1],fft[2*k+2];bins[k]=re*re+im*im end
+  -- Average channel powers without cancelling anti-phase stereo.
+  for row,band in ipairs(j.bands) do
+   local peak=0
+   for k=band[1],band[2] do peak=max(peak,bins[k]) end
+   j.power[row]=j.power[row]+peak/j.channels
+  end
+ end
+ j.channel=j.channel+1
+ if j.channel>j.channels then
+  local frame
+  if j.processor then
+   frame=j.host.I.Function_GetValue_String(j.processor,'#power')
+   assert(#frame==total_rows*4,'Spectrogram power transfer failed')
+  else
+   for row,power in ipairs(j.power) do local group=(row-1)//M.ROWS+1;j.data.maxima[group]=max(j.data.maxima[group],power) end
+   frame=string.pack(pack_format,table.unpack(j.power))
+  end
+  j.index=j.index+1;j.channel=1;j.data.frames[j.index]=frame;j.power=nil;j.column_ready=false
+ end
+end
+local zero_column=string.rep('\0',total_rows)
+local function quantize_column(j)
+ if j.data.frames[j.index+1]==false then
+  repeat
+   j.index=j.index+1;j.data.frames[j.index]=not j.processor and zero_column or nil
+  until j.index==j.columns or j.data.frames[j.index+1]~=false
+  return
+ end
+ if j.processor then
+  local I=j.host.I;I.Function_SetValue_String(j.processor,'#power',j.data.frames[j.index+1])
+  I.Function_SetValue(j.processor,'column_index',j.index);I.Function_Execute(j.processor)
+  j.data.frames[j.index+1]=nil
+ else
+  local values={string.unpack(pack_format,j.data.frames[j.index+1])};values[total_rows+1]=nil
+  for row,power in ipairs(values) do
+   local maximum=j.data.maxima[(row-1)//M.ROWS+1]
+   values[row]=floor(max(0,min(1,(10*log(max(power,1e-30)/max(maximum,1e-20),10)+80)/80))*255+.5)
+  end
+  j.data.frames[j.index+1]=string.char(table.unpack(values))
+ end
+ j.index=j.index+1
+end
+local function encode_row(j)
+ if not j.blocks then
+  j.blocks={'\120\1'}
+  if j.native_encoding then
+   j.host.I.Function_SetValue(j.processor,'scale_index',j.scale_index-1);j.host.I.Function_SetValue(j.processor,'row_index',0)
+  else
+   j.png_crc=crc(j.blocks[1],crc('IDAT'));j.adler_a,j.adler_b=1,0;j.row_bytes={0}
+  end
+ end
+ if j.native_encoding then
+  local I=j.host.I;local fn=j.processor
+  I.Function_Execute(fn)
+  local count=min(M.ROWS-j.index,j.encode_batch);local block=I.Function_GetValue_String(fn,'#block')
+  assert(#block==count*(j.columns+6)+(j.index+count==M.ROWS and 4 or 0),'Spectrogram image transfer failed')
+  j.blocks[#j.blocks+1]=block;j.index=j.index+count
+ else
+  local row=(j.scale_index-1)*M.ROWS+M.ROWS-j.index;local bytes=j.row_bytes;local frames=j.data.frames
+  local a,b=j.adler_a,j.adler_b+j.adler_a -- PNG filter byte is zero.
+  for x=1,j.columns do local value=byte(frames[x],row);bytes[x+1]=value;a=a+value;b=b+a end
+  j.adler_a,j.adler_b=a%65521,b%65521
+  local raw=string.char(table.unpack(bytes));local n=#raw
+  local block=string.pack('<BI2I2',j.index==M.ROWS-1 and 1 or 0,n,0xffff-n)..raw
+  j.blocks[#j.blocks+1]=block;j.png_crc=crc(block,j.png_crc);j.index=j.index+1
+ end
+ if j.index==M.ROWS then
+  local checksum
+  if j.native_encoding then checksum=j.host.I.Function_GetValue(j.processor,'png_crc')
+  else
+   local tail=string.pack('>I4',(j.adler_b<<16)|j.adler_a);j.blocks[#j.blocks+1]=tail
+   checksum=crc(tail,j.png_crc)~0xffffffff
+  end
+  local payload=table.concat(j.blocks)
+  j.data.pngs[M.scales[j.scale_index].id]=string.pack('>I4',#payload)..'IDAT'..payload..string.pack('>I4',checksum)
+  j.blocks=nil;j.row_bytes=nil;j.scale_index=j.scale_index+1;j.index=0
+  if j.scale_index>#M.scales then
+   stop_processor(j);j.native_encoding=nil
+   j.data.header=png_signature..chunk('IHDR',string.pack('>I4I4BBBBB',j.columns,M.ROWS,8,3,0,0,0))
+   j.data.frames=nil;j.data.maxima=nil;j.data.complete=true;j.phase='paint'
+  end
+ end
+end
+local function paint(api,j)
+ local png=j.data.header..M.palette.chunk..j.data.pngs[j.scale]..png_end
+ j.bitmap=assert(api.JS_LICE_LoadPNGFromMemory(png,#png),'Spectrogram image creation failed')
+ j.palette=M.palette;j.index=j.columns;j.done=true
+end
+function M.step(api,j,budget)
+ if j.done then return true end
+ local deadline=api.time_precise()+(budget or .003);local work=0
+ if not j.accessor and j.phase=='read' then
+  if j.reader then j.accessor,j.first,j.last=j.reader(api,j.v,j.coverage)
+  else
+   j.accessor=M.create_accessor(api,j.v)
+   if j.accessor then j.first=api.GetAudioAccessorStartTime(j.accessor);j.last=api.GetAudioAccessorEndTime(j.accessor) end
+  end
+  assert(j.accessor,'スペクトログラム用の音声を取得できません。')
+  assert(j.last>j.first,'スペクトログラム用の音声範囲が空です。')
+  j.samples=floor((j.last-j.first)*M.SR+1e-7);j.block=max(M.N,floor(131072/j.channels))
+  j.buffer=api.new_array(j.block*j.channels);j.fft=api.new_array(M.N);start_processor(api,j)
+  if j.coverage then j.read_cache={} end
+  if not j.processor then j.time={};j.bin_power={} end
+ end
+ repeat
+  if j.phase=='read' then
+   if j.column_ready or read_column(api,j) then channel_fft(j) end
+   if j.index==j.columns then
+    api.DestroyAudioAccessor(j.accessor);j.accessor=nil;j.buffer=nil;j.fft=nil;j.time=nil;j.values=nil
+    j.read_cache=nil;j.stitch=nil;j.input_buffer=nil
+    j.phase='quantize';j.index=0
+    if j.processor then
+     local maxima=api.new_array(#M.scales);j.host.I.Function_GetValue_Array(j.processor,'maxima',maxima);j.data.maxima=maxima.table()
+    end
+    stop_processor(j);j.bin_power=nil;j.bands=nil;start_processor(api,j,true)
+   end
+  elseif j.phase=='quantize' then
+   quantize_column(j)
+   if j.index==j.columns then
+    j.phase='encode';j.scale_index=1;j.index=0
+    if j.native_encoding then j.data.frames=nil;j.host.I.Function_SetValue(j.processor,'operation',1) end
+   end
+  elseif j.phase=='encode' then encode_row(j)
+  else paint(api,j);return true end
+  work=work+1
+ until work>=256 or api.time_precise()>=deadline
+ return false
+end
+function M.progress(j)
+ if j.done then return 1 end
+ if j.kind=='render' then return 0 end
+ if j.phase=='read' then return .8*(j.index+(j.channel-1)/j.channels)/j.columns end
+ if j.phase=='quantize' then return .8+.05*j.index/j.columns end
+ if j.phase=='encode' then return .85+.14*((j.scale_index-1)*M.ROWS+j.index)/(#M.scales*M.ROWS) end
+ return .99
+end
+function M.draw(g,result,graph,view,span)
+ if not result or not result.bitmap then return end
+ local first,last=max(view,result.view),min(view+span,result.view+result.span)
+ if last<=first then return end
+ g.bitmap(result.bitmap,graph.x+(first-view)/span*graph.w,graph.y,(last-first)/span*graph.w,graph.h,
+  (first-result.view)/result.span*result.columns,0,(last-first)/result.span*result.columns,M.ROWS,1)
 end
 return M
 end)()
@@ -3171,7 +3638,8 @@ local function create_media_gate(api,graphics)
   end
   local a=M.state
   if a then
-   for _,key in ipairs({'job','analysis','batch','source_job','wave_job','pjob','xjob','ajob'}) do visit(a[key],0) end
+   for _,key in ipairs({'job','analysis','batch','source_job','wave_job','spectrum_job','pjob','xjob','ajob'}) do visit(a[key],0) end
+   if a.display_mode=='spectrogram' then visit(a.spectrum_sources,0) end
    if a.job or a.batch or a.source_job then visit(a.items,0);visit(a.queue,0) end
   end
   if (all_items or (M.all_items and M.state and M.state.job)) and api.CountMediaItems and api.GetMediaItem then
@@ -3306,6 +3774,18 @@ local function create_language(api,section,catalog)
 end
 
 local LanguageCatalog={en={
+ ["波形"]="Waveform",
+ ["スペクトログラム"]="Spectrogram",
+ ["解析中"]="Analyzing",
+ ["表示更新中"]="Updating display",
+ ["スペクトログラムを解析中  %d%%"]="Analyzing spectrogram %d%%",
+ ["スペクトログラムの表示を更新中  %d%%"]="Updating spectrogram %d%%",
+ ["スペクトログラム用の音声を取得できません。"]="Cannot read audio for the spectrogram.",
+ ["スペクトログラム用の音声範囲が空です。"]="The spectrogram audio range is empty.",
+ ["スペクトログラムの音声読み出しに失敗しました。"]="Spectrogram audio read failed.",
+ ["スペクトログラム用の素材情報を取得できません。"]="Cannot read source information for the spectrogram.",
+ ["解析用のミュート除外に失敗しました。"]="Cannot bypass mute for analysis.",
+ ["アイテムのミュート状態を復元できません。"]="Cannot restore the item mute state.",
  ["秒"]="Seconds",
  ["拍"]="Beats",
  ["グリッド"]="Grid",
@@ -3507,6 +3987,8 @@ local LanguageCatalog={en={
  {"^解析中%.%.%.([%+%-]?[%d%.eE]+)%%$","Analyzing...%d%%"},
  {"^生成完了：時間 ([%+%-]?[%d%.eE]+)点 / エンベロープ ([%+%-]?[%d%.eE]+)点(.-)。$","Done: %d time points / %d envelope points%s.",{3}},
  {"^波形を読み込み中  ([%+%-]?[%d%.eE]+)%%$","Loading waveform %d%%"},
+ {"^スペクトログラムを解析中  ([%+%-]?[%d%.eE]+)%%$","Analyzing spectrogram %d%%"},
+ {"^スペクトログラムの表示を更新中  ([%+%-]?[%d%.eE]+)%%$","Updating spectrogram %d%%"},
  {"^([%+%-]?[%d%.eE]+) 点$","%d pts"},
  {"^「(.-)」を上書きしますか？$","\"%s\"?"},
  {"^(.-)」を上書きしますか？$","%s\"?"},
@@ -3789,7 +4271,7 @@ function B.cleanup(fn,...)
  return ok,result
 end
 end
-local Core={VERSION='0.6.3',GENERATED_MAX_POINTS=1024,SECTION='BLT_ENVELOPE_CANVAS_TRACK'}
+local Core={VERSION='0.7.3',GENERATED_MAX_POINTS=1024,SECTION='BLT_ENVELOPE_CANVAS_TRACK'}
 local min,max,abs,floor,ceil=math.min,math.max,math.abs,math.floor,math.ceil
 local function clamp(v,a,b) return max(a,min(b,v)) end
 local function finite(v) return type(v)=='number' and v==v and abs(v)<math.huge end
@@ -3807,6 +4289,8 @@ local SECTION=Core.SECTION
 local W,H=1120,838
 local A={layers=Core.new_layers(),layer='slot1',tool='free',direction=3,pattern=1,period_unit='sec',width_variable=true,height_variable=true,width_start=1,width_end=1,width_duration=1,width_curve=0,height_start=100,height_end=100,height_duration=1,height_curve=0,
  status='',warning=false,content_dirty=true,view=0,span=1,wave={},wave_max=1,
+ display_mode=R.GetExtState(SECTION,'background_mode')=='spectrogram' and 'spectrogram' or 'wave',
+ spectrum_scale=BLT.EnvelopeSpectrogram.scale_id(R.GetExtState(SECTION,'spectrum_scale')),spectrum_cache={},spectrum_data_cache={},
  busy=false,poll_at=0,active=true,bindings={},track_sessions={}}
 
 local UI={}
@@ -3886,12 +4370,14 @@ function UI.safe(fn)
   A.busy=false
   BLT.cleanup(Track.finish)
   BLT.cleanup(UI.stop_wave)
+  if A.display_mode=='spectrogram' then A.spectrum_failed=true end
+  BLT.cleanup(UI.stop_spectrum)
   if A.v then
    local refreshed,value=pcall(Track.target)
    A.v=refreshed and value or nil;A.revision=nil
   end
   notice(err,true)
-  BLT.recoverInput(A,err);BLT.cleanup(UI.cancel_preview);pcall(UI.sync_curves,true)
+  BLT.recoverInput(A,err);BLT.cleanup(UI.cancel_preview);pcall(UI.sync_curves)
  end
  return ok
 end
@@ -3900,25 +4386,149 @@ function UI.undo_draw(redo)
  if A.busy or not Track.valid(A.v) then return end
  Track.finish();UI.cancel_preview()
  if redo then R.Undo_DoRedo2(A.v.project) else R.Undo_DoUndo2(A.v.project) end
- UI.sync_curves(true)
+ UI.sync_curves()
 end
 function UI.stop_wave()
- if A.wave_job and A.wave_job.accessor then R.DestroyAudioAccessor(A.wave_job.accessor) end;A.wave_job=nil
+ A.wave_job=nil
 end
-function UI.start_wave(sources,signature)
+function UI.drop_spectrum(index)
+ local result=table.remove(A.spectrum_cache,index)
+ if A.spectrum==result then A.spectrum=nil end
+ BLT.EnvelopeSpectrogram.release(R,result)
+end
+
+function UI.stop_spectrum(clear)
+ if A.spectrum_job then local j=A.spectrum_job;A.spectrum_job=nil;BLT.EnvelopeSpectrogram.cancel(R,j) end
+ if clear then
+  while #A.spectrum_cache>0 do UI.drop_spectrum(#A.spectrum_cache) end
+  A.spectrum=nil;A.spectrum_data=nil;A.spectrum_key=nil;A.spectrum_failed=nil;A.spectrum_plan=nil
+ end
+end
+
+function UI.spectrum_source_key()
+ if not A.spectrum_key then
+  A.spectrum_signature=A.spectrum_signature or Track.spectrum_signature(A.v,A.spectrum_sources)
+  A.spectrum_key={project=A.v.project,track=A.v.track,guid=A.v.guid,pos=A.v.pos,len=A.v.len,signature=A.spectrum_signature}
+ end
+ return A.spectrum_key
+end
+function UI.remember_spectrum_data(data)
+ if A.spectrum_data==data then return end
+ A.spectrum_data=data
+ for i,entry in ipairs(A.spectrum_data_cache) do
+  if entry.data==data then table.remove(A.spectrum_data_cache,i);break end
+ end
+ table.insert(A.spectrum_data_cache,1,{key=UI.spectrum_source_key(),data=data})
+ while #A.spectrum_data_cache>2 do table.remove(A.spectrum_data_cache) end
+end
+function UI.ensure_spectrum()
+ if A.display_mode~='spectrogram' or A.spectrum_failed or not A.v or A.busy or A.spectrum_fade_editing then return end
+ local S=BLT.EnvelopeSpectrogram;local job=A.spectrum_job
+ if A.spectrum and A.spectrum.scale==A.spectrum_scale and A.spectrum.palette==S.palette and not job then return end
+ if not A.spectrum_plan then
+  if not A.spectrum_sources then A.spectrum_sources=Track.wave_sources(A.v) end
+  A.spectrum_plan=Track.spectrum_plan(A.v,A.spectrum_sources)
+ end
+ local plan=A.spectrum_plan
+ if #plan.ranges==0 then
+  UI.stop_spectrum()
+  if not A.spectrum_data then UI.remember_spectrum_data({empty=true,complete=true,columns=0,view=0,span=1}) end
+  while #A.spectrum_cache>=2 do UI.drop_spectrum(#A.spectrum_cache) end
+  local result=S.render(A.v,A.spectrum_data,A.spectrum_scale,Host)
+  table.insert(A.spectrum_cache,1,result);A.spectrum=result;UI.dirty();return
+ end
+ -- Scale changes preserve both FFT analysis and initial image preparation.
+ if job and job.kind=='analysis' and not job.data.complete then job.scale=A.spectrum_scale;return end
+ if job and job.scale==A.spectrum_scale then return end
+ if not Media.ready() then return end
+ UI.stop_spectrum()
+ for i,cached in ipairs(A.spectrum_cache) do
+  if cached.scale==A.spectrum_scale and cached.palette==S.palette then
+   if i>1 then table.remove(A.spectrum_cache,i);table.insert(A.spectrum_cache,1,cached) end
+   if A.spectrum~=cached then A.spectrum=cached;UI.dirty() end
+   return
+  end
+ end
+ while #A.spectrum_cache>=2 do UI.drop_spectrum(#A.spectrum_cache) end
+ if not A.spectrum_data then
+  local key=UI.spectrum_source_key()
+  for _,entry in ipairs(A.spectrum_data_cache) do
+   local k=entry.key
+   if k.project==key.project and k.track==key.track and k.guid==key.guid and k.pos==key.pos and k.len==key.len and k.signature==key.signature then
+    UI.remember_spectrum_data(entry.data);break
+   end
+  end
+ end
+ if A.spectrum_data then
+  A.spectrum_job=S.render(A.v,A.spectrum_data,A.spectrum_scale,Host);UI.safe(UI.spectrum_step)
+ else
+  -- Avoid analyzing every intermediate range while the ruler is being dragged.
+  if R.time_precise()<(A.spectrum_due or 0) then return end
+  -- Reserve one of the two data slots before starting another range.
+  while #A.spectrum_data_cache>=2 do table.remove(A.spectrum_data_cache) end
+  A.spectrum_job=S.start(A.v,plan.view,plan.span,nil,nil,A.spectrum_scale,Host,Track.spectrum_reader,plan)
+ end
+ UI.refresh()
+end
+
+function UI.spectrum_step()
+ local j=A.spectrum_job;if not j then return end
+ if A.drag or A.spectrum_fade_editing or not Media.ready() then return end
+ if not Track.valid(j.v) or not Track.same(j.v,A.v) then UI.stop_spectrum(true);return end
+ local done=BLT.EnvelopeSpectrogram.step(R,j,.006)
+ if j.data.complete then UI.remember_spectrum_data(j.data) end
+ if done then
+  table.insert(A.spectrum_cache,1,j);A.spectrum=j;A.spectrum_job=nil;UI.dirty()
+ else
+  local now=R.time_precise()
+  if now>(A.spectrum_present_at or 0) then A.spectrum_present_at=now+.15;UI.refresh() end
+ end
+end
+
+function UI.spectrum_wheel(wheel)
+ if A.display_mode~='spectrogram' or A.busy or A.drag then A.spectrum_wheel=0;return end
+ local steps,remainder=math.modf((A.spectrum_wheel or 0)+wheel/120);A.spectrum_wheel=remainder
+ if steps==0 then return end
+ local scales=BLT.EnvelopeSpectrogram.scales
+ for i,choice in ipairs(scales) do
+  if choice.id==A.spectrum_scale then UI.set_spectrum_scale(scales[clamp(i-steps,1,#scales)].id);return end
+ end
+end
+
+function UI.set_spectrum_scale(id)
+ id=BLT.EnvelopeSpectrogram.scale_id(id)
+ if A.busy or A.drag or id==A.spectrum_scale then return end
+ UI.number_commit();A.spectrum_scale=id;A.spectrum_failed=nil
+ BLT.store(SECTION,'spectrum_scale',id,true)
+ UI.ensure_spectrum();UI.dirty()
+end
+
+function UI.set_display(mode)
+ if A.busy or A.drag or (mode~='wave' and mode~='spectrogram') or A.display_mode==mode then return end
+ UI.number_commit();A.display_mode=mode;A.spectrum_failed=nil
+ BLT.store(SECTION,'background_mode',mode,true)
+ if mode=='spectrogram' then UI.stop_wave();A.wave_retry=nil;UI.ensure_spectrum()
+ else UI.stop_spectrum();UI.start_wave(nil,nil,true) end
+ UI.dirty()
+end
+
+function UI.start_wave(sources,signature,preserve_spectrum)
  UI.stop_wave();A.wave={};A.wave_max=1
+ if not preserve_spectrum then UI.stop_spectrum(true);A.spectrum_signature=nil;A.spectrum_due=R.time_precise()+.15 end
  if not A.v then return end
  if not sources then sources,signature=Track.wave_sources(A.v) end
+ A.spectrum_sources=sources
  A.wave_signature=signature
+ if A.display_mode=='spectrogram' then UI.ensure_spectrum();UI.dirty();return end
  for i=1,4096 do A.wave[i]=0 end
  if #sources>0 then
   A.wave_job={v=A.v,total=#sources,index=0,sources=sources,bin=0,max=0}
  end
- UI.dirty(true)
+ UI.dirty()
 end
 function UI.wave_step()
- if not Media.ready() then return end
  local j=A.wave_job;if not j then return end
+ if not Media.ready() then return end
  if not Track.valid(j.v) then UI.stop_wave();return end
  local now=R.time_precise();local budget=now+.004;local rate=4096/j.v.len;local batches=0
  repeat
@@ -3952,8 +4562,8 @@ function UI.wave_step()
   batches=batches+1
  until j.index>=j.total or batches>=8 or R.time_precise()>=budget
  A.wave_max=max(.001,j.max)
- if j.index>=j.total then UI.stop_wave();UI.dirty(true)
- elseif now>(A.wave_present_at or 0) then A.wave_present_at=now+.15;UI.dirty(true) end
+ if j.index>=j.total then UI.stop_wave();UI.dirty()
+ elseif now>(A.wave_present_at or 0) then A.wave_present_at=now+.15;UI.dirty() end
 end
 
 function UI.check_current()
@@ -4221,6 +4831,9 @@ function UI.interact()
  if not (A.active or A.pointer_capture or UI.activation_press(down)) then
   Track.finish();UI.cancel_preview();down_last=down;A.right_last=right;return
  end
+ if id=='spectrum_scale' then
+  if wheel~=0 then gfx.mouse_wheel=0;UI.spectrum_wheel(wheel);down_last=down;A.right_last=right;return end
+ else A.spectrum_wheel=0 end
  if UI.number_input(id,down,wheel) then down_last=down;A.right_last=right;return end
  gfx.mouse_wheel=0
  local nearest=in_graph and A.v and UI.nearest() or nil
@@ -4275,7 +4888,7 @@ function UI.interact()
  down_last=down;A.right_last=right
 end
 function UI.key(k)
- if k==0 or U.editor.edit or UI.context then return end
+ if k==0 or U.editor.edit or UI.context or A.spectrum_menu_open then return end
  local ctrl=(gfx.mouse_cap&4)~=0;local shift=(gfx.mouse_cap&8)~=0
  if k==27 then if A.drag then Track.finish();UI.cancel_preview();UI.sync_curves() else A.closing=true end
  elseif k==26 or ctrl and (k==122 or k==90) then UI.undo_draw(shift)
@@ -4394,20 +5007,20 @@ function UI.assign(key)
   if not ok then notice(properties,true);UI.dirty();return end
   A.bindings[key]={track=R.GetTrackGUID(track),guid=entry.guid,name=entry.name};A.layer=key;A.record=nil
   A.layers[key].enabled=true
-  UI.sync_curves(true,key)
+  UI.sync_curves()
  end
- UI.dirty(true)
+ UI.dirty()
  end,nil,current)
 end
 function UI.load_selection(force,selected)
  if A.busy then return end
  local v=selected or Track.target()
  if Track.same(v,A.v) and not force then return end
- Track.finish();UI.stop_wave();A.drag=nil;A.number_drag=nil;A.selection=nil;pressed=nil;A.pointer_capture=nil
- A.v=v;A.record=nil;A.conflict=false;A.revision=nil;A.live_failed=nil;A.host_pending=nil;A.wave_retry=nil
+ Track.finish();UI.stop_wave();UI.stop_spectrum(true);A.spectrum_signature=nil;A.spectrum_fade_editing=nil;A.spectrum_fade_check=nil;A.drag=nil;A.number_drag=nil;A.selection=nil;pressed=nil;A.pointer_capture=nil
+ A.v=v;A.record=nil;A.conflict=false;A.revision=nil;A.source_revision=nil;A.live_failed=nil;A.host_pending=nil;A.wave_retry=nil
  if not v then
-  A.bindings={};A.layers=Core.new_layers();A.host_layers=A.layers;A.host_state=nil;A.wave={};A.wave_max=1;A.track_key=nil
-  notice('トラックと時間範囲を選択してください。');UI.dirty(true);return
+  A.bindings={};A.layers=Core.new_layers();A.host_layers=A.layers;A.host_state=nil;A.wave={};A.wave_max=1;A.track_key=nil;A.spectrum_sources=nil
+  notice('トラックと時間範囲を選択してください。');UI.dirty();return
  end
  local key=tostring(v.project)..':'..v.guid
  if not A.track_sessions[key] then
@@ -4415,13 +5028,16 @@ function UI.load_selection(force,selected)
   while #A.track_order>16 do A.track_sessions[table.remove(A.track_order,1)]=nil end
  end
  A.bindings=A.track_sessions[key];A.track_key=key;A.layers=Core.new_layers();for k in pairs(A.bindings) do A.layers[k].enabled=true end
- A.status='';A.warning=false;UI.start_wave();UI.sync_curves(true)
- A.revision=R.GetProjectStateChangeCount(v.project);A.follow_env=nil;UI.follow_envelope(v);UI.dirty(true)
+ A.status='';A.warning=false;UI.start_wave();A.source_revision=R.GetProjectStateChangeCount(v.project);UI.sync_curves()
+ A.follow_env=nil;UI.follow_envelope(v);UI.dirty()
 end
 
-function UI.follow_envelope(v)
- if A.drag or A.number_drag or not R.GetCursorContext2 or R.GetCursorContext2(true)~=2 then return end
- local env=R.GetSelectedEnvelope(v.project)
+function UI.follow_envelope(v,env,context)
+ if A.drag or A.number_drag then return end
+ if context==nil then
+  if not R.GetCursorContext2 or R.GetCursorContext2(true)~=2 then return end
+  env=R.GetSelectedEnvelope(v.project)
+ elseif context~=2 then return end
  if not env or env==A.follow_env or not R.Envelope_GetParentTrack or R.Envelope_GetParentTrack(env)~=v.track then return end
  A.follow_env=env
  local ok,guid=R.GetSetEnvelopeInfo_String(env,'GUID','',false);if not ok then return end
@@ -4435,21 +5051,60 @@ function UI.follow_envelope(v)
  end
  A.layer=key;UI.sync_curves()
 end
+function UI.poll_spectrum_fades(now,down)
+ if A.display_mode~='spectrogram' or not A.v or A.drag or A.number_drag or A.busy or not A.spectrum_sources or #A.spectrum_sources==0 then
+  A.spectrum_fade_editing=nil;return
+ end
+ local editing=false
+ if down then
+  if R.GetItemEditingTime2 then
+   local _,_,flags=R.GetItemEditingTime2();editing=type(flags)=='number' and (flags&2)~=0
+  else editing=not Host.focused and R.GetCursorContext2 and R.GetCursorContext2(true)==1 end
+ end
+ if not editing and not A.spectrum_fade_editing then return end
+ local released=A.spectrum_fade_editing and not down
+ A.spectrum_fade_editing=editing or down and A.spectrum_fade_editing or nil
+ if not released and now<(A.spectrum_fade_check or 0) then return end
+ A.spectrum_fade_check=now+.12
+ local changed=false;local fades={}
+ for _,source in ipairs(A.spectrum_sources) do
+  if R.ValidatePtr2(A.v.project,source.item,'MediaItem*') then
+   local value=Track.fade_signature(source.item)
+   fades[source.item]=value
+   if source.fade_signature~=value then source.fade_signature=value;changed=true end
+  end
+ end
+ if changed then
+  UI.stop_spectrum(true);A.spectrum_signature=nil;A.spectrum_due=now+.15;UI.ensure_spectrum();UI.dirty()
+ end
+ return fades
+end
 function UI.poll(now)
  if now<A.poll_at or A.busy then return end;A.poll_at=now+.05
- local v=Track.target()
- if v and Track.same(v,A.v) then UI.follow_envelope(v) end
+ local project=R.EnumProjects(-1,'');local revision=R.GetProjectStateChangeCount(project)
+ local v=Track.target(project,revision==A.source_revision and A.v or nil)
  if not v then if A.v then UI.load_selection(false) end;return end
  if not Track.same(v,A.v) then UI.load_selection(false,v);return end
- local revision=R.GetProjectStateChangeCount(v.project)
- local revised=revision~=A.revision
- if revised then
-  A.v=v
-  local sources,signature=Track.wave_sources(v)
-  if signature~=A.wave_signature then UI.start_wave(sources,signature) end
- end
  local native_down=R.JS_Mouse_GetState and (R.JS_Mouse_GetState(3)&3)~=0
- local native_edit=R.GetSelectedEnvelope(v.project)~=nil and R.GetCursorContext2(true)==2
+ local fades=UI.poll_spectrum_fades(now,native_down)
+ -- Curve synchronization and Undo must not consume pending audio changes.
+ if not A.drag and not A.number_drag and not A.spectrum_fade_editing and (revision~=A.source_revision or not A.wave_signature) then
+  A.v=v
+  local sources,signature=Track.wave_sources(v,fades)
+  A.spectrum_sources=sources
+  if signature~=A.wave_signature then UI.start_wave(sources,signature)
+  elseif A.spectrum_signature and not A.spectrum_failed then
+   local fingerprint=Track.spectrum_signature(v,sources)
+   if fingerprint~=A.spectrum_signature then
+    UI.stop_spectrum(true);A.spectrum_signature=fingerprint;A.spectrum_due=now+.15;UI.ensure_spectrum();UI.dirty()
+   end
+  end
+  A.source_revision=revision
+ end
+ local env=R.GetSelectedEnvelope(v.project);local context=R.GetCursorContext2(true)
+ UI.follow_envelope(v,env,context)
+ local revised=revision~=A.revision
+ local native_edit=env~=nil and context==2
  local native_release=A.host_mouse_down and not native_down
  A.host_mouse_down=native_down
  local check_drag=native_edit and ((native_down and now>=(A.host_check_at or 0)) or native_release)
@@ -4461,9 +5116,9 @@ function UI.poll(now)
    for _,binding in pairs(A.bindings) do local env=Track.resolve(v,binding)
     if env then local _,name=R.GetEnvelopeName(env,'');binding.name=name else binding.name='[missing]' end
    end
-   UI.sync_curves(true)
+   UI.sync_curves(state)
   elseif revised then
-   if not A.drag then Track.finish();UI.sync_curves() end
+   if not A.drag then Track.finish();UI.sync_curves(state) end
   end
   A.revision=R.GetProjectStateChangeCount(v.project)
  end
@@ -4477,7 +5132,7 @@ function UI.apply()
  notice('表示範囲をオートメーションアイテムにまとめました。')
 end
 
-function Track.target(project)
+function Track.target(project,cached)
  project=project or R.EnumProjects(-1,'')
  local track=R.GetSelectedTrack(project,0)
  local env=R.GetSelectedEnvelope(project)
@@ -4487,8 +5142,12 @@ function Track.target(project)
  end
  local first,last=R.GetSet_LoopTimeRange2(project,false,false,0,0,false)
  if not track or not R.ValidatePtr2(project,track,'MediaTrack*') or not finite(first) or not finite(last) or last<=first then return end
+ if cached and cached.project==project and cached.track==track then
+  if cached.pos==first and cached.len==last-first then return cached end
+  return {project=project,track=track,guid=cached.guid,name=cached.name,pos=first,len=last-first,channels=cached.channels}
+ end
  local _,name=R.GetTrackName(track,'')
- return {project=project,track=track,guid=R.GetTrackGUID(track),name=name or '',pos=first,len=last-first}
+ return {project=project,track=track,guid=R.GetTrackGUID(track),name=name or '',pos=first,len=last-first,channels=clamp(floor(R.GetMediaTrackInfo_Value(track,'I_NCHAN')),1,64)}
 end
 function Track.same(a,b)
  return a and b and a.project==b.project and a.track==b.track and abs(a.pos-b.pos)<1e-9 and abs(a.len-b.len)<1e-9
@@ -4506,18 +5165,37 @@ function Track.finish()
   if A.v and A.v.project==g.project then A.revision=R.GetProjectStateChangeCount(g.project) end
  end
 end
-function Track.wave_sources(v)
+function Track.fade_signature(item)
+ if not Track.fade_keys then
+  local version=R.GetAppVersion and R.GetAppVersion() or ''
+  local major,minor=version:match('^(%d+)%.(%d+)');major,minor=tonumber(major) or 0,tonumber(minor) or 0
+  local keys={'D_FADEINLEN','D_FADEOUTLEN','D_FADEINLEN_AUTO','D_FADEOUTLEN_AUTO'}
+  local curves=major>7 or major==7 and minor>=81
+  curves=curves and {'D_FADEINDIR_NEW','D_FADEOUTDIR_NEW','D_FADEINDIR2_NEW','D_FADEOUTDIR2_NEW'}
+   or {'C_FADEINSHAPE','C_FADEOUTSHAPE','D_FADEINDIR','D_FADEOUTDIR'}
+  for _,key in ipairs(curves) do keys[#keys+1]=key end
+  if major>7 or major==7 and minor>=46 then keys[#keys+1]='I_FADELPF' end
+  Track.fade_keys=keys
+ end
+ local values={}
+ for i,key in ipairs(Track.fade_keys) do values[i]=tostring(R.GetMediaItemInfo_Value(item,key)) end
+ return table.concat(values,':')
+end
+function Track.wave_sources(v,fades)
  local list,signature={},{}
  for i=0,R.CountTrackMediaItems(v.track)-1 do
   local item=R.GetTrackMediaItem(v.track,i)
   local pos=R.GetMediaItemInfo_Value(item,'D_POSITION');local len=R.GetMediaItemInfo_Value(item,'D_LENGTH')
-  if pos<v.pos+v.len and pos+len>v.pos then
+  if len>0 and pos<v.pos+v.len and pos+len>v.pos then
    local take=R.GetActiveTake(item)
    if take and not R.TakeIsMIDI(take) then
     local source=R.GetMediaItemTake_Source(take);local channels=source and R.GetMediaSourceNumChannels(source) or 0
-    if channels>0 then
-     list[#list+1]={item=item,take=take,pos=pos,len=len,channels=min(64,channels)}
-     signature[#signature+1]=table.concat({tostring(item),tostring(take),tostring(source),pos,len,
+    local length,isQN=0,false
+    if channels>0 then length,isQN=R.GetMediaSourceLength(source) end
+    if channels>0 and length>0 and not isQN and R.GetMediaSourceType(source,'')~='EMPTY' then
+     list[#list+1]={item=item,take=take,pos=pos,len=len,channels=min(64,channels),
+      fade_signature=(A.display_mode=='spectrogram' or A.spectrum_signature) and (fades and fades[item] or Track.fade_signature(item)) or nil}
+     signature[#signature+1]=table.concat({tostring(item),tostring(take),tostring(source),pos,len,channels,
       R.GetMediaItemTakeInfo_Value(take,'D_PLAYRATE'),R.GetMediaItemTakeInfo_Value(take,'D_STARTOFFS'),
       R.GetMediaItemTakeInfo_Value(take,'D_PITCH'),R.GetMediaItemTakeInfo_Value(take,'D_VOL'),
       R.GetMediaItemInfo_Value(item,'D_VOL')},':')
@@ -4527,7 +5205,90 @@ function Track.wave_sources(v)
  end
  return list,table.concat(signature,'|')
 end
-function Track.read(v,bindings,layers)
+function Track.spectrum_plan(v,sources)
+ local S=BLT.EnvelopeSpectrogram;local ranges={};local samples=floor(v.len*S.SR+1e-7)
+ for _,source in ipairs(sources) do
+  local first=max(0,ceil((source.pos-v.pos)*S.SR-1e-7))
+  local last=min(samples,floor((source.pos+source.len-v.pos)*S.SR+1e-7))
+  if last>first then ranges[#ranges+1]={first=first,last=last} end
+ end
+ table.sort(ranges,function(a,b)return a.first<b.first end)
+ local merged={}
+ for _,range in ipairs(ranges) do
+  local previous=merged[#merged]
+  if previous and range.first<=previous.last then previous.last=max(previous.last,range.last)
+  else merged[#merged+1]=range end
+ end
+ local plan={ranges=merged,sources=sources,centers={}}
+ if #merged==0 then return plan end
+ local first,last=merged[1].first,merged[#merged].last
+ local columns=clamp(ceil((last-first)/S.HOP),32,S.MAX_COLUMNS)
+ plan.view,plan.span,plan.columns=first/(v.len*S.SR),(last-first)/(v.len*S.SR),columns
+ local width=(last-first)/columns;local index=1
+ for i=0,columns-1 do
+  local left,right=first+i*width,first+(i+1)*width;local center=(left+right)/2
+  while merged[index] and merged[index].last<=left do index=index+1 end
+  local at=index;local chosen=false;local distance=math.huge
+  while merged[at] and merged[at].first<right do
+   local range=merged[at];local candidate=clamp(floor(center),range.first,range.last-1)
+   if abs(candidate-center)<distance then chosen=candidate;distance=abs(candidate-center) end
+   at=at+1
+  end
+  plan.centers[i+1]=chosen
+ end
+ return plan
+end
+-- Track automation edits do not change the source snapshot. Ignore item
+-- selection and mute so their UI changes also retain the cached analysis.
+function Track.spectrum_signature(v,sources)
+ sources=sources or Track.wave_sources(v)
+ local parts={tostring(v.channels)}
+ for _,source in ipairs(sources) do
+  local ok,chunk=R.GetItemStateChunk(source.item,'',false)
+  assert(ok and chunk and chunk~='','スペクトログラム用の素材情報を取得できません。')
+  source.fade_signature=source.fade_signature or Track.fade_signature(source.item)
+  local lines,stack={tostring(source.item),source.fade_signature},{}
+  for line in (chunk:gsub('\r\n','\n')..'\n'):gmatch('(.-)\n') do
+   local token=line:match('^%s*(%S+)');local parent=stack[#stack]
+   local ignored=parent=='ITEM' and (token=='SEL' or token=='MUTE') or
+    parent=='TAKEFX' and (token=='SHOW' or token=='LASTSEL' or token=='DOCKED' or token=='FLOATPOS')
+   if not ignored then lines[#lines+1]=line end
+   if token and token:sub(1,1)=='<' then stack[#stack+1]=token:sub(2)
+   elseif token=='>' then stack[#stack]=nil end
+  end
+  local text=table.concat(lines,'\n');parts[#parts+1]=#text..':'..text
+ end
+ return table.concat(parts,'|')
+end
+function Track.spectrum_reader(api,v,coverage)
+ local muted={};local aa
+ -- Capture once, with source-item mute bypassed, and restore before yielding.
+ local ok,err=xpcall(function()
+  local sources=coverage and coverage.sources or Track.wave_sources(v)
+  for _,source in ipairs(sources) do
+   local item=source.item
+   assert(api.ValidatePtr2(v.project,item,'MediaItem*'),'解析対象のアイテムが見つかりません。')
+   local mute=api.GetMediaItemInfo_Value(item,'B_MUTE')
+   if mute~=0 then
+    muted[#muted+1]={item=item,value=mute}
+    assert(api.SetMediaItemInfo_Value(item,'B_MUTE',0),'解析用のミュート除外に失敗しました。')
+   end
+  end
+  aa=api.CreateTrackAudioAccessor(v.track)
+ end,debug.traceback)
+ local restored=true
+ for i=#muted,1,-1 do
+  local entry=muted[i];local success,result=pcall(api.SetMediaItemInfo_Value,entry.item,'B_MUTE',entry.value)
+  if not success or not result then restored=false end
+ end
+ if not ok or not restored then
+  if aa then api.DestroyAudioAccessor(aa) end
+  error(not restored and 'アイテムのミュート状態を復元できません。' or err,0)
+ end
+ -- Use project time, keeping silence before/between/after items in the range.
+ return aa,v.pos,v.pos+v.len
+end
+function Track.read(v,bindings)
  local result=Core.new_layers()
  for key,binding in pairs(bindings) do
   local env=Track.resolve(v,binding)
@@ -4562,11 +5323,11 @@ function Track.read(v,bindings,layers)
  end
  return result
 end
-function UI.sync_curves()
+function UI.sync_curves(state)
  if not Track.valid(A.v) then A.layers=Core.new_layers();A.host_layers=A.layers;UI.dirty();return false end
- local ok,layers=pcall(Track.read,A.v,A.bindings,A.layers)
+ local ok,layers=pcall(Track.read,A.v,A.bindings)
  if not ok then A.layers=Core.new_layers();A.host_layers=A.layers;notice(layers,true);UI.dirty();return false end
- A.layers=layers;A.host_layers=layers;A.host_state=Track.host_state(A.v,A.bindings)
+ A.layers=layers;A.host_layers=layers;A.host_state=state or Track.host_state(A.v,A.bindings)
  A.revision=R.GetProjectStateChangeCount(A.v.project);A.host_check_at=R.time_precise()+.25
  A.hover_node=nil;UI.dirty();return true
 end
@@ -4601,7 +5362,7 @@ function UI.ensure_host()
  if not Track.valid(A.v) or not Track.same(A.v,Track.target()) then return false end
  local current=Track.host_state(A.v,A.bindings)
  if not A.host_state or not BLT.same(current,A.host_state) then
-  Track.finish();UI.cancel_preview();UI.sync_curves(true)
+  Track.finish();UI.cancel_preview();UI.sync_curves(current)
   notice('REAPER側でカーブが変更されたため、ドラッグを終了しました。',true)
   return false
  end
@@ -4622,7 +5383,7 @@ end
 function BLT.applyTrackSettings(v)
  UI.number_commit();A.number_drag=nil;A.pointer_capture=nil
  for path,x in pairs(v.settings) do local obj,k=UI.settings_slot(path);obj[k]=x end
- UI.sync_line_targets();UI.reset_line_preview(false);UI.save_settings();UI.dirty(true)
+ UI.sync_line_targets();UI.reset_line_preview(false);UI.save_settings();UI.dirty()
 end
 function Track.items(env)
  local items={}
@@ -5357,7 +6118,7 @@ function UI.toggle_lane(key)
   if not success then error(result,0) end
   R.TrackList_AdjustWindows(false)
  end,false)
- A.layer=previous;UI.dirty(true)
+ A.layer=previous;UI.dirty()
  if not ok then error(err,0) end
 end
 function UI.copy_curve(target)
@@ -5631,7 +6392,7 @@ function Core.swing_map(project,qn,grid,inverse)
  local _,first,last=Core.measure_at(project,qn)
  if not first then return nil end
  local step=grid.qn
- function knot(i)
+ local function knot(i)
   local straight=math.min(last,first+i*step)
   if straight>=last then return last end
   return math.min(last,straight+(i%2)*step*grid.swing*.5)
@@ -5764,7 +6525,7 @@ end
 return M
 end)()
 -- END BLT SHORTCUTS
-if not R.ImGui_GetBuiltinPath or not R.JS_LICE_CreateBitmap then
+if not R.ImGui_GetBuiltinPath or not R.JS_LICE_CreateBitmap or not R.JS_LICE_LoadPNGFromMemory then
  Language.mb('ReaImGui 0.10以降と js_ReaScriptAPI が必要です。ReaPackで導入・更新してください。','Envelope Canvas Track',0);return
 end
 local ok,value=pcall(BLT.CanvasHost.new,R,'BLT Envelope Canvas Track',W,H+26,SECTION)
@@ -5801,7 +6562,7 @@ controls=BLT.EnvelopeWidgets.new(Host,U,density)
 canvas=BLT.EnvelopeCanvas.new(Host,R,C)
 Media.state=A;Media.onchange=wake_visuals
 mediaGraphics.getchar=function() return Host.focused and 6 or 4 end
-BLT.blocked=function() return UI.context~=nil or shell.popupOpen or Host.drag~=nil or gfx.mouse_y<26 and not A.pointer_capture end
+BLT.blocked=function() return UI.context~=nil or shell.popupOpen or A.spectrum_menu_open or Host.drag~=nil or gfx.mouse_y<26 and not A.pointer_capture end
 BLT.recoverInput=function(_,err) cancelEdit();U.down=false;BLT.logError(err);wake_visuals() end
 BLT.attachPresets({R=R,section=SECTION,defaults=BLT.envelopeDefaults,capture=BLT.captureEnvelope,
  valid=BLT.validTrackSettings,apply=BLT.applyTrackSettings,busy=function() return A.busy or A.drag~=nil end,
@@ -5837,9 +6598,15 @@ function UI.theme_sync()
  local index=0;local changed=false
  local function check(v) index=index+1;if themeSignature[index]~=v then themeSignature[index]=v;changed=true end end
  check(shell.theme.enabled)
- for _,color in ipairs({C.bg,C.text}) do for i=1,3 do check(color[i]) end end
+ for _,color in ipairs({C.bg,C.field,C.text,C.accent,C.accent2}) do for i=1,3 do check(color[i]) end end
  if not changed then return end
  for _,d in ipairs(UI.defs) do d.original_color=d.original_color or d.color;d.color=shell.theme.enabled and BLT.EnvelopeWidgets.fit(d.original_color,C.bg,C.text) or d.original_color end
+ if BLT.EnvelopeSpectrogram.configure_palette(C,shell.theme.enabled) then
+  local j=A.spectrum_job
+  if j and j.data.complete then UI.remember_spectrum_data(j.data);UI.stop_spectrum() end
+  while #A.spectrum_cache>0 do UI.drop_spectrum(#A.spectrum_cache) end
+  UI.ensure_spectrum()
+ end
  canvas.valid=false
 end
 function UI.geometry()
@@ -5859,7 +6626,7 @@ function UI.fit_text(text,width,size,kind)
 end
 local buttonOptions={}
 function UI.button(id,title,sub,x,y,w,h,fn,enabled,selected,tone)
- local choice=id:match('^mode_') or id:match('^interp_')
+ local choice=id:match('^mode_') or id:match('^interp_') or id:match('^display_')
  local options=buttonOptions[id] or {};buttonOptions[id]=options
  options.variant=id:match('^clear') and 'clear' or nil
  options.attention=id=='fit' and (A.span<1 or A.view>0) or nil
@@ -5870,6 +6637,47 @@ function UI.button(id,title,sub,x,y,w,h,fn,enabled,selected,tone)
  register(id,x,y,w,h,fn,'',enabled)
 end
 
+local topControls
+function UI.top_controls_layout()
+ if topControls and topControls.scale==scale and topControls.dpi==Host.dpi and topControls.face==Host.faces[1] then return topControls end
+ local dropdownWidth=0;font(11,1,false)
+ for _,item in ipairs(BLT.EnvelopeSpectrogram.scales) do local w=gfx.measurestr(item.name);dropdownWidth=max(dropdownWidth,w/scale) end
+ topControls={scale=scale,dpi=Host.dpi,face=Host.faces[1],scaleWidth=math.ceil(dropdownWidth+16+30*density+2)}
+ topControls.scaleX=1098-topControls.scaleWidth
+ topControls.spectrogramX=topControls.scaleX-158;topControls.waveX=topControls.spectrogramX-96
+ topControls.nameWidth=topControls.waveX-44
+ return topControls
+end
+local scaleButtonOptions={size=11/density,bold=false,trailing='menu',center=false,labelInset=8/density}
+function UI.spectrum_scale_button()
+ local layout=UI.top_controls_layout()
+ local enabled=A.display_mode=='spectrogram' and not A.busy and not A.drag
+ if enabled then gfx.wheelRegion(ox+layout.scaleX*scale,oy+115*scale,layout.scaleWidth*scale,20*scale) end
+ controls:button('spectrum_scale',BLT.EnvelopeSpectrogram.scale_name(A.spectrum_scale),layout.scaleX,115,layout.scaleWidth,20,enabled,nil,nil,scaleButtonOptions)
+ register('spectrum_scale',layout.scaleX,115,layout.scaleWidth,20,function()
+  if enabled then UI.number_commit();A.spectrum_menu_request=true;UI.refresh() end
+ end,Language.code=='JP' and '周波数の尺度を切り替えます。Log：100 Hz～ ／ Extended Log：10 Hz～ ／ Linear・Mel・Bark：0 Hz～'
+  or 'Frequency scale. Log: 100 Hz and up / Extended Log: 10 Hz and up / Linear, Mel, Bark: 0 Hz and up',enabled)
+end
+function UI.spectrum_scale_menu()
+ if A.spectrum_menu_request then
+  A.spectrum_menu_request=nil
+  local b=widgetByID.spectrum_scale
+  I.SetNextWindowPos(ctx,Host.originX+sx(b.x),Host.originY+sy(b.y+b.h+4))
+  I.OpenPopup(ctx,'BLT_TRACK_SPECTRUM_SCALE')
+ end
+ I.PushFont(ctx,Host.font,max(10,12*scale))
+ I.PushStyleColor(ctx,I.Col_PopupBg,Host.rgba(C.panel[1],C.panel[2],C.panel[3],1))
+ I.PushStyleColor(ctx,I.Col_Text,Host.rgba(C.text[1],C.text[2],C.text[3],1))
+ if I.BeginPopup(ctx,'BLT_TRACK_SPECTRUM_SCALE') then
+  for _,item in ipairs(BLT.EnvelopeSpectrogram.scales) do
+   if I.Selectable(ctx,item.name,A.spectrum_scale==item.id,0,150*scale,24*scale) then UI.set_spectrum_scale(item.id) end
+  end
+  I.EndPopup(ctx)
+ end
+ A.spectrum_menu_open=I.IsPopupOpen(ctx,'BLT_TRACK_SPECTRUM_SCALE')
+ I.PopStyleColor(ctx,2);I.PopFont(ctx)
+end
 local variableOptions={background=false,showState=false,size=12/density,switchScale=.58/density}
 function UI.variable_checkbox(group,x,y)
  local on=A[group..'_variable']~=false;local enabled=not A.busy and A.tool=='line'
@@ -5956,7 +6764,7 @@ function UI.layer_cards()
   U:frame(x/density,cy/density,cw/density,61/density,frame)
   if enabled and visible then controls:outline(x,cy,cw,61,palette) end
   label(q.name,x+8,cy+1,16,enabled and C.text or C.muted,1,cw-84,28,5,true)
-  register('layer_'..q.key,x,cy,cw-74,30,function() UI.number_commit();A.layer=q.key;A.selection=nil;UI.dirty(true) end,'')
+  register('layer_'..q.key,x,cy,cw-74,30,function() UI.number_commit();A.layer=q.key;A.selection=nil;UI.dirty() end,'')
   UI.button('copy_'..q.key,'COPY',nil,x+cw-70,cy+4,62,23,function() UI.copy_curve(q.key) end,not A.busy and enabled and A.layer~=q.key and A.layers[A.layer].env~=nil,nil,tint)
   local binding=A.bindings[q.key];local caption=binding and binding.name or Language.message('割当先を選択')
   UI.button('assign_'..q.key,UI.fit_text(caption,cw-102,14,1),nil,x+8,cy+32,cw-86,26,function() UI.assign(q.key) end,not A.busy and A.v~=nil,nil,tint)
@@ -5973,12 +6781,15 @@ function UI.canvas_surface()
   gfx=canvas.g;scale,ox,oy=1,-g.x,-g.y
   local success,err=xpcall(function()
    rect(g.x,g.y,g.w,g.h,C.field)
+   if A.display_mode=='spectrogram' and A.spectrum and A.spectrum.scale==A.spectrum_scale then
+    BLT.EnvelopeSpectrogram.draw(gfx,A.spectrum,{x=0,y=0,w=g.w,h=g.h},A.view,A.span)
+   end
    for i=0,8 do
     local x=g.x+g.w*i/8;line(x,g.y,x,g.y+g.h,C.edge,i%2==0 and .35 or .18)
     local y=g.y+g.h*i/8;line(g.x,y,g.x+g.w,y,C.edge,i==4 and .56 or .21)
    end
    local count=#A.wave
-   if count>0 then for px=0,g.w-1 do
+   if A.display_mode=='wave' and count>0 then for px=0,g.w-1 do
     local first=clamp(floor((A.view+px/g.w*A.span)*count)+1,1,count)
     local last=clamp(ceil((A.view+(px+1)/g.w*A.span)*count),1,count);local peak=0
     for j=first,max(first,last) do peak=max(peak,A.wave[j] or 0) end
@@ -5996,12 +6807,25 @@ function UI.canvas_surface()
 end
 function UI.static()
  widgetCount=0
- label(A.v and UI.fit_text(string.format('%s  |  %.3f — %.3f s',A.v.name,A.v.pos,A.v.pos+A.v.len),1050,16,1) or '',24,105,16,C.text,1,1050,27,0,true)
+ local layout=UI.top_controls_layout()
+ label(A.v and UI.fit_text(string.format('%s  |  %.3f — %.3f s',A.v.name,A.v.pos,A.v.pos+A.v.len),layout.nameWidth,16,1) or '',24,105,16,C.text,1,layout.nameWidth,27,0,true)
+ UI.button('display_wave','波形',nil,layout.waveX,101,88,34,function() UI.set_display('wave') end,not A.busy and not A.drag,A.display_mode=='wave')
+ UI.button('display_spectrogram','スペクトログラム',nil,layout.spectrogramX,101,150,34,function() UI.set_display('spectrogram') end,not A.busy and not A.drag,A.display_mode=='spectrogram')
+ UI.spectrum_scale_button()
+ widgetByID.display_spectrogram.hint=Language.code=='JP' and '選択トラックの時間選択範囲を解析します。尺度変更は解析結果を再利用。トラックFX前の音声を表示します。'
+  or 'Analyze the time selection on the selected track, before track FX. Scale changes reuse the analysis.'
  UI.tools_panel()
  local d=UI.def();label(d.code,212,143,12,d.color,3,130,21,0,true)
  label(UI.fit_text(A.bindings[d.key] and A.bindings[d.key].name or Language.message(d.sub),380,12,1),350,141,12,C.muted,1,380,21)
  right_label(A.v and 'LIVE / TRACK AUTOMATION' or 'TRACK / TIME SELECTION',996,141,11,C.muted,3,true)
  UI.canvas_surface()
+ if A.display_mode=='spectrogram' then
+  local g=UI.graph
+  for _,hz in ipairs(UI.spectrum_ticks[A.spectrum_scale]) do
+   local y=g.y+g.h*(1-BLT.EnvelopeSpectrogram.position(hz,A.spectrum_scale))
+   label(hz>=1000 and string.format('%gk Hz',hz/1000) or hz..' Hz',g.x+7,clamp(y-7,g.y+3,g.y+g.h-17),10,C.muted,3,62,16)
+  end
+ end
 
  local g=UI.graph
  local layer=A.layers[A.layer]
@@ -6021,10 +6845,26 @@ function UI.static()
  UI.primary()
  for i=#widgets,widgetCount+1,-1 do widgets[i]=nil end
 end
+function UI.analysis_overlay()
+ local job=A.display_mode=='spectrogram' and A.spectrum_job
+ if not job then return end
+ local g=UI.graph;local w,h=300,88;local x,y=g.x+(g.w-w)/2,g.y+(g.h-h)/2
+ local progress=clamp(BLT.EnvelopeSpectrogram.progress(job),0,1)
+ rect(g.x,g.y,g.w,g.h,C.field,.62)
+ controls:panel(x,y,w,h,C.accent2)
+ local title=job.kind=='render' and (Language.code=='JP' and '表示更新中' or 'Updating display')
+  or (Language.code=='JP' and '解析中' or 'Analyzing')
+ label(string.format('%s  %d%%',title,floor(progress*100)),x+20,y+14,17,C.text,1,w-40,28,5,true,true)
+ rect(x+24,y+59,w-48,6,C.edge,.75)
+ if progress>0 then rect(x+24,y+59,(w-48)*progress,6,C.accent2) end
+end
+UI.spectrum_ticks={linear={0,5000,10000,15000,20000,24000},log={100,200,500,1000,2000,5000,10000,20000},
+ extended_log={10,20,50,100,200,500,1000,2000,5000,10000,20000},mel={0,500,1000,2000,4000,8000,16000,24000},
+ bark={0,200,500,1000,2000,4000,8000,16000,24000}}
 local tipID,tipSince
 local function tooltip(now)
  local tip
- if not shell.popupOpen and Host.focused and (gfx.mouse_cap&3)==0 then
+ if not shell.popupOpen and not A.spectrum_menu_open and Host.focused and (gfx.mouse_cap&3)==0 then
   for i=#widgets,1,-1 do local w=widgets[i];if inside(w.x,w.y,w.w,w.h) then tip=w.hint;break end end
  end
  if not tip or tip=='' then tipID=nil;return end
@@ -6050,12 +6890,14 @@ function UI.draw(now)
   line(mouse_x,graph.y,mouse_x,graph.y+graph.h,C.accent2,.23);line(graph.x,mouse_y,graph.x+graph.w,mouse_y,C.accent2,.12)
   label(string.format('%.3fs  /  %s',UI.output_time(u),UI.axis_label(A.layer,value)),mouse_x-105,mouse_y+21,13,UI.def().color,3,210,21,1)
  end
- local status=A.wave_job and string.format('波形を読み込み中  %d%%',floor(A.wave_job.index/A.wave_job.total*100))
+ UI.analysis_overlay()
+ local status=A.spectrum_job and string.format(A.spectrum_job.kind=='render' and 'スペクトログラムの表示を更新中  %d%%' or 'スペクトログラムを解析中  %d%%',floor(BLT.EnvelopeSpectrogram.progress(A.spectrum_job)*100))
+  or A.wave_job and string.format('波形を読み込み中  %d%%',floor(A.wave_job.index/A.wave_job.total*100))
   or BLT.notice or A.status~='' and A.status or not A.v and 'トラックと時間範囲を選択してください。' or ''
  if Media.waiting then status=Media.message(SECTION) end
  U.scale,U.ox,U.oy=scale,ox,oy+22*scale;shell:footer(status,A.warning or A.conflict or BLT.noticeBad,W,H,Core.VERSION)
  U.scale,U.ox,U.oy=density*scale,ox,oy
- U.released=released;U:finish();shell:drawBar();contextMenu();tooltip(now)
+ U.released=released;U:finish();shell:drawBar();contextMenu();UI.spectrum_scale_menu();tooltip(now)
 end
 Host:bindShortcuts()
 gfx.getchar=function(query)
@@ -6068,7 +6910,7 @@ gfx.getchar=function(query)
  return key
 end
 BLTShortcuts.install(R,gfx,{
- blocked=function() return U.editor.edit~=nil or shell.popupOpen or A.drag~=nil or A.number_drag~=nil or A.busy or UI.context~=nil end,
+ blocked=function() return U.editor.edit~=nil or shell.popupOpen or A.drag~=nil or A.number_drag~=nil or A.busy or UI.context~=nil or A.spectrum_menu_open end,
  beforeGlobal=UI.number_commit,
  localKey=function(k,cap) return k==27 or k==13 or k==32 or k==25 or k==26 or k==6579564 or k==127 or k>=49 and k<=51
   or (cap&4)~=0 and (k==89 or k==121 or k==90 or k==122) end})
@@ -6076,6 +6918,7 @@ local finalized=false
 function UI.close()
  if finalized then return end;finalized=true
  BLT.cleanup(Track.finish);BLT.cleanup(UI.number_commit);BLT.cleanup(UI.save_settings);BLT.cleanup(UI.stop_wave)
+ BLT.cleanup(UI.stop_spectrum,true);A.spectrum_data_cache={};A.spectrum_signature=nil;A.spectrum_sources=nil;A.spectrum_fade_editing=nil;A.wave={};A.v=nil
  BLT.cleanup(canvas.close,canvas);BLT.cleanup(Host.close,Host);BLT.cleanup(shell.close,shell)
 end
 R.atexit(UI.close)
@@ -6093,11 +6936,13 @@ function UI.loop()
  local success,err=xpcall(function()
   local now=R.time_precise();Media.tick();UI.safe(function() UI.poll(now) end);UI.poll_playhead();shell.theme.tick(now)
   if A.wave_job and R.EnumProjects(-1,'')==A.wave_job.v.project then UI.safe(UI.wave_step) end
+  if A.display_mode=='spectrogram' then UI.safe(UI.ensure_spectrum) end
+  if A.spectrum_job and R.EnumProjects(-1,'')==A.spectrum_job.v.project then UI.safe(UI.spectrum_step) end
   if BLT.noticeUntil and now>=BLT.noticeUntil then BLT.notice,BLT.noticeUntil=nil,nil;wake_visuals() end
-  if changed(worldState,A.canvas_revision,A.status,A.warning,A.v,A.wave_job,Language.code,C.bg,Presets.current,Host.requestReset,shell.icon.dirty) then A.content_dirty=true end
-  local interactive=U.editor.edit or shell.popupOpen or Host.drag or shell.hoverID or A.drag or A.number_drag or U.capture or UI.context or A.playing
+  if changed(worldState,A.canvas_revision,A.status,A.warning,A.v,A.wave_job,A.spectrum_job,A.spectrum_fade_editing,Language.code,C.bg,Presets.current,Host.requestReset,shell.icon.dirty) then A.content_dirty=true end
+  local interactive=U.editor.edit or shell.popupOpen or Host.drag or shell.hoverID or A.drag or A.number_drag or U.capture or UI.context or A.spectrum_menu_open or A.playing
   local animating=(A.hover_segment and now<(A.segment_flash or 0)+.22) or (A.hover_node and now<(A.point_flash or 0)+.22) or U:attentionAnimating() or U:executeAnimating('apply') or shell.icon:animating(now) or now<(A.number_flash_until or 0)
-  if not A.content_dirty and not A.busy and not A.wave_job and now>=awakeUntil and not interactive and not animating and Host:idle(now) then
+  if not A.content_dirty and not A.busy and not A.wave_job and (not A.spectrum_job or Media.waiting or A.spectrum_fade_editing) and not (A.v and A.display_mode=='spectrogram' and not A.spectrum and not A.spectrum_failed and not Media.waiting and not A.spectrum_fade_editing) and now>=awakeUntil and not interactive and not animating and Host:idle(now) then
    U.now=now;shell.icon.lastTime=now;R.defer(UI.loop);return
   end
   if Host.idleWake then wake_visuals();Host.idleWake=nil end

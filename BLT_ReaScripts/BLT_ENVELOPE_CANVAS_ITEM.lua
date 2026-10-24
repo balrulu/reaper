@@ -1,5 +1,5 @@
 -- @description ENVELOPE CANVAS ITEM
--- @version 0.6.13
+-- @version 0.7.9
 -- @author Balrulu
 -- @provides
 --   . > ../
@@ -289,7 +289,7 @@ local function create_external_storage(api,section,source,state_keys)
  return P
 end
 
-local reaper=create_external_storage(reaper,'BLT_ENVELOPE_CANVAS_ITEM',debug.getinfo(1,'S').source,{'preferences_v1'})
+local reaper=create_external_storage(reaper,'BLT_ENVELOPE_CANVAS_ITEM',debug.getinfo(1,'S').source,{'preferences_v1','background_mode','spectrum_scale'})
 
 local BLTPresetLimits={bytes=16777216,stringBytes=2097152,nodes=262144,entries=8192}
 function BLTPresetLimits.show(english)
@@ -3049,6 +3049,9 @@ function M.new(host,api,C)
  function G.rect(x,y,w,h) api.JS_LICE_FillRect(bitmap,floor(x*dpi+.5),floor(y*dpi+.5),max(1,ceil(w*dpi)),max(1,ceil(h*dpi)),color,alpha,'COPY') end
  function G.line(x,y,xx,yy,aa) api.JS_LICE_Line(bitmap,x*dpi,y*dpi,xx*dpi,yy*dpi,color,alpha,'COPY',aa~=0) end
  function G.circle(x,y,r) api.JS_LICE_FillCircle(bitmap,x*dpi,y*dpi,r*dpi,color,alpha,'COPY',true) end
+ function G.bitmap(source,x,y,w,h,srcx,srcy,srcw,srch,opacity)
+  api.JS_LICE_ScaledBlit(bitmap,floor(x*dpi+.5),floor(y*dpi+.5),max(1,ceil(w*dpi)),max(1,ceil(h*dpi)),source,srcx,srcy,srcw,srch,opacity or 1,'COPY')
+ end
  function V:begin(w,h,scale,revision,tones)
   dpi=ceil(host.dpi or 1)*scale
   local iw,ih=max(1,ceil(w*dpi)),max(1,ceil(h*dpi))
@@ -3126,6 +3129,392 @@ function M.new(host,api,C)
   if bitmap then api.JS_LICE_DestroyBitmap(bitmap);bitmap=nil end
  end
  return V
+end
+return M
+end)()
+
+BLT.EnvelopeSpectrogram=(function()
+local M={SR=48000,N=8192,ROWS=384,MIN_COLUMNS=512,MAX_COLUMNS=2048,HOP=256,HIGH=24000}
+local min,max,floor,ceil,log=math.min,math.max,math.floor,math.ceil,math.log
+local byte=string.byte
+M.scales={{id='linear',name='Linear'},{id='mel',name='Mel'},{id='bark',name='Bark'},{id='log',name='Log'},{id='extended_log',name='Extended Log'}}
+local definitions={};for i,scale in ipairs(M.scales) do scale.index=i;definitions[scale.id]=scale end
+local total_rows=M.ROWS*#M.scales
+local pack_format='<'..string.rep('f',total_rows)
+function M.scale_id(id) return definitions[id] and id or 'log' end
+function M.scale_name(id) return definitions[M.scale_id(id)].name end
+function M.low(id) return id=='log' and 100 or id=='extended_log' and 10 or 0 end
+local function transform(hz,id)
+ if id=='linear' then return hz
+ elseif id=='mel' then return log(1+hz/700)
+ elseif id=='bark' then local x=hz/650;return log(x+math.sqrt(x*x+1)) end
+ return log(max(M.low(id),hz))
+end
+function M.position(hz,id)
+ id=M.scale_id(id);local low=transform(M.low(id),id)
+ return (transform(hz,id)-low)/(transform(M.HIGH,id)-low)
+end
+function M.frequency(position,id)
+ id=M.scale_id(id);local low=transform(M.low(id),id)
+ local value=low+position*(transform(M.HIGH,id)-low)
+ if id=='linear' then return value
+ elseif id=='mel' then return 700*(math.exp(value)-1)
+ elseif id=='bark' then return 325*(math.exp(value)-math.exp(-value)) end
+ return math.exp(value)
+end
+local window,band_cache=nil,{}
+local function reference_window()
+ if not window then window={};for i=0,M.N-1 do window[i+1]=.5-.5*math.cos(2*math.pi*i/(M.N-1)) end end
+ return window
+end
+local function bands_for(id)
+ if band_cache[id] then return band_cache[id] end
+ local bands={}
+ for row=1,M.ROWS do
+  local lo,hi=M.frequency((row-1)/M.ROWS,id),M.frequency(row/M.ROWS,id)
+  local first,last=max(1,ceil(lo*M.N/M.SR)),min(M.N//2-1,floor(hi*M.N/M.SR))
+  if last<first then first=max(1,min(M.N//2-1,floor(M.frequency((row-.5)/M.ROWS,id)*M.N/M.SR+.5)));last=first end
+  bands[row]={first,last}
+ end
+ band_cache[id]=bands;return bands
+end
+local stops={{.010,.020,.042},{.045,.080,.240},{.180,.200,.540},{.440,.300,.780},{.290,.640,.910},{.790,.940,1}}
+local crc_table={}
+for i=0,255 do
+ local c=i;for _=1,8 do c=(c>>1)~((c&1)==1 and 0xedb88320 or 0) end;crc_table[i]=c
+end
+local crc1,crc2,crc3={},{},{}
+for i=0,255 do
+ local c=crc_table[i];c=(c>>8)~crc_table[c&255];crc1[i]=c
+ c=(c>>8)~crc_table[c&255];crc2[i]=c
+ c=(c>>8)~crc_table[c&255];crc3[i]=c
+end
+local function crc(bytes,value)
+ local c=value or 0xffffffff;local size=#bytes;local i=1
+ while i+3<=size do
+  local a,b,d,e=byte(bytes,i,i+3);c=c~(a|(b<<8)|(d<<16)|(e<<24))
+  c=crc3[c&255]~crc2[(c>>8)&255]~crc1[(c>>16)&255]~crc_table[c>>24];i=i+4
+ end
+ for k=i,size do c=(c>>8)~crc_table[(c~byte(bytes,k))&255] end
+ return c
+end
+local function chunk(kind,bytes)
+ return string.pack('>I4',#bytes)..kind..bytes..string.pack('>I4',crc(bytes,crc(kind))~0xffffffff)
+end
+local png_signature='\137PNG\13\10\26\10'
+local png_end=chunk('IEND','')
+local default_palette
+local function mix(a,b,t) return {a[1]+(b[1]-a[1])*t,a[2]+(b[2]-a[2])*t,a[3]+(b[3]-a[3])*t} end
+function M.configure_palette(C,enabled)
+ if not enabled and default_palette then
+  local changed=M.palette~=default_palette;M.palette=default_palette;return changed
+ end
+ local colors=stops
+ if enabled then
+  local base=mix(C.field,C.bg,.25);local accent=C.accent;local high=C.accent2
+  colors={base,mix(base,accent,.18),mix(base,accent,.45),mix(base,accent,.8),mix(accent,high,.35),mix(high,C.text,.8)}
+ end
+ local bytes={}
+ for i=0,255 do
+  local t=i/255*(#colors-1);local a=min(#colors-1,floor(t)+1);local f=t-(a-1)
+  for k=1,3 do bytes[#bytes+1]=floor(max(0,min(1,colors[a][k]+(colors[a+1][k]-colors[a][k])*f))*255+.5) end
+ end
+ local plte=chunk('PLTE',string.char(table.unpack(bytes)))
+ if M.palette and M.palette.chunk==plte then return false end
+ M.palette={chunk=plte};if not enabled then default_palette=M.palette end;return true
+end
+M.configure_palette(nil,false)
+local color_processor=[[
+function png_crc_byte(value) local(high) (
+ high=floor(crc_value/256);
+ crc_value=high ~ crc_table[(crc_value-high*256) ~ value];
+ crc_value<0 ? crc_value+=4294967296;
+);
+function png_put(value) (
+ str_setchar(#block,strlen(#block),value);png_crc_byte(value);
+);
+function png_put32(word) local(c a b d e high) (
+ word>=2147483648 ? word-=4294967296;
+ str_setchar(#block,strlen(#block),word,'i');
+ c=crc_value>=2147483648 ? crc_value-4294967296 : crc_value;
+ c=c ~ word;c<0 ? c+=4294967296;
+ high=floor(c/256);a=c-high*256;c=high;
+ high=floor(c/256);b=c-high*256;c=high;
+ high=floor(c/256);d=c-high*256;e=high;
+ crc_value=crc3[a] ~ crc2[b] ~ crc1[d] ~ crc_table[e];
+ crc_value<0 ? crc_value+=4294967296;
+);
+maxima=0;crc_table=groups;crc1=crc_table+256;crc2=crc1+256;crc3=crc2+256;pixels=crc3+256;
+operation==0 ? (
+ row=0;loop(rows,
+  maximum=maxima[floor(row/height)];
+  value=floor(min(1,max(0,(10*log(max(str_getchar(#power,row*4,'f'),power_floor)/max(maximum,normal_floor))/log(10)+80)/80))*255+0.5);
+  pixels[row*columns+column_index]=value;row+=1;
+ );
+) : (
+ strcpy(#block,"");loop(min(row_count,height-row_index),
+ row_index==0 ? (crc_value=crc_start;adler_a=1;adler_b=0;);
+ n=columns+1;
+ png_put(row_index==height-1);png_put(n%256);png_put(floor(n/256));
+ n=65535-n;png_put(n%256);png_put(floor(n/256));png_put(0);
+ adler_b+=adler_a;source=(scale_index*height+height-1-row_index)*columns;x=0;
+ loop(floor(columns/4),
+  p0=pixels[source+x];p1=pixels[source+x+1];p2=pixels[source+x+2];p3=pixels[source+x+3];
+  png_put32(p0+p1*256+p2*65536+p3*16777216);
+  adler_b+=4*adler_a+4*p0+3*p1+2*p2+p3;adler_a+=p0+p1+p2+p3;x+=4;
+ );
+ loop(columns-x,value=pixels[source+x];png_put(value);adler_a+=value;adler_b+=adler_a;x+=1;);
+ adler_a%=65521;adler_b%=65521;
+ row_index==height-1 ? (
+  png_put(floor(adler_b/256));png_put(adler_b%256);png_put(floor(adler_a/256));png_put(adler_a%256);
+  png_crc=4294967295-crc_value;
+ );
+ row_index+=1;
+ );
+);
+]]
+local processor=[[
+input=0; spectrum=block*channels; window=spectrum+n; low=window+n; high=low+rows; output=high+rows; maxima=output+rows; bins=maxima+rows/height;
+operation==0 ? (
+ memset(maxima,0,rows/height);i=0;loop(n,window[i]=0.5-0.5*cos(2*$pi*i/(n-1));i+=1;);
+) : operation==1 ? (
+ memset(spectrum,0,n);i=0;
+ loop(count,p=i+offset;spectrum[p]=input[(i+source_offset)*channels+channel]*window[p];i+=1;);
+) : (
+ k=1;loop(n/2-1,re=spectrum[2*k];im=spectrum[2*k+1];bins[k]=re*re+im*im;k+=1;);
+ channel==channels-1 ? strcpy(#power,"");
+ row=0;loop(rows,
+  k=low[row];peak=0;
+  loop(high[row]-k+1,peak=max(peak,bins[k]);k+=1;);
+  output[row]=(channel==0 ? 0 : output[row])+peak/channels;
+  group=floor(row/height);maxima[group]=max(maxima[group],output[row]);
+  channel==channels-1 ? str_setchar(#power,row*4,output[row],'f');row+=1;
+ );
+);
+]]
+local function stop_processor(j)
+ if j.processor then j.host.I.Detach(j.host.ctx,j.processor);j.processor=nil end
+end
+local function start_processor(api,j,quantizing)
+ if not j.host then return end
+ local I=j.host.I
+ local ok,fn=pcall(I.CreateFunctionFromEEL,quantizing and color_processor or processor)
+ if not ok or not fn then return end
+ j.processor=fn;I.Attach(j.host.ctx,fn)
+ local values=quantizing and {maxima=0,crc_table=#M.scales,rows=total_rows,height=M.ROWS,groups=#M.scales,
+  columns=j.columns,row_count=max(1,floor(8192/(j.columns+6))),operation=0,power_floor=1e-30,normal_floor=1e-20,crc_start=crc('\120\1',crc('IDAT'))}
+  or {n=M.N,rows=total_rows,height=M.ROWS,block=j.block,channels=j.channels,operation=0}
+ for name,value in pairs(values) do I.Function_SetValue(fn,name,value) end
+ if not quantizing then
+  I.Function_Execute(fn)
+  local first,last={},{};for row,band in ipairs(j.bands) do first[row],last[row]=band[1],band[2] end
+  I.Function_SetValue_Array(fn,'low',api.new_array(first));I.Function_SetValue_Array(fn,'high',api.new_array(last))
+ end
+ if quantizing then
+  I.Function_SetValue_Array(fn,'maxima',api.new_array(j.data.maxima))
+  local values={}
+  for _,table in ipairs({crc_table,crc1,crc2,crc3}) do
+   for i=0,255 do local c=table[i];values[#values+1]=c>=0x80000000 and c-0x100000000 or c end
+  end
+  I.Function_SetValue_Array(fn,'crc_table',api.new_array(values));j.native_encoding=true;j.encode_batch=max(1,floor(8192/(j.columns+6)))
+ end
+end
+function M.start(v,view,span,map,lookup,scale,host)
+ local duration=map and lookup(map,view+span,'u','t')-lookup(map,view,'u','t') or v.len*span
+ local columns=max(M.MIN_COLUMNS,min(M.MAX_COLUMNS,ceil(duration*M.SR/M.HOP)))
+ local bands={};for _,choice in ipairs(M.scales) do for _,band in ipairs(bands_for(choice.id)) do bands[#bands+1]=band end end
+ return {v=v,view=view,span=span,map=map,lookup=lookup,host=host,scale=M.scale_id(scale),bands=bands,index=0,channel=1,phase='read',kind='analysis',
+  columns=columns,channels=min(64,v.channels),data={columns=columns,view=view,span=span,frames={},pngs={},maxima={0,0,0,0,0}}}
+end
+function M.render(v,data,scale,host)
+ assert(data.complete,'Spectrogram analysis is incomplete')
+ return {v=v,view=data.view,span=data.span,columns=data.columns,host=host,scale=M.scale_id(scale),data=data,index=0,phase='paint',kind='render'}
+end
+function M.release(api,result)
+ if result and result.bitmap then api.JS_LICE_DestroyBitmap(result.bitmap);result.bitmap=nil end
+ if result then result.data=nil end
+end
+function M.cancel(api,j)
+ if not j then return end
+ if j.accessor then local aa=j.accessor;j.accessor=nil;api.DestroyAudioAccessor(aa) end
+ stop_processor(j);M.release(api,j);j.buffer=nil;j.fft=nil;j.values=nil;j.time=nil;j.power=nil;j.bin_power=nil;j.bands=nil;j.blocks=nil;j.row_bytes=nil;j.native_encoding=nil;j.data=nil
+end
+function M.create_accessor(api,v)
+ local mute=api.GetMediaItemInfo_Value(v.item,'B_MUTE')
+ if mute==0 then return api.CreateTakeAudioAccessor(v.take) end
+ assert(api.SetMediaItemInfo_Value(v.item,'B_MUTE',0),'解析用のミュート除外に失敗しました。')
+ local ok,aa=pcall(api.CreateTakeAudioAccessor,v.take)
+ local restored=api.SetMediaItemInfo_Value(v.item,'B_MUTE',mute)
+ if not restored then if ok and aa then api.DestroyAudioAccessor(aa) end;error('アイテムのミュート状態を復元できません。',0) end
+ if not ok then error(aa,0) end
+ return aa
+end
+local function read_column(api,j)
+ local u=j.view+(j.index+.5)/j.columns*j.span
+ local t=j.map and j.lookup(j.map,u,'u','t') or u*j.v.len
+ local start=floor(t*M.SR-M.N/2);local requested=max(0,start)
+ local offset=max(0,-start);local count=max(0,min(M.N-offset,j.samples-requested))
+ j.offset,j.count=offset,count
+ if count>0 and (not j.block_start or requested<j.block_start or requested+count>j.block_start+j.block_count) then
+  j.block_start=requested;j.block_count=min(j.block,j.samples-requested);j.buffer.clear()
+  local rc=api.GetAudioAccessorSamples(j.accessor,M.SR,j.channels,j.first+requested/M.SR,j.block_count,j.buffer)
+  assert(type(rc)=='number' and rc>=0,'スペクトログラムの音声読み出しに失敗しました。')
+  if j.processor then j.host.I.Function_SetValue_Array(j.processor,'input',j.buffer)
+  else j.values=j.buffer.table(1,j.block_count*j.channels) end
+ end
+ j.source_offset=requested-(j.block_start or requested);j.column_ready=true
+ if j.processor then
+  local I=j.host.I
+  I.Function_SetValue(j.processor,'offset',offset);I.Function_SetValue(j.processor,'count',count)
+  I.Function_SetValue(j.processor,'source_offset',j.source_offset)
+ else j.power={};for row=1,total_rows do j.power[row]=0 end end
+end
+local function channel_fft(j)
+ if j.processor then
+  local I=j.host.I
+  I.Function_SetValue(j.processor,'channel',j.channel-1);I.Function_SetValue(j.processor,'operation',1);I.Function_Execute(j.processor)
+  I.Function_GetValue_Array(j.processor,'spectrum',j.fft);j.fft.fft_real(M.N,true)
+  I.Function_SetValue_Array(j.processor,'spectrum',j.fft)
+  I.Function_SetValue(j.processor,'operation',2);I.Function_Execute(j.processor)
+ else
+  local window=reference_window()
+  for n=0,M.N-1 do
+   local i=n-j.offset
+   j.time[n+1]=(i>=0 and i<j.count and j.values[(i+j.source_offset)*j.channels+j.channel] or 0)*window[n+1]
+  end
+  j.fft.copy(j.time);j.fft.fft_real(M.N,true)
+  local fft=j.fft.table(1,M.N);local bins=j.bin_power
+  for k=1,M.N//2-1 do local re,im=fft[2*k+1],fft[2*k+2];bins[k]=re*re+im*im end
+  -- Average channel powers without cancelling anti-phase stereo.
+  for row,band in ipairs(j.bands) do
+   local peak=0
+   for k=band[1],band[2] do peak=max(peak,bins[k]) end
+   j.power[row]=j.power[row]+peak/j.channels
+  end
+ end
+ j.channel=j.channel+1
+ if j.channel>j.channels then
+  local frame
+  if j.processor then
+   frame=j.host.I.Function_GetValue_String(j.processor,'#power')
+   assert(#frame==total_rows*4,'Spectrogram power transfer failed')
+  else
+   for row,power in ipairs(j.power) do local group=(row-1)//M.ROWS+1;j.data.maxima[group]=max(j.data.maxima[group],power) end
+   frame=string.pack(pack_format,table.unpack(j.power))
+  end
+  j.index=j.index+1;j.channel=1;j.data.frames[j.index]=frame;j.power=nil;j.column_ready=false
+ end
+end
+local function quantize_column(j)
+ if j.processor then
+  local I=j.host.I;I.Function_SetValue_String(j.processor,'#power',j.data.frames[j.index+1])
+  I.Function_SetValue(j.processor,'column_index',j.index);I.Function_Execute(j.processor)
+  j.data.frames[j.index+1]=nil
+ else
+  local values={string.unpack(pack_format,j.data.frames[j.index+1])};values[total_rows+1]=nil
+  for row,power in ipairs(values) do
+   local maximum=j.data.maxima[(row-1)//M.ROWS+1]
+   values[row]=floor(max(0,min(1,(10*log(max(power,1e-30)/max(maximum,1e-20),10)+80)/80))*255+.5)
+  end
+  j.data.frames[j.index+1]=string.char(table.unpack(values))
+ end
+ j.index=j.index+1
+end
+local function encode_row(j)
+ if not j.blocks then
+  j.blocks={'\120\1'}
+  if j.native_encoding then
+   j.host.I.Function_SetValue(j.processor,'scale_index',j.scale_index-1);j.host.I.Function_SetValue(j.processor,'row_index',0)
+  else
+   j.png_crc=crc(j.blocks[1],crc('IDAT'));j.adler_a,j.adler_b=1,0;j.row_bytes={0}
+  end
+ end
+ if j.native_encoding then
+  local I=j.host.I;local fn=j.processor
+  I.Function_Execute(fn)
+  local count=min(M.ROWS-j.index,j.encode_batch);local block=I.Function_GetValue_String(fn,'#block')
+  assert(#block==count*(j.columns+6)+(j.index+count==M.ROWS and 4 or 0),'Spectrogram image transfer failed')
+  j.blocks[#j.blocks+1]=block;j.index=j.index+count
+ else
+  local row=(j.scale_index-1)*M.ROWS+M.ROWS-j.index;local bytes=j.row_bytes;local frames=j.data.frames
+  local a,b=j.adler_a,j.adler_b+j.adler_a -- PNG filter byte is zero.
+  for x=1,j.columns do local value=byte(frames[x],row);bytes[x+1]=value;a=a+value;b=b+a end
+  j.adler_a,j.adler_b=a%65521,b%65521
+  local raw=string.char(table.unpack(bytes));local n=#raw
+  local block=string.pack('<BI2I2',j.index==M.ROWS-1 and 1 or 0,n,0xffff-n)..raw
+  j.blocks[#j.blocks+1]=block;j.png_crc=crc(block,j.png_crc);j.index=j.index+1
+ end
+ if j.index==M.ROWS then
+  local checksum
+  if j.native_encoding then checksum=j.host.I.Function_GetValue(j.processor,'png_crc')
+  else
+   local tail=string.pack('>I4',(j.adler_b<<16)|j.adler_a);j.blocks[#j.blocks+1]=tail
+   checksum=crc(tail,j.png_crc)~0xffffffff
+  end
+  local payload=table.concat(j.blocks)
+  j.data.pngs[M.scales[j.scale_index].id]=string.pack('>I4',#payload)..'IDAT'..payload..string.pack('>I4',checksum)
+  j.blocks=nil;j.row_bytes=nil;j.scale_index=j.scale_index+1;j.index=0
+  if j.scale_index>#M.scales then
+   stop_processor(j);j.native_encoding=nil
+   j.data.header=png_signature..chunk('IHDR',string.pack('>I4I4BBBBB',j.columns,M.ROWS,8,3,0,0,0))
+   j.data.frames=nil;j.data.maxima=nil;j.data.complete=true;j.phase='paint'
+  end
+ end
+end
+local function paint(api,j)
+ local png=j.data.header..M.palette.chunk..j.data.pngs[j.scale]..png_end
+ j.bitmap=assert(api.JS_LICE_LoadPNGFromMemory(png,#png),'Spectrogram image creation failed')
+ j.palette=M.palette;j.index=j.columns;j.done=true
+end
+function M.step(api,j,budget)
+ if j.done then return true end
+ local deadline=api.time_precise()+(budget or .003);local work=0
+ if not j.accessor and j.phase=='read' then
+  j.accessor=assert(M.create_accessor(api,j.v),'スペクトログラム用の音声を取得できません。')
+  j.first=api.GetAudioAccessorStartTime(j.accessor);j.last=api.GetAudioAccessorEndTime(j.accessor)
+  assert(j.last>j.first,'スペクトログラム用の音声範囲が空です。')
+  j.samples=floor((j.last-j.first)*M.SR+1e-7);j.block=max(M.N,floor(131072/j.channels))
+  j.buffer=api.new_array(j.block*j.channels);j.fft=api.new_array(M.N);start_processor(api,j)
+  if not j.processor then j.time={};j.bin_power={} end
+ end
+ repeat
+  if j.phase=='read' then
+   if not j.column_ready then read_column(api,j) end
+   channel_fft(j)
+   if j.index==j.columns then
+    api.DestroyAudioAccessor(j.accessor);j.accessor=nil;j.buffer=nil;j.fft=nil;j.time=nil;j.values=nil
+    j.phase='quantize';j.index=0
+    if j.processor then
+     local maxima=api.new_array(#M.scales);j.host.I.Function_GetValue_Array(j.processor,'maxima',maxima);j.data.maxima=maxima.table()
+    end
+    stop_processor(j);j.bin_power=nil;j.bands=nil;start_processor(api,j,true)
+   end
+  elseif j.phase=='quantize' then
+   quantize_column(j)
+   if j.index==j.columns then
+    j.phase='encode';j.scale_index=1;j.index=0
+    if j.native_encoding then j.data.frames=nil;j.host.I.Function_SetValue(j.processor,'operation',1) end
+   end
+  elseif j.phase=='encode' then encode_row(j)
+  else paint(api,j);return true end
+  work=work+1
+ until work>=256 or api.time_precise()>=deadline
+ return false
+end
+function M.progress(j)
+ if j.done then return 1 end
+ if j.kind=='render' then return 0 end
+ if j.phase=='read' then return .8*(j.index+(j.channel-1)/j.channels)/j.columns end
+ if j.phase=='quantize' then return .8+.05*j.index/j.columns end
+ if j.phase=='encode' then return .85+.14*((j.scale_index-1)*M.ROWS+j.index)/(#M.scales*M.ROWS) end
+ return .99
+end
+function M.draw(g,result,graph,view,span)
+ if not result or not result.bitmap then return end
+ local first,last=max(view,result.view),min(view+span,result.view+result.span)
+ if last<=first then return end
+ g.bitmap(result.bitmap,graph.x+(first-view)/span*graph.w,graph.y,(last-first)/span*graph.w,graph.h,
+  (first-result.view)/result.span*result.columns,0,(last-first)/result.span*result.columns,M.ROWS,1)
 end
 return M
 end)()
@@ -3227,7 +3616,7 @@ local function create_media_gate(api,graphics)
   end
   local a=M.state
   if a then
-   for _,key in ipairs({'job','analysis','batch','source_job','wave_job','pjob','xjob','ajob'}) do visit(a[key],0) end
+    for _,key in ipairs({'job','analysis','batch','source_job','wave_job','spectrum_job','pjob','xjob','ajob'}) do visit(a[key],0) end
    if a.job or a.batch or a.source_job then visit(a.items,0);visit(a.queue,0) end
   end
   if (all_items or (M.all_items and M.state and M.state.job)) and api.CountMediaItems and api.GetMediaItem then
@@ -3514,6 +3903,14 @@ local LanguageCatalog={en={
  ["ホイール：ズーム  /  Shift＋ホイール：横移動"]="Wheel: zoom / Shift+wheel: pan",
  ["512点以上：処理が重くなる可能性があります"]="512+ points may increase processing load",
  ["波形を読み込み中  %d%%"]="Loading waveform %d%%",
+ ["波形"]="Waveform",
+ ["スペクトログラム"]="Spectrogram",
+ ["スペクトログラムを解析中  %d%%"]="Analyzing spectrogram %d%%",
+ ["スペクトログラムの表示を更新中  %d%%"]="Updating spectrogram display %d%%",
+ ["スペクトログラムの音声読み出しに失敗しました。"]="Cannot read audio for the spectrogram.",
+ ["スペクトログラム用の音声を取得できません。"]="Cannot access audio for the spectrogram.",
+ ["スペクトログラム用の音声範囲が空です。"]="The spectrogram audio range is empty.",
+ ["表示範囲を解析。縦軸：周波数（対数）／明るさ：音の強さ。テイクFX前の音声を表示します。"]="Analyze the visible range. Vertical: log frequency. Brightness: sound level. Audio is shown before take FX.",
  ["生成ポイント数上限（カーブ毎）"]="Point limit per curve",
  ["%d 点"]="%d pts",
  ["Envelope Canvas Item | 必要な拡張"]="Envelope Canvas Item | Required extension",
@@ -3530,6 +3927,8 @@ local LanguageCatalog={en={
  {"^解析中%.%.%.([%+%-]?[%d%.eE]+)%%$","Analyzing...%d%%"},
  {"^生成完了：時間 ([%+%-]?[%d%.eE]+)点 / エンベロープ ([%+%-]?[%d%.eE]+)点(.-)。$","Done: %d time points / %d envelope points%s.",{3}},
  {"^波形を読み込み中  ([%+%-]?[%d%.eE]+)%%$","Loading waveform %d%%"},
+ {"^スペクトログラムを解析中  ([%+%-]?[%d%.eE]+)%%$","Analyzing spectrogram %d%%"},
+ {"^スペクトログラムの表示を更新中  ([%+%-]?[%d%.eE]+)%%$","Updating spectrogram display %d%%"},
  {"^([%+%-]?[%d%.eE]+) 点$","%d pts"},
  {"^「(.-)」を上書きしますか？$","\"%s\"?"},
  {"^(.-)」を上書きしますか？$","%s\"?"},
@@ -3812,7 +4211,7 @@ function B.cleanup(fn,...)
  return ok,result
 end
 end
-local Core={VERSION='0.6.10',SECTION='BLT_ENVELOPE_CANVAS_ITEM',MAX_POINTS=1024}
+local Core={VERSION='0.7.9',SECTION='BLT_ENVELOPE_CANVAS_ITEM',MAX_POINTS=1024}
 local min,max,abs,floor,ceil=math.min,math.max,math.abs,math.floor,math.ceil
 local function clamp(v,a,b) return max(a,min(b,v)) end
 local function finite(v) return type(v)=='number' and v==v and abs(v)<math.huge end
@@ -4593,7 +4992,9 @@ end
 local SECTION=Core.SECTION
 local W,H=1120,998
 local A={layers=Core.new_layers(),layer='pitch',tool='free',direction=3,pattern=1,width_variable=false,height_variable=false,width_start=50,width_end=50,width_duration=100,width_curve=0,height_start=50,height_end=50,height_duration=100,height_curve=0,history={},redo={},sessions={},
- status='',warning=false,content_dirty=true,view=0,span=1,wave={},wave_max=1,
+ status='',warning=false,content_dirty=true,view=0,span=1,wave={},wave_max=1,wave_ready=false,
+ display_mode=R.GetExtState(SECTION,'background_mode')=='spectrogram' and 'spectrogram' or 'wave',
+ spectrum_scale=BLT.EnvelopeSpectrogram.scale_id(R.GetExtState(SECTION,'spectrum_scale')),spectrum_cache={},spectrum_data_cache={},
  busy=false,poll_at=0,active=true,point_limit=128,filter_link=false,
  ranges={pitch=48,tape=24,speed=4,volume=24,highpass=24000,lowpass=24000},session_order={}}
 for _,curve in pairs(A.layers) do curve.enabled=false;curve.kind="smooth" end
@@ -4814,6 +5215,8 @@ function UI.safe(fn)
  if not ok then
   A.busy=false
   BLT.cleanup(UI.stop_wave)
+  if A.spectrum_job then A.spectrum_failed=true end
+  BLT.cleanup(UI.stop_spectrum)
   if A.v then
    local refreshed,value=pcall(function() if R.ValidatePtr2(A.v.project,A.v.item,'MediaItem*') then return Core.info(A.v.project,A.v.item) end end)
    A.v=refreshed and value or nil;A.revision=nil
@@ -4839,10 +5242,116 @@ function UI.stop_wave()
  if A.wave_job and A.wave_job.accessor then R.DestroyAudioAccessor(A.wave_job.accessor) end;A.wave_job=nil
 end
 
-function UI.start_wave()
+function UI.drop_spectrum(index)
+ local result=table.remove(A.spectrum_cache,index)
+ if A.spectrum==result then A.spectrum=nil end
+ BLT.EnvelopeSpectrogram.release(R,result)
+end
+
+function UI.stop_spectrum(clear)
+ if A.spectrum_job then local j=A.spectrum_job;A.spectrum_job=nil;BLT.EnvelopeSpectrogram.cancel(R,j) end
+ if clear then
+  while #A.spectrum_cache>0 do UI.drop_spectrum(#A.spectrum_cache) end
+  A.spectrum=nil;A.spectrum_data=nil;A.spectrum_key=nil;A.spectrum_failed=nil
+ end
+end
+
+function UI.spectrum_source_key()
+ if not A.spectrum_key then
+  A.spectrum_key={project=A.v.project,item=A.v.item,take=A.v.take,map=A.record and A.record.map,
+   signature=UI.mute_independent_signature(A.record and A.record.after or A.baseline)}
+ end
+ return A.spectrum_key
+end
+function UI.remember_spectrum_data(data)
+ if A.spectrum_data==data then return end
+ A.spectrum_data=data
+ for i,entry in ipairs(A.spectrum_data_cache) do
+  if entry.data==data then table.remove(A.spectrum_data_cache,i);break end
+ end
+ table.insert(A.spectrum_data_cache,1,{key=UI.spectrum_source_key(),data=data})
+ while #A.spectrum_data_cache>2 do table.remove(A.spectrum_data_cache) end
+end
+function UI.ensure_spectrum()
+ if A.display_mode~='spectrogram' or A.spectrum_failed or not A.v or A.busy then return end
+ local S=BLT.EnvelopeSpectrogram;local job=A.spectrum_job
+ if A.spectrum and A.spectrum.scale==A.spectrum_scale and A.spectrum.palette==S.palette and not job then return end
+ -- Scale changes preserve both FFT analysis and initial image preparation.
+ if job and job.kind=='analysis' and not job.data.complete then job.scale=A.spectrum_scale;return end
+ if job and job.scale==A.spectrum_scale then return end
  if not Media.ready() then return end
- UI.stop_wave();A.wave={};A.wave_max=1
+ UI.stop_spectrum()
+ for i,cached in ipairs(A.spectrum_cache) do
+  if cached.scale==A.spectrum_scale and cached.palette==S.palette then
+   if i>1 then table.remove(A.spectrum_cache,i);table.insert(A.spectrum_cache,1,cached) end
+   if A.spectrum~=cached then A.spectrum=cached;UI.dirty() end
+   return
+  end
+ end
+ while #A.spectrum_cache>=2 do UI.drop_spectrum(#A.spectrum_cache) end
+ if not A.spectrum_data then
+  local key=UI.spectrum_source_key()
+  for _,entry in ipairs(A.spectrum_data_cache) do
+   local k=entry.key
+   if k.project==key.project and k.item==key.item and k.take==key.take and k.map==key.map and k.signature==key.signature then
+    UI.remember_spectrum_data(entry.data);break
+   end
+  end
+ end
+ if A.spectrum_data then
+  A.spectrum_job=S.render(A.v,A.spectrum_data,A.spectrum_scale,Host);UI.safe(UI.spectrum_step)
+ else
+  -- Reserve one of the two data slots before starting another source.
+  while #A.spectrum_data_cache>=2 do table.remove(A.spectrum_data_cache) end
+  A.spectrum_job=S.start(A.v,0,1,A.record and A.record.map,Core.lookup,A.spectrum_scale,Host)
+ end
+ UI.refresh()
+end
+
+function UI.spectrum_step()
+ if not Media.ready() or A.drag then return end
+ local j=A.spectrum_job;if not j then return end
+ if not Core.valid(j.v.project,j.v.item,j.v.take) then UI.stop_spectrum(true);return end
+ local done=BLT.EnvelopeSpectrogram.step(R,j,.006)
+ if j.data.complete then UI.remember_spectrum_data(j.data) end
+ if done then
+  table.insert(A.spectrum_cache,1,j);A.spectrum=j;A.spectrum_job=nil;UI.dirty()
+ elseif R.time_precise()>(A.spectrum_present_at or 0) then A.spectrum_present_at=R.time_precise()+.15;UI.refresh() end
+end
+
+function UI.spectrum_wheel(wheel)
+ if A.display_mode~='spectrogram' or A.busy or A.drag then A.spectrum_wheel=0;return end
+ local steps,remainder=math.modf((A.spectrum_wheel or 0)+wheel/120);A.spectrum_wheel=remainder
+ if steps==0 then return end
+ local scales=BLT.EnvelopeSpectrogram.scales
+ for i,choice in ipairs(scales) do
+  if choice.id==A.spectrum_scale then UI.set_spectrum_scale(scales[clamp(i-steps,1,#scales)].id);return end
+ end
+end
+
+function UI.set_spectrum_scale(id)
+ id=BLT.EnvelopeSpectrogram.scale_id(id)
+ if A.busy or A.drag or id==A.spectrum_scale then return end
+ UI.number_commit();A.spectrum_scale=id;A.spectrum_failed=nil
+ BLT.store(SECTION,'spectrum_scale',id,true)
+ UI.ensure_spectrum();UI.dirty()
+end
+
+function UI.set_display(mode)
+ if A.busy or A.drag or (mode~='wave' and mode~='spectrogram') or A.display_mode==mode then return end
+ UI.number_commit();A.display_mode=mode;A.spectrum_failed=nil
+ BLT.store(SECTION,'background_mode',mode,true)
+ if mode=='spectrogram' then UI.stop_wave();UI.ensure_spectrum()
+ else UI.stop_spectrum();if not A.wave_ready then UI.start_wave(true) end end
+ UI.dirty()
+end
+
+function UI.start_wave(preserve_spectrum)
+ if not Media.ready() then return end
+ UI.stop_wave();A.wave={};A.wave_max=1;A.wave_ready=false
+ if not preserve_spectrum then UI.stop_spectrum(true) end
  if not A.v then return end
+ if A.display_mode=='spectrogram' then UI.ensure_spectrum();UI.dirty();return end
  local v=A.v;local total=4096;local channels=min(64,v.channels)
  A.wave_job={v=v,total=total,index=0,rate=total/v.len,channels=channels,buffer=R.new_array(1024*channels),max=0}
  UI.dirty()
@@ -4888,7 +5397,7 @@ function UI.wave_step()
  until j.index>=j.total or R.time_precise()>=budget
  if j.index>=j.total then
   for i=1,j.total do A.wave[i]=A.wave[i] or 0 end
-  A.wave_max=max(.001,j.max);UI.stop_wave();UI.dirty()
+  A.wave_max=max(.001,j.max);A.wave_ready=true;UI.stop_wave();UI.dirty()
  elseif now>(A.wave_present_at or 0) then A.wave_present_at=now+.15;A.wave_max=max(.001,j.max);UI.dirty() end
 end
 
@@ -4898,7 +5407,7 @@ function UI.stash()
  if not A.v then return end
  local key=UI.session_key(A.v)
  if not A.sessions[key] then A.session_order[#A.session_order+1]=key end
- A.sessions[key]={record=A.record,wave=not A.wave_job and A.wave or nil,wave_max=A.wave_max,baseline=A.baseline,
+ A.sessions[key]={record=A.record,wave=A.wave_ready and A.wave or nil,wave_max=A.wave_max,baseline=A.baseline,
   signature=Core.signature(A.record and A.record.after or A.baseline)}
  while #A.session_order>16 do A.sessions[table.remove(A.session_order,1)]=nil end
 end
@@ -4911,19 +5420,20 @@ function UI.load_selection(force,selected)
  local same=v and A.v and A.v.project==project and A.v.item==v.item and A.v.take==v.take
  if same and not force then return end
  if same and A.record then UI.dirty();return end
- UI.stash();UI.stop_wave()
- if A.drag and A.drag.mode=='free' then Core.simplify(A.layers[A.layer],.0015) end
+ UI.stash();UI.stop_wave();UI.stop_spectrum(true)
+ if A.drag and A.drag.mode=='free' and A.drag.moved then Core.simplify(A.layers[A.layer],.0015) end
  A.drag=nil;A.selection=nil;pressed=nil;A.pointer_capture=nil;A.center_snap=nil
  A.v=v;A.record=nil;A.conflict=false;A.revision=nil
  if not v then
-  A.baseline=nil;A.wave={};A.wave_max=1;A.status='音声アイテムを選択すると自動で読み込みます。';UI.dirty();return
+  A.baseline=nil;A.wave={};A.wave_max=1;A.wave_ready=false;A.status='音声アイテムを選択すると自動で読み込みます。';UI.dirty();return
  end
  local current=Core.chunk(v.item);local session=A.sessions[UI.session_key(v)]
  if session and session.signature~=Core.signature(current) then session=nil end
  A.record=session and session.record or nil;A.baseline=A.record and A.record.before or current
  -- Drawing and its history are global, relative to the selected source. Never
  -- swap them with a per-item draft; only apply/undo records and waveforms vary.
- if session and session.wave then A.wave=session.wave;A.wave_max=session.wave_max else UI.start_wave() end
+ if session and session.wave then A.wave=session.wave;A.wave_max=session.wave_max;A.wave_ready=true else UI.start_wave() end
+ UI.ensure_spectrum()
  A.status='';A.warning=false;UI.dirty()
 end
 
@@ -4956,7 +5466,7 @@ function UI.read_curves()
   A.v=Core.info(A.v.project,A.v.item)
   layers,record,clipped=Core.read_curves(A.v,A.point_limit)
  end
- UI.history();A.layers=layers;UI.link_prime();A.record=record;A.baseline=record.before;A.conflict=false
+ UI.history();A.layers=layers;UI.link_prime();A.record=record;A.baseline=record.before;A.conflict=false;UI.stop_spectrum(true)
  A.selection=nil;A.hover_node=nil
  for key,steps in pairs(UI.range_steps) do
   if key~='highpass' and key~='lowpass' then
@@ -4982,7 +5492,7 @@ function UI.apply()
   UI.adopt_current()
   if not UI.check_current() then return end
  end
- A.busy=true;UI.stop_wave()
+ A.busy=true;UI.stop_wave();UI.stop_spectrum(true)
  local old=A.record
  local record,reason=Core.regenerate(A.v,A.layers,A.point_limit,old)
  A.v=Core.info(A.v.project,A.v.item)
@@ -5022,6 +5532,7 @@ end
 function UI.axis_label(key,y) return UI.format(key,UI.from_axis(key,y)) end
 
 function UI.available(id)
+ if id=='fit' then return A.span<1 or A.view>0 end
  local editing=not A.busy
  local number=id:match('^number_(.+)$')
  if number then return editing and A.tool=='line' and UI.number_enabled(number) end
@@ -5490,7 +6001,7 @@ function UI.mode_overlay()
 end
 
 function UI.interact()
- if BLT.blocked() then down_last=(gfx.mouse_cap&1)~=0;pressed=nil;gfx.mouse_wheel=0;return end
+ if BLT.blocked() then down_last=(gfx.mouse_cap&1)~=0;A.right_last=(gfx.mouse_cap&2)~=0;pressed=nil;gfx.mouse_wheel=0;return end
 
  local down=(gfx.mouse_cap&1)~=0;local right=(gfx.mouse_cap&2)~=0;local wheel=gfx.mouse_wheel or 0
  local hit=nil;for i=#widgets,1,-1 do local w=widgets[i];if inside(w.x,w.y,w.w,w.h) then hit=w;break end end
@@ -5503,6 +6014,9 @@ function UI.interact()
   if A.drag then A.drag=nil;UI.dirty() end
   down_last=down;A.right_last=right;return
  end
+ if id=='spectrum_scale' then
+  if wheel~=0 then gfx.mouse_wheel=0;UI.spectrum_wheel(wheel);down_last=down;A.right_last=right;return end
+ else A.spectrum_wheel=0 end
  if UI.smoothness_input(id,down) then down_last=down;A.right_last=right;return end
  if UI.number_input(id,down,wheel) then down_last=down;A.right_last=right;return end
  local nearest=A.tool=='free' and (gfx.mouse_cap&24)==0 and A.v and not A.busy and not A.conflict and UI.nearest() or nil
@@ -5558,7 +6072,7 @@ function UI.interact()
    c.points=Core.copy(d.original);Core.stroke(c,d.x,d.y,x,y);UI.dirty()
   elseif d.mode=='free' then
    if abs(x-d.x)>A.span/g.w*.5 or abs(y-d.y)>.002 then
-    Core.stroke(c,d.x,d.y,x,y);d.x,d.y=x,y
+    Core.stroke(c,d.x,d.y,x,y);d.x,d.y=x,y;d.moved=true
     if #c.points>Core.MAX_POINTS then
      local tolerance=.003
      repeat Core.simplify(c,tolerance);tolerance=tolerance*2 until #c.points<=Core.MAX_POINTS
@@ -5577,7 +6091,8 @@ function UI.interact()
     local d=A.drag;local x,y=UI.pointer_value();local c=A.layers[A.layer]
     c.points=Core.copy(d.original);Core.stroke(c,d.x,d.y,x,y)
    end
-   if A.drag.mode=='free' then Core.simplify(A.layers[A.layer],.0015) end
+   -- Keep explicit click points even when they are collinear with the curve.
+   if A.drag.mode=='free' and A.drag.moved then Core.simplify(A.layers[A.layer],.0015) end
    A.drag=nil;UI.dirty()
   elseif hit and hit.id==pressed and UI.available(hit.id) then UI.safe(hit.fn);UI.refresh() end
   pressed=nil;A.pointer_capture=nil;A.center_snap=nil;A.content_dirty=true
@@ -5586,7 +6101,7 @@ function UI.interact()
 end
 
 function UI.key(k)
- if k==0 then return end
+ if k==0 or A.spectrum_menu_open then return end
 
  if U.editor and U.editor.edit then return end
  local ctrl=(gfx.mouse_cap&4)~=0;local shift=(gfx.mouse_cap&8)~=0
@@ -5601,6 +6116,16 @@ function UI.key(k)
  end
 end
 
+function UI.mute_independent_signature(chunk)
+ return (Core.signature(chunk):gsub('\nMUTE[ \t]+[^\n]*','\nMUTE',1))
+end
+function UI.sync_item_mute(chunk)
+ local mute=chunk:match('\nMUTE[ \t]+[^\r\n]*')
+ if not mute then return end
+ local function sync(s) return s and (s:gsub('\nMUTE[ \t]+[^\r\n]*',function() return mute end,1)) end
+ A.baseline=sync(A.baseline)
+ if A.record then A.record.before=sync(A.record.before);A.record.after=sync(A.record.after) end
+end
 function UI.poll(now)
  if not Media.ready() then return end
  if now<A.poll_at or A.busy then return end;A.poll_at=now+.05
@@ -5627,8 +6152,11 @@ function UI.poll(now)
   return
  end
  if revision~=A.revision then
-  A.revision=revision;local current=Core.signature(Core.chunk(A.v.item));local expected=Core.signature(A.record and A.record.after or A.baseline)
-  if A.record and current==Core.signature(A.record.before) and current~=Core.signature(A.record.after) then
+  A.revision=revision;local chunk=Core.chunk(A.v.item);local reference=A.record and A.record.after or A.baseline
+  local current=Core.signature(chunk);local expected=Core.signature(reference)
+  if current~=expected and UI.mute_independent_signature(chunk)==UI.mute_independent_signature(reference) then
+   UI.sync_item_mute(chunk)
+  elseif A.record and current==Core.signature(A.record.before) and current~=Core.signature(A.record.after) then
    A.v=Core.info(A.v.project,A.v.item);A.record=nil;A.baseline=Core.chunk(A.v.item);A.conflict=false;UI.start_wave()
   elseif not A.record and current~=expected then
    A.v=selected;A.baseline=Core.chunk(selected.item);A.conflict=false;UI.start_wave()
@@ -5845,7 +6373,7 @@ end
 return M
 end)()
 -- END BLT SHORTCUTS
-if not R.ImGui_GetBuiltinPath or not R.JS_LICE_CreateBitmap then
+if not R.ImGui_GetBuiltinPath or not R.JS_LICE_CreateBitmap or not R.JS_LICE_LoadPNGFromMemory then
  Language.mb('ReaImGui 0.10以降と js_ReaScriptAPI が必要です。ReaPackで導入・更新してください。','Envelope Canvas Item',0);return
 end
 local ok,value=pcall(BLT.CanvasHost.new,R,'BLT Envelope Canvas Item',W,H+26,SECTION)
@@ -5882,7 +6410,7 @@ controls=BLT.EnvelopeWidgets.new(Host,U,density)
 canvas=BLT.EnvelopeCanvas.new(Host,R,C)
 Media.state=A;Media.onchange=wake_visuals
 mediaGraphics.getchar=function() return Host.focused and 6 or 4 end
-BLT.blocked=function() return shell.popupOpen or Host.drag~=nil or gfx.mouse_y<26 and not A.pointer_capture end
+BLT.blocked=function() return shell.popupOpen or A.spectrum_menu_open or Host.drag~=nil or gfx.mouse_y<26 and not A.pointer_capture end
 BLT.recoverInput=function(_,err) cancelEdit();U.down=false;BLT.logError(err);wake_visuals() end
 local envelopePreset={
  valid=function(v) if not BLT.validEnvelopeLinks(v) then return false end;local schema=UI.settings_schema();for path,x in pairs(v.settings) do local r=schema[path];if not r then return false end;if r.values then local found=false;for _,a in ipairs(r.values) do if a==x then found=true end end;if not found then return false end elseif not r.boolean and (x<r.min or x>r.max) then return false end end;for k,pts in pairs(v.curves) do local def=A.layers[k];if not def or #pts<2 or #pts>Core.MAX_POINTS then return false end;local last=-1;for _,p in ipairs(pts) do if p.x<0 or p.x>1 or p.x<=last or p.y<def.min_y or p.y>def.max_y then return false end;last=p.x end end;return true end,apply=function(v) UI.history();for path,x in pairs(v.settings) do local obj,k=UI.settings_slot(path);obj[k]=x end;UI.sync_line_targets();for k,pts in pairs(v.curves) do A.layers[k].points=pts end;BLT.restoreEnvelopeLinks(v);UI.link_prime();UI.save_settings();UI.dirty() end
@@ -5897,9 +6425,15 @@ function UI.theme_sync()
  local index=0;local changed=false
  local function check(v) index=index+1;if themeSignature[index]~=v then themeSignature[index]=v;changed=true end end
  check(shell.theme.enabled)
- for _,color in ipairs({C.bg,C.text}) do for i=1,3 do check(color[i]) end end
+ for _,color in ipairs({C.bg,C.field,C.text,C.accent,C.accent2}) do for i=1,3 do check(color[i]) end end
  if not changed then return end
  for _,d in ipairs(UI.defs) do d.original_color=d.original_color or d.color;d.color=shell.theme.enabled and BLT.EnvelopeWidgets.fit(d.original_color,C.bg,C.text) or d.original_color end
+ if BLT.EnvelopeSpectrogram.configure_palette(C,shell.theme.enabled) then
+  local j=A.spectrum_job
+  if j and j.data.complete then UI.remember_spectrum_data(j.data);UI.stop_spectrum() end
+  while #A.spectrum_cache>0 do UI.drop_spectrum(#A.spectrum_cache) end
+  UI.ensure_spectrum()
+ end
  canvas.valid=false
 end
 function UI.geometry()
@@ -5919,7 +6453,7 @@ function UI.fit_text(text,width,size,kind)
 end
 local buttonOptions={}
 function UI.button(id,title,x,y,w,h,fn,enabled,selected,tone)
- local choice=id:match('^mode_') or id:match('^interp_')
+  local choice=id:match('^mode_') or id:match('^interp_') or id:match('^display_')
  local options=buttonOptions[id] or {};buttonOptions[id]=options
  options.variant=id:match('^clear') and 'clear' or nil
  options.attention=id=='fit' and (A.span<1 or A.view>0) or nil
@@ -5928,6 +6462,50 @@ function UI.button(id,title,x,y,w,h,fn,enabled,selected,tone)
  if not choice then selected=nil end
  controls:button(id,Language.text(title),x,y,w,h,enabled,selected,tone,options)
  register(id,x,y,w,h,fn,'')
+end
+local topControls
+function UI.top_controls_layout()
+ if topControls and topControls.scale==scale and topControls.dpi==Host.dpi and topControls.face==Host.faces[1] then return topControls end
+ local dropdownWidth=0;font(11,1,false)
+ for _,item in ipairs(BLT.EnvelopeSpectrogram.scales) do local w=gfx.measurestr(item.name);dropdownWidth=max(dropdownWidth,w/scale) end
+ font(14,1,true)
+ local jp=gfx.measurestr('ズーム率リセット');local en=gfx.measurestr('Reset zoom')
+ local fitWidth=math.ceil(max(jp,en)/scale+12)
+ topControls={scale=scale,dpi=Host.dpi,face=Host.faces[1],fitWidth=fitWidth,scaleWidth=math.ceil(dropdownWidth+16+30*density+2)}
+ topControls.fitX=1098-fitWidth;topControls.scaleX=topControls.fitX-12-topControls.scaleWidth
+ topControls.spectrogramX=topControls.scaleX-158;topControls.waveX=topControls.spectrogramX-96
+ topControls.nameWidth=topControls.waveX-44
+ return topControls
+end
+local scaleButtonOptions={size=11/density,bold=false,trailing='menu',center=false,labelInset=8/density}
+function UI.spectrum_scale_button()
+ local layout=UI.top_controls_layout()
+ local enabled=A.display_mode=='spectrogram' and not A.busy and not A.drag
+ if enabled then gfx.wheelRegion(ox+layout.scaleX*scale,oy+115*scale,layout.scaleWidth*scale,20*scale) end
+ controls:button('spectrum_scale',BLT.EnvelopeSpectrogram.scale_name(A.spectrum_scale),layout.scaleX,115,layout.scaleWidth,20,enabled,nil,nil,scaleButtonOptions)
+ register('spectrum_scale',layout.scaleX,115,layout.scaleWidth,20,function()
+  if enabled then UI.number_commit();A.spectrum_menu_request=true;UI.refresh() end
+ end,Language.code=='JP' and '周波数の尺度を切り替えます。Log：100 Hz～ ／ Extended Log：10 Hz～ ／ Linear・Mel・Bark：0 Hz～'
+  or 'Frequency scale. Log: 100 Hz and up / Extended Log: 10 Hz and up / Linear, Mel, Bark: 0 Hz and up')
+end
+function UI.spectrum_scale_menu()
+ if A.spectrum_menu_request then
+  A.spectrum_menu_request=nil
+  local b=widgetByID.spectrum_scale
+  I.SetNextWindowPos(ctx,Host.originX+sx(b.x),Host.originY+sy(b.y+b.h+4))
+  I.OpenPopup(ctx,'BLT_ITEM_SPECTRUM_SCALE')
+ end
+ I.PushFont(ctx,Host.font,max(10,12*scale))
+ I.PushStyleColor(ctx,I.Col_PopupBg,Host.rgba(C.panel[1],C.panel[2],C.panel[3],1))
+ I.PushStyleColor(ctx,I.Col_Text,Host.rgba(C.text[1],C.text[2],C.text[3],1))
+ if I.BeginPopup(ctx,'BLT_ITEM_SPECTRUM_SCALE') then
+  for _,item in ipairs(BLT.EnvelopeSpectrogram.scales) do
+   if I.Selectable(ctx,item.name,A.spectrum_scale==item.id,0,150*scale,24*scale) then UI.set_spectrum_scale(item.id) end
+  end
+  I.EndPopup(ctx)
+ end
+ A.spectrum_menu_open=I.IsPopupOpen(ctx,'BLT_ITEM_SPECTRUM_SCALE')
+ I.PopStyleColor(ctx,2);I.PopFont(ctx)
 end
 function UI.smoothness_slider()
  controls:slider(Core.smoothness(A.layers[A.layer])/2,24,205,164,16,not A.busy,UI.def().color)
@@ -6071,12 +6649,15 @@ function UI.canvas_surface()
   gfx=canvas.g;scale,ox,oy=1,-graph.x,-graph.y
   local success,err=xpcall(function()
    rect(graph.x,graph.y,graph.w,graph.h,C.field)
+   if A.display_mode=='spectrogram' and A.spectrum and A.spectrum.scale==A.spectrum_scale then
+    BLT.EnvelopeSpectrogram.draw(gfx,A.spectrum,{x=0,y=0,w=graph.w,h=graph.h},A.view,A.span)
+   end
    for i=0,8 do
     local x=graph.x+graph.w*i/8;line(x,graph.y,x,graph.y+graph.h,C.edge,i%2==0 and .35 or .18)
     local y=graph.y+graph.h*i/8;line(graph.x,y,graph.x+graph.w,y,C.edge,(i==4 and not A.layers[A.layer].filter) and .56 or .21)
    end
    local count=#A.wave;local original=A.record and not A.record.imported
-   if count>0 then for px=0,graph.w-1 do
+   if A.display_mode=='wave' and count>0 then for px=0,graph.w-1 do
     local u=A.view+px/graph.w*A.span;local last=A.view+(px+1)/graph.w*A.span
     local first,lastIndex=clamp(floor(u*count)+1,1,count),clamp(math.ceil(last*count),1,count);local peak=0
     for j=first,max(first,lastIndex) do peak=max(peak,A.wave[j] or 0) end
@@ -6094,8 +6675,14 @@ function UI.canvas_surface()
 end
 function UI.static()
  widgetCount=0
- UI.button('fit','ズーム率リセット',914,101,184,34,function() A.view=0;A.span=1;UI.dirty() end,true)
- label(A.v and UI.fit_text(A.v.name,760,16,1) or '',24,105,16,C.text,1,770,27,0,true)
+ local layout=UI.top_controls_layout()
+ UI.button('fit','ズーム率リセット',layout.fitX,101,layout.fitWidth,34,function() if UI.available('fit') then A.view=0;A.span=1;UI.dirty() end end,UI.available('fit'))
+  label(A.v and UI.fit_text(A.v.name,layout.nameWidth,16,1) or '',24,105,16,C.text,1,layout.nameWidth,27,0,true)
+  UI.button('display_wave','波形',layout.waveX,101,88,34,function() UI.set_display('wave') end,not A.busy and not A.drag,A.display_mode=='wave')
+  UI.button('display_spectrogram','スペクトログラム',layout.spectrogramX,101,150,34,function() UI.set_display('spectrogram') end,not A.busy and not A.drag,A.display_mode=='spectrogram')
+  UI.spectrum_scale_button()
+  widgetByID.display_spectrogram.hint=Language.code=='JP' and '全体を解析し、ズームは解析結果を拡大表示。縦軸：周波数／濃淡：音の強さ。テイクFX前の音声を表示します。'
+   or 'Analyze the full item; zoom uses the cached image. Vertical axis: frequency / color: strength. Audio is shown before take FX.'
  label('補完処理',24,145,14,C.muted,1,164,22)
  for i,q in ipairs({{'linear','直線'},{'smooth','滑らか'}}) do
   UI.button('interp_'..q[1],q[2],24+(i-1)*84,171,80,30,function() UI.set_interpolation(q[1]) end,not A.busy,Core.smoothness(A.layers[A.layer])==(q[1]=='linear' and 0 or 1),UI.def().color)
@@ -6134,6 +6721,13 @@ function UI.static()
  label(d.sub,350,141,12,C.muted,1,230,21)
  right_label(UI.draft_changed() and 'EDITED / 生成で更新' or A.record and 'GENERATED / FX前の概形' or 'SOURCE / DRAW',UI.graph.x+UI.graph.w,141,11,C.muted,3,true)
  UI.canvas_surface()
+  if A.display_mode=='spectrogram' then
+   local g=UI.graph
+   for _,hz in ipairs(UI.spectrum_ticks[A.spectrum_scale]) do
+    local y=g.y+g.h*(1-BLT.EnvelopeSpectrogram.position(hz,A.spectrum_scale))
+    label(hz>=1000 and string.format('%gk Hz',hz/1000) or hz..' Hz',g.x+7,clamp(y-7,g.y+3,g.y+g.h-17),10,C.muted,3,62,16)
+   end
+  end
 
  local g=UI.graph
  for i=0,4 do
@@ -6149,10 +6743,26 @@ function UI.static()
  if A.point_limit>=512 then label('512点以上：処理が重くなる可能性があります',758,984,12,C.warn,1,340,19) end
  for i=#widgets,widgetCount+1,-1 do widgets[i]=nil end
 end
+function UI.analysis_overlay()
+ local job=A.display_mode=='spectrogram' and A.spectrum_job
+ if not job then return end
+ local g=UI.graph;local w,h=300,88;local x,y=g.x+(g.w-w)/2,g.y+(g.h-h)/2
+ local progress=clamp(BLT.EnvelopeSpectrogram.progress(job),0,1)
+ rect(g.x,g.y,g.w,g.h,C.field,.62)
+ controls:panel(x,y,w,h,C.accent2)
+ local title=job.kind=='render' and (Language.code=='JP' and '表示更新中' or 'Updating display')
+  or (Language.code=='JP' and '解析中' or 'Analyzing')
+ label(string.format('%s  %d%%',title,floor(progress*100)),x+20,y+14,17,C.text,1,w-40,28,5,true,true)
+ rect(x+24,y+59,w-48,6,C.edge,.75)
+ if progress>0 then rect(x+24,y+59,(w-48)*progress,6,C.accent2) end
+end
+UI.spectrum_ticks={linear={0,5000,10000,15000,20000,24000},log={100,200,500,1000,2000,5000,10000,20000},
+ extended_log={10,20,50,100,200,500,1000,2000,5000,10000,20000},mel={0,500,1000,2000,4000,8000,16000,24000},
+ bark={0,200,500,1000,2000,4000,8000,16000,24000}}
 local tipID,tipSince
 local function tooltip(now)
  local tip
- if not shell.popupOpen and Host.focused and (gfx.mouse_cap&3)==0 then
+ if not shell.popupOpen and not A.spectrum_menu_open and Host.focused and (gfx.mouse_cap&3)==0 then
   for i=#widgets,1,-1 do local w=widgets[i];if inside(w.x,w.y,w.w,w.h) then tip=w.hint;break end end
  end
  if not tip or tip=='' then tipID=nil;return end
@@ -6178,12 +6788,14 @@ function UI.draw(now)
   line(mouse_x,graph.y,mouse_x,graph.y+graph.h,C.accent2,.23);line(graph.x,mouse_y,graph.x+graph.w,mouse_y,C.accent2,.12)
   label(string.format('%.3fs  /  %s',UI.output_time(u),UI.axis_label(A.layer,value)),mouse_x-105,mouse_y+21,13,UI.def().color,3,210,21,1)
  end
- local status=A.wave_job and string.format('波形を読み込み中  %d%%',floor(A.wave_job.index/A.wave_job.total*100))
+ UI.analysis_overlay()
+  local status=A.spectrum_job and string.format(A.spectrum_job.kind=='render' and 'スペクトログラムの表示を更新中  %d%%' or 'スペクトログラムを解析中  %d%%',floor(BLT.EnvelopeSpectrogram.progress(A.spectrum_job)*100))
+   or A.wave_job and string.format('波形を読み込み中  %d%%',floor(A.wave_job.index/A.wave_job.total*100))
   or BLT.notice or A.status~='' and A.status or not A.v and '音声アイテムを選択してください。' or ''
  if Media.waiting then status=Media.message(SECTION) end
  U.scale,U.ox,U.oy=scale,ox,oy+22*scale;shell:footer(status,A.warning or A.conflict or BLT.noticeBad,W,H,Core.VERSION)
  U.scale,U.ox,U.oy=density*scale,ox,oy
- U.released=released;U:finish();shell:drawBar();tooltip(now)
+ U.released=released;U:finish();shell:drawBar();UI.spectrum_scale_menu();tooltip(now)
 end
 Host:bindShortcuts()
 gfx.getchar=function(query)
@@ -6196,7 +6808,7 @@ gfx.getchar=function(query)
  return key
 end
 BLTShortcuts.install(R,gfx,{
- blocked=function() return U.editor.edit~=nil or shell.popupOpen or A.drag~=nil or A.number_drag~=nil or A.busy end,
+ blocked=function() return U.editor.edit~=nil or shell.popupOpen or A.spectrum_menu_open or A.drag~=nil or A.number_drag~=nil or A.busy end,
  beforeGlobal=UI.number_commit,
  localKey=function(k,cap) return k==27 or k==13 or k==32 or k==25 or k==26 or k==6579564 or k==127 or k>=49 and k<=51
   or (cap&4)~=0 and (k==89 or k==121 or k==90 or k==122) end})
@@ -6204,6 +6816,8 @@ local finalized=false
 function UI.close()
  if finalized then return end;finalized=true
  BLT.cleanup(UI.number_commit);BLT.cleanup(UI.save_settings);BLT.cleanup(UI.stop_wave)
+  BLT.cleanup(UI.stop_spectrum,true)
+ A.wave={};A.sessions={};A.session_order={};A.spectrum_data_cache={};A.record=nil;A.v=nil
  BLT.cleanup(canvas.close,canvas);BLT.cleanup(Host.close,Host);BLT.cleanup(shell.close,shell)
 end
 R.atexit(UI.close)
@@ -6221,11 +6835,13 @@ function UI.loop()
  local success,err=xpcall(function()
   local now=R.time_precise();Media.tick();UI.poll(now);shell.theme.tick(now)
   if A.wave_job and R.EnumProjects(-1,'')==A.wave_job.v.project then UI.safe(UI.wave_step) end
+   if A.display_mode=='spectrogram' then UI.safe(UI.ensure_spectrum) end
+   if A.spectrum_job and R.EnumProjects(-1,'')==A.spectrum_job.v.project then UI.safe(UI.spectrum_step) end
   if BLT.noticeUntil and now>=BLT.noticeUntil then BLT.notice,BLT.noticeUntil=nil,nil;wake_visuals() end
-  if changed(worldState,A.canvas_revision,A.status,A.warning,A.v,A.wave_job,Language.code,C.bg,Presets.current,Host.requestReset,shell.icon.dirty) then A.content_dirty=true end
-  local interactive=U.editor.edit or shell.popupOpen or Host.drag or shell.hoverID or A.drag or A.number_drag or U.capture
+   if changed(worldState,A.canvas_revision,A.status,A.warning,A.v,A.wave_job,A.spectrum_job,Language.code,C.bg,Presets.current,Host.requestReset,shell.icon.dirty) then A.content_dirty=true end
+  local interactive=U.editor.edit or shell.popupOpen or A.spectrum_menu_open or Host.drag or shell.hoverID or A.drag or A.number_drag or U.capture
   local animating=U:attentionAnimating() or U:executeAnimating('apply') or shell.icon:animating(now) or now<(A.number_flash_until or 0)
-  if not A.content_dirty and not A.busy and not A.wave_job and now>=awakeUntil and not interactive and not animating and Host:idle(now) then
+   if not A.content_dirty and not A.busy and not A.wave_job and (not A.spectrum_job or Media.waiting) and now>=awakeUntil and not interactive and not animating and Host:idle(now) then
    U.now=now;shell.icon.lastTime=now;R.defer(UI.loop);return
   end
   if Host.idleWake then wake_visuals();Host.idleWake=nil end
