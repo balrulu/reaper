@@ -1,5 +1,5 @@
 -- @description ACTION - Auto select tracks of selected items (toggle)
--- @version 1.1.2
+-- @version 1.1.3
 -- @author Balrulu
 -- @provides
 --   . > ../
@@ -8,10 +8,10 @@
 -- @about
 --   BLT SERIES Beta TEST UPLOAD
 
--- BEGIN BLT TOGGLE RESTORE EMBEDDED 1.0.1
+-- BEGIN BLT TOGGLE RESTORE EMBEDDED 1.1.0
 do
 local BLTToggleRestoreSource = [====[
--- BLT toggle persistence 1.0.1. Embedded in each supported action.
+-- BLT toggle persistence 1.1.0. Embedded in each supported action.
 -- The public action is a dispatcher; its private worker owns the defer loop.
 -- Only a dispatcher's explicit OFF writes OFF. Worker shutdown never does.
 local M = {}
@@ -82,13 +82,6 @@ local function named(api, command)
   return value ~= '' and ('_' .. value:gsub('^_', '')) or ''
 end
 
-local function cached_worker(api, id)
-  local saved = api.GetExtState(SECTION, id .. '_worker_command')
-  local command = saved ~= '' and api.NamedCommandLookup(saved) or 0
-  command = command or 0
-  return command, command > 0 and api.GetToggleCommandStateEx(0, command) or -1
-end
-
 local function worker_source(id)
   return 'local R=reaper\nlocal fn,err=loadfile(R.GetResourcePath().."/Scripts/BLT ReaScripts/BLT_Toggle_Restore.lua")\n'
     .. 'if not fn then if R.ShowConsoleMsg then R.ShowConsoleMsg(tostring(err).."\\n")end;return end\n'
@@ -98,10 +91,29 @@ end
 local function command_for(api, id)
   local path = worker_path(api, id)
   write(path, worker_source(id))
-  local command = api.AddRemoveReaScript(true, 0, path, true)
+  local command = api.AddRemoveReaScript(true, 0, path, false)
   assert(command and command > 0, 'Cannot register the BLT background worker.')
-  save(api, id .. '_worker_command', named(api, command), true)
   return command
+end
+
+local function launch(api, id)
+  local command = command_for(api, id)
+  local ok, err = pcall(api.Main_OnCommand, command, 0)
+  -- Unregistering a running ReaScript keeps its defer/atexit callbacks alive.
+  -- The temporary command must never remain in the user's action list.
+  local removed, why = pcall(api.AddRemoveReaScript, false, 0, worker_path(api, id), true)
+  assert(removed and type(why) == 'number' and why > 0, why or 'Cannot unregister the BLT background worker.')
+  assert(ok, err)
+  assert(api.GetExtState(SECTION, id .. '_running') == '1', 'The BLT background worker did not start: ' .. id)
+end
+
+local function remove_legacy_workers(api)
+  for _, id in ipairs(IDS) do
+    api.AddRemoveReaScript(false, 0, worker_path(api, id), true)
+    if api.GetExtState(SECTION, id .. '_worker_command') ~= '' then
+      api.DeleteExtState(SECTION, id .. '_worker_command', true)
+    end
+  end
 end
 
 local function log(api, message)
@@ -113,6 +125,7 @@ function M.install(api, id, module_source)
   api.RecursiveCreateDirectory(root(api), 0)
   write(root(api) .. '/BLT_Toggle_Restore.lua', module_source)
   write(worker_path(api, id), worker_source(id))
+  remove_legacy_workers(api)
   local startup = api.GetResourcePath() .. '/Scripts/__startup.lua'
   local original = read(startup) or ''
   local bom = original:sub(1, 3) == '\239\187\191' and original:sub(1, 3) or ''
@@ -151,37 +164,30 @@ function M.enter(api, id, module_source)
     M.install(api, id, module_source)
     save(api, id .. '_path', path, true)
     save(api, id .. '_command', named(api, command), true)
-    local worker = command_for(api, id)
     save(api, id .. '_enabled', '1', true)
-    api.Main_OnCommand(worker, 0)
-    local on = api.GetExtState(SECTION, id .. '_running') == '1' and api.GetToggleCommandStateEx(0, worker) == 1
-    display(on)
-    assert(on, 'The BLT background worker did not start: ' .. id)
+    launch(api, id)
+    display(true)
   end
   attempt(function()
     local marked = api.GetExtState(SECTION, id .. '_running') == '1'
-    local worker, state = cached_worker(api, id)
-    if marked and (state == 1 or worker <= 0) then
+    local pending = api.GetExtState(SECTION, id .. '_start_pending') == '1'
+    if pending or marked and api.GetExtState(SECTION, id .. '_enabled') == '1' then
       -- Turning OFF must not depend on rewriting/reading startup files.
       save(api, id .. '_enabled', '0', true)
-      if worker > 0 then api.Main_OnCommand(worker, 0)
-      end
-      if api.GetExtState(SECTION, id .. '_running') == '1' then api.defer(function() attempt(function()
-        if api.GetExtState(SECTION, id .. '_enabled') == '0' then
-          save(api, id .. '_running', '', false)
-          if worker > 0 then api.SetToggleCommandState(0, worker, 0);api.RefreshToolbar2(0, worker) end
-        end
-      end) end) end
+      save(api, id .. '_start_pending', '', false)
       display(false)
       return
     end
-    if marked or state == 1 then
+    if marked then
       save(api, id .. '_enabled', '0', true)
-      if state == 1 then api.Main_OnCommand(worker, 0) end
+      save(api, id .. '_start_pending', '1', false)
       display(false)
       -- Let a stopped or unregistered worker finish before creating its replacement.
       api.defer(function() api.defer(function() attempt(function()
-        save(api, id .. '_running', '', false);start()
+        if api.GetExtState(SECTION, id .. '_start_pending') ~= '1' then return end
+        save(api, id .. '_start_pending', '', false)
+        assert(api.GetExtState(SECTION, id .. '_running') ~= '1', 'The previous BLT worker did not stop: ' .. id)
+        start()
       end) end) end)
     else start() end
   end)
@@ -241,13 +247,12 @@ function M.restore(api)
   if api.GetExtState(SECTION, 'startup_done') == '1' then return end
   save(api, 'startup_done', '1', false)
   api.defer(function()
+    remove_legacy_workers(api)
     for _, id in ipairs(IDS) do
       if api.GetExtState(SECTION, id .. '_enabled') == '1' then
         local ok, err = pcall(function()
-          local worker, state = cached_worker(api, id)
-          if state == 1 or worker <= 0 and api.GetExtState(SECTION, id .. '_running') == '1' then return end
-          save(api, id .. '_running', '', false)
-          api.Main_OnCommand(command_for(api, id), 0)
+          if api.GetExtState(SECTION, id .. '_running') == '1' then return end
+          launch(api, id)
         end)
         if not ok then log(api, err) end
       end
