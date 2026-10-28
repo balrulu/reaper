@@ -1,5 +1,5 @@
 -- @description BLT DEDICATED RENDER
--- @version 0.14.14
+-- @version 0.14.15
 -- @author Balrulu
 -- @provides
 --   . > ../
@@ -77,11 +77,16 @@ function M.new(api,title,width,height,section)
  local imageCache,retiredImages={},{}
  local gradientFrame=0
  local retireEpoch,retireFrame=floor(api.time_precise()*10),0
+ local function detach(image)
+  if type(I.ValidatePtr)~='function' or I.ValidatePtr(ctx,'ImGui_Context*')then
+   pcall(I.Detach,ctx,image)
+  end
+ end
  function H:attachImage(image)
   I.Attach(ctx,image);imageCache[image]=true
  end
  function H:releaseImage(image,batched)
-  if self.closing or batched then retiredImages[image]=nil;imageCache[image]=nil;I.Detach(ctx,image)
+  if self.closing or batched then retiredImages[image]=nil;imageCache[image]=nil;detach(image)
   elseif not retiredImages[image] then retiredImages[image]={frame=gradientFrame,time=api.time_precise()} end
  end
  function H:retainImages()
@@ -108,7 +113,7 @@ function M.new(api,title,width,height,section)
   local now=api.time_precise()
   for image,retired in pairs(retiredImages) do
    if self.closing or gradientFrame-retired.frame>=2 and now-retired.time>=.1 then
-    imageCache[image]=nil;retiredImages[image]=nil;I.Detach(ctx,image)
+    imageCache[image]=nil;retiredImages[image]=nil;detach(image)
    end
   end
  end
@@ -1986,10 +1991,58 @@ function Embed.write_aiff(path,plan,source)
  if not ok then if exists(temp)then os.remove(temp)end;error(err,0)end
 end
 
-local Model={VERSION='0.14.14',SOURCE_MASK=1|2|8|32|64|128|4096}
+local Model={VERSION='0.14.15',SOURCE_MASK=1|2|8|32|64|128|4096}
 Model.numbers={'RENDER_SETTINGS','RENDER_BOUNDSFLAG','RENDER_CHANNELS','RENDER_SRATE','RENDER_STARTPOS','RENDER_ENDPOS','RENDER_TAILFLAG','RENDER_TAILMS','RENDER_ADDTOPROJ','RENDER_DITHER','RENDER_NORMALIZE','RENDER_NORMALIZE_TARGET','RENDER_BRICKWALL','RENDER_FADEIN','RENDER_FADEOUT','RENDER_FADEINSHAPE','RENDER_FADEOUTSHAPE','RENDER_FADELPF','RENDER_PADSTART','RENDER_PADEND','RENDER_TRIMSTART','RENDER_TRIMEND','RENDER_DELAY'}
 Model.strings={'RENDER_FILE','RENDER_PATTERN','RENDER_EXTRAFILEDIR','RENDER_FORMAT2','RENDER_FORMAT'}
-Model.configs={'projrenderlimit','projrenderresample','projrenderrateinternal','renderclosewhendone','projrenderqdelay','renderbsnew'}
+Model.configs={'projrenderlimit','projrenderspeedcap','projrenderresample','projrenderrateinternal','renderclosewhendone','renderpeaks','projrenderqdelay','renderbsnew'}
+function Model.render_features(api)
+ if Model.featureAPI==api then return end
+ local version=api.GetAppVersion and api.GetAppVersion()or''
+ local major,minor=version:match('^(%d+)%.(%d+)');major,minor=tonumber(major)or 0,tonumber(minor)or 0
+ Model.render783=major>7 or major==7 and minor>=83;Model.featureAPI=api
+end
+function Model.complete_render_options(api,state)
+ for _,key in ipairs({'projrenderspeedcap','renderpeaks'})do
+  if state.c[key]==nil and api.SNM_GetIntConfigVar then
+   local value=api.SNM_GetIntConfigVar(key,-2147483648)
+   if value and value~=-2147483648 then state.c[key]=key=='projrenderspeedcap'and 1 or value end
+  end
+ end
+ return state
+end
+do
+local speeds={{'フルスピード・オフライン',0},{'1倍速・オフライン',1},{'オンライン',2},{'オンライン（アイドル）',3},{'1倍速・オフライン（アイドル）',4}}
+local speeds783={{'フルスピード・オフライン',0},{'1倍速・オフライン',1},{'2倍速・オフライン','1:2'},
+ {'オンライン',2},{'オンライン（アイドル）',3},{'1倍速・オフライン（アイドル）',4},{'2倍速・オフライン（アイドル）','4:2'}}
+function Model.speedchoices(s)return Model.render783 and s.c.projrenderspeedcap~=nil and speeds783 or speeds end
+function Model.speedchoice(s)
+ local speed=s.c.projrenderlimit
+ return (speed==1 or speed==4)and(s.c.projrenderspeedcap or 1)>=2 and(speed..':2')or speed
+end
+function Model.setspeed(s,value)
+ local speed,cap=value,1
+ if value=='1:2'or value=='4:2'then
+  if not Model.render783 or s.c.projrenderspeedcap==nil then return false end
+  speed,cap=tonumber(value:sub(1,1)),2
+ elseif type(value)~='number'or value%1~=0 or value<0 or value>4 then return false end
+ s.c.projrenderlimit=speed
+ if s.c.projrenderspeedcap~=nil then s.c.projrenderspeedcap=cap end
+ return true
+end
+end
+function Model.configbits(s,key,mask,value)
+ local current=s.c[key]
+ if current==nil then return false end
+ s.c[key]=(current&~mask)|(value&mask);return true
+end
+function Model.graphchoice(s)
+ local flags=s.c.renderpeaks or 0
+ return(flags&32)~=0 and 32 or(flags&16)~=0 and 16 or 0
+end
+function Model.loudnesschoice(s)
+ local flags=s.c.renderclosewhendone or 0
+ return(flags&8192)~=0 and 8192 or(flags&1536)~=0 and 1536 or 0
+end
 Model.sources={{'マスターミックス',0},{'マスター＋選択トラックのステム',1},{'選択トラックのステム',3},{'選択メディアアイテム',32},{'選択メディアアイテム・マスター経由',64},{'選択トラック・マスター経由',128},{'リージョン・レンダーマトリックス',8},{'リージョン・レンダーマトリックス・マスター経由',136},{'レイザー編集領域',4096},{'レイザー編集領域・マスター経由',4224}}
 for _,v in ipairs({{'選択メディアアイテムを1ファイルに結合',32|(4<<16)},{'選択メディアアイテム・マスター経由を1ファイルに結合',64|(4<<16)},{'レイザー編集領域を1ファイルに結合',4096|(4<<16)},{'レイザー編集領域・マスター経由を1ファイルに結合',4224|(4<<16)}})do Model.sources[#Model.sources+1]=v end
 Model.bounds={{'カスタム時間範囲',0},{'プロジェクト全体',1},{'時間選択',2},{'全リージョン',3},{'選択メディアアイテム',4},{'選択リージョン',5},{'全マーカー',6},{'選択マーカー',7}}
@@ -2009,6 +2062,7 @@ local function clone(v)if type(v)~='table'then return v end;local o={};for k,x i
 Model.clone=clone
 local function ensure(ok,msg)if not ok then error(msg,0)end;return ok end
 function Model.load(api)
+ Model.render_features(api)
  Model.enumerate_formats(api);Model.enumerate_resamplers(api)
  local p=api.EnumProjects(-1,'');local s={n={},s={},c={},meta={},auto=false}
  for _,k in ipairs(Model.numbers)do s.n[k]=api.GetSetProjectInfo(p,k,0,false)end
@@ -2078,6 +2132,11 @@ end
 function Model.apply(api,m)
  ensure(api.EnumProjects(-1,'')==m.project,'別のプロジェクトに切り替わっています。「再読込」を押してください。')
  local before=Model.load(api);local s=m.state;local b=m.base or clone(before.state);local undo={}
+ local current=before.state.c
+ local speedChanged=s.c.projrenderlimit~=b.c.projrenderlimit or s.c.projrenderspeedcap~=b.c.projrenderspeedcap
+ local nativeSpeedChanged=current.projrenderlimit~=b.c.projrenderlimit or current.projrenderspeedcap~=b.c.projrenderspeedcap
+ local sameSpeed=s.c.projrenderlimit==current.projrenderlimit and s.c.projrenderspeedcap==current.projrenderspeedcap
+ ensure(not(speedChanged and nativeSpeedChanged and not sameSpeed),'REAPER側でも同じ設定が変更されています。再読込してください：projrenderlimit / projrenderspeedcap')
 
  for _,group in ipairs({'n','s','c','meta'})do
   local keys={};for k in pairs(b[group])do keys[k]=true end;for k in pairs(before.state[group])do keys[k]=true end;for k in pairs(s[group])do keys[k]=true end
@@ -2173,6 +2232,7 @@ function Model.nativepresets(api)
      local function num(group,key,index)local v=tonumber(t[index]);if v then p[group][key]=v end end
      if kind=='<RENDERPRESET'then
       num('n','RENDER_SRATE',3);num('n','RENDER_CHANNELS',4);num('c','projrenderlimit',5);num('c','projrenderrateinternal',6);num('c','projrenderresample',7);num('n','RENDER_DITHER',8)
+      if Model.render783 then p.c.projrenderspeedcap=tonumber(t[10])or 1 end
       if tonumber(t[9])then p.masks[#p.masks+1]={0x6F14|32768|(1<<16)|(2<<16)|(16<<16),tonumber(t[9])}end
 
       p.n.RENDER_FADELPF=0
@@ -4871,9 +4931,11 @@ function Session.read(api)
  return v
 end
 function Session.start(api)
+ Model.render_features(api)
  local saved,warning=Session.read(api)
  if saved then
   Model.enumerate_formats(api);Model.enumerate_resamplers(api)
+  Model.complete_render_options(api,saved.state)
   return {project=api.EnumProjects(-1,''),state=saved.state,base=nil},saved.view,warning
  end
  return Model.load(api),nil,warning
@@ -4892,7 +4954,7 @@ local function finite(v)return type(v)=='number' and v==v and math.abs(v)<math.h
 local A={pressed=nil,tab=1,status='REAPERの現在のレンダー設定',bad=false,files={},busy=false}
 local m,sessionView,sessionWarning=Session.start(R)
 if sessionView then
- for k,limit in pairs({tab=6,detailTab=2,channelTab=2,formatTab=2})do local v=sessionView[k];if type(v)=='number'and v%1==0 and v>=1 and v<=limit then A[k]=v end end
+ for k,limit in pairs({tab=6,detailTab=3,channelTab=2,formatTab=2})do local v=sessionView[k];if type(v)=='number'and v%1==0 and v>=1 and v<=limit then A[k]=v end end
  A.status='前回の状態を復元しました。'
 end
 if sessionWarning then A.status=sessionWarning;A.bad=true end
@@ -5431,6 +5493,20 @@ for jp,en in pairs({
  ['チャンネル']='Channels',['自動（トラックカラーで判定）']='Auto (track custom color)',
  ['モノラル']='Mono',['ステレオ']='Stereo',['名前付きフォルダー疑似アイテム / WAV']='Named folder items / WAV',
  ['レンダリング速度']='Render speed',['フルスピード・オフライン']='Full-speed offline',['1倍速・オフライン']='1x offline',
+ ['2倍速・オフライン']='2x offline',['1倍速・オフライン（アイドル）']='1x offline (idle)',
+ ['2倍速・オフライン（アイドル）']='2x offline (idle)',
+ ['統計・表示']='Statistics / display',['統計の計算']='Statistics calculation',['ラウドネス統計']='Loudness statistics',
+ ['計算しない（最速）']='None (fastest)',['ピーク統計']='Peak statistics',['サンプルピーク']='Sample peak',
+ ['トゥルーピーク']='True peak',['正規化・リミットは「後処理」で設定します。']='Normalization / limiting: Postprocess tab.',
+ ['統計グラフ']='Statistics graphs',['ラウドネスグラフ']='Loudness graph',['モーメンタリー']='Momentary',
+ ['ショートターム']='Short-term',['LUFSゲート対象外を色分け']='Shade excluded LUFS areas',
+ ['ピーク超過箇所を強調']='Highlight overs',['統計ファイル']='Statistics files',['HTMLレポート']='HTML report',
+ ['保存しない']='Do not save',['ファイルごとに保存']='Save per file',['まとめて保存']='Save combined report',
+ ['最後の統計をメモリに保持']='Keep last statistics in memory',['表示する情報']='Display options',
+ ['レンダー中にトラックメーターを表示']='Show track meters during render',
+ ['HTMLにファイルパスを含める']='Include file paths in HTML',
+ ['HTMLにリージョン／マーカーを含める']='Include regions / markers in HTML',
+ ['REAPER v7.83以降とSWSが必要です。']='Requires REAPER v7.83 or later and SWS.',
  ['オンライン']='Online',['オンライン（アイドル）']='Online (idle)',['オフライン（アイドル）']='Offline (idle)',
  ['一次出力形式']='Primary output format',['二次出力形式']='Secondary output format',['なし']='None',
  ['WAVビット深度']='WAV bit depth',['エンコーダー詳細 / BWF / マーカー…']='Encoder / BWF / markers…',
@@ -5953,6 +6029,7 @@ local M={}
 local groups={
  {'Project Information','プロジェクト情報',items={
   {'$project','project name','プロジェクト名'},
+  {'$projectbase','project name without an auto-increment suffix','自動連番を除いたプロジェクト名',since783=true},
   {'$title','project title (from Project Settings/Notes dialog)','プロジェクトのタイトル (プロジェクト設定/ノート タブより)'},
   {'$author','project author (from Project Settings/Notes dialog)','プロジェクトの作成者 (プロジェクト設定/ノート タブより)'},
   {'$projectnotes','project notes (from Project Settings/Notes dialog)','プロジェクトのメモ (プロジェクト設定/ノート タブより)'},
@@ -6067,11 +6144,13 @@ local groups={
   {'$computer','computer name','コンピューター名'},
  }},
 }
-function M.menu(api,language)
+function M.menu(api,language,render783)
  local rows={};local jp=language~='EN'
  for _,group in ipairs(groups)do
   local items={}
-  for _,item in ipairs(group.items)do items[#items+1]={item[1]..' : '..item[jp and 3 or 2],item[1]}end
+  for _,item in ipairs(group.items)do
+   if not item.since783 or render783~=false then items[#items+1]={item[1]..' : '..item[jp and 3 or 2],item[1]}end
+  end
   rows[#rows+1]={group[jp and 2 or 1],children=items}
  end
  local recent={}
@@ -6096,14 +6175,14 @@ function M.menu(api,language)
  return rows
 end
 function M.help(language)
- if language=='EN'then return 'The menu follows REAPER 7.82 render wildcards.\n\nReplace name / lane / N / X / s in parameterized entries with your value.\n$region(name)[;] reads a name=value field separated by semicolons.\n$projectnotes(name) and $itemnotes(name) read newline-separated fields.\n$regionnumber[01] produces 01, 02, ...\n$region[<4] keeps the first four characters.\n$track< > removes spaces; $track< _> replaces spaces with underscores.\n$Project capitalizes the first letter; $PROJECT makes all letters uppercase; $pROJECT makes all letters lowercase.\n$trackslashes and $folders may create subdirectories.\n\nRecent patterns replace the whole filename pattern; other entries append a wildcard.'end
- return 'REAPER 7.82のレンダー用ワイルドカードに対応しています。\n\n引数付きの項目は name / lane / N / X / s を実際の値に置き換えてください。\n$region(name)[;] は ; 区切りの name=value から値を取得します。\n$projectnotes(name) と $itemnotes(name) は改行区切りです。\n$regionnumber[01] は 01, 02, ... の連番です。\n$region[<4] は先頭4文字に制限します。\n$track< > は空白を削除、$track< _> は空白を _ に置換します。\n$Project は先頭を大文字、$PROJECT は全て大文字、$pROJECT は全て小文字にします。\n$trackslashes と $folders はサブフォルダーを作成する場合があります。\n\n履歴はファイル名全体を置き換え、その他の項目はワイルドカードを末尾に追加します。'
+ if language=='EN'then return 'The menu follows REAPER 7.83 render wildcards.\n\n$projectbase removes an auto-increment suffix from the project name (REAPER 7.83+).\n\nReplace name / lane / N / X / s in parameterized entries with your value.\n$region(name)[;] reads a name=value field separated by semicolons.\n$projectnotes(name) and $itemnotes(name) read newline-separated fields.\n$regionnumber[01] produces 01, 02, ...\n$region[<4] keeps the first four characters.\n$track< > removes spaces; $track< _> replaces spaces with underscores.\n$Project capitalizes the first letter; $PROJECT makes all letters uppercase; $pROJECT makes all letters lowercase.\n$trackslashes and $folders may create subdirectories.\n\nRecent patterns replace the whole filename pattern; other entries append a wildcard.'end
+ return 'REAPER 7.83のレンダー用ワイルドカードに対応しています。\n\n$projectbase はプロジェクト名末尾の自動連番を除きます（REAPER 7.83以降）。\n\n引数付きの項目は name / lane / N / X / s を実際の値に置き換えてください。\n$region(name)[;] は ; 区切りの name=value から値を取得します。\n$projectnotes(name) と $itemnotes(name) は改行区切りです。\n$regionnumber[01] は 01, 02, ... の連番です。\n$region[<4] は先頭4文字に制限します。\n$track< > は空白を削除、$track< _> は空白を _ に置換します。\n$Project は先頭を大文字、$PROJECT は全て大文字、$pROJECT は全て小文字にします。\n$trackslashes と $folders はサブフォルダーを作成する場合があります。\n\n履歴はファイル名全体を置き換え、その他の項目はワイルドカードを末尾に追加します。'
 end
 return M
 
 end)()
 function A.wildcards()
- local rows=Wildcards.menu(R,Language.code)
+ local rows=Wildcards.menu(R,Language.code,Model.render783)
  choose('ワイルドカード',rows,nil,function(value)
   if value=='help'then Language.mb(Wildcards.help(Language.code),'Render Wildcards',0);return false
   elseif value:sub(1,7)=='recent:'then m.state.s.RENDER_PATTERN=value:sub(8)
@@ -6298,6 +6377,24 @@ A.optionHelp={
  ['renderclosewhendone:32768']={
   JP='レンダー結果の統計をHTMLレポートとして保存します。\n書き出し後に出力結果の情報を確認・記録したい場合に使います。',
   EN='Save rendering statistics as an HTML report.\nUse this to review or keep a record of the output results.'},
+ ['renderpeaks:512']={
+  JP='レンダー中もREAPERのトラックメーターを表示します。\nOFFではメーターの更新を抑えます。音声の処理や出力内容は変わりません。',
+  EN='Show REAPER track meters while rendering.\nTurning this off avoids their display updates; the rendered audio is unchanged.'},
+ ['renderclosewhendone:2097152']={
+  JP='最後のレンダー統計をメモリに保持し、後からREAPERの統計表示アクションで開けるようにします。\nファイルとして保存するにはHTML出力も指定してください。',
+  EN='Keep the last render statistics in memory for REAPER statistics actions.\nSelect HTML export as well if you need a report saved to disk.'},
+ ['renderpeaks:4']={
+  JP='LUFS-Iのゲート計算に含まれない区間を、統計グラフで色分けします。\nLUFS統計とラウドネスグラフを有効にした場合に使います。',
+  EN='Shade graph areas excluded by the LUFS-I gate.\nAvailable with LUFS statistics and a loudness graph enabled.'},
+ ['renderclosewhendone:128']={
+  JP='ピーク表示で基準を超えた箇所を強調します。\n書き出す音声をリミットする設定ではありません。',
+  EN='Highlight overs in the render peaks display.\nThis does not limit the exported audio.'},
+ ['stats_paths']={
+  JP='HTML統計に出力ファイルのパスを含めます。\n外部へ共有するレポートからパスを隠す場合はOFFにしてください。',
+  EN='Include output file paths in HTML statistics.\nTurn this off to hide paths in reports you share.'},
+ ['stats_regions']={
+  JP='HTML統計にプロジェクトのリージョンとマーカーを表示します。\n音声ファイルへのマーカー埋め込み設定とは別です。',
+  EN='Include project regions and markers in HTML statistics.\nThis is separate from marker embedding in the audio file.'},
  ['RENDER_SETTINGS:1048576']={
   JP='開始待機の秒数だけ待ってからレンダーを開始します。\nFXの初期化やサンプルの読み込みが完了する時間を確保します。',
   EN='Wait for the specified start delay before rendering.\nThis gives FX time to initialize and load samples.'},
@@ -6470,10 +6567,46 @@ local function card(title,x,y,w,h,joined)
  block_surface(x-12,y-12,w+24,h,joined)
  label(title,x,y,15,C.text,1,w-10,20,0,true);line(x,y+22,x+w,y+22,C.edge,.22)
 end
+local function render_statistics(x1,x2,w)
+ local state=m.state;local flags=state.c.renderclosewhendone or 0
+ local enabled=Model.render783 and state.c.renderclosewhendone~=nil and state.c.renderpeaks~=nil
+ local function selectconfig(id,title,key,mask,options,value,x,y,active)
+  selectfield(id,title,options,value,x,y,w,function(v)return Model.configbits(state,key,mask,v)end,enabled and active~=false)
+ end
+ local function toggleconfig(id,title,key,mask,x,y,inverse,active)
+  local value=((state.c[key]or 0)&mask)~=0
+  tick(id,title,value~=inverse,x,y,w,function(on)
+   Model.configbits(state,key,mask,on~=inverse and mask or 0)
+  end,enabled and active~=false)
+ end
+ card('統計の計算',x1,152,w,161)
+ selectconfig('stats_loudness','ラウドネス統計','renderclosewhendone',0x2600,
+  {{'LUFS-M / S / I・LRA',0},{'RMS-M / S / I・RMS-RA',1536},{'計算しない（最速）',8192}},Model.loudnesschoice(state),x1,181)
+ selectconfig('stats_peak','ピーク統計','renderclosewhendone',256,
+  {{'サンプルピーク',0},{'トゥルーピーク',256}},flags&256,x1,228)
+ label('正規化・リミットは「後処理」で設定します。',x1,278,10,C.faint,1,w,18)
+ card('統計グラフ',x1,326,w,178)
+ local loudness=Model.loudnesschoice(state);local graph=Model.graphchoice(state)
+ selectconfig('stats_graph','ラウドネスグラフ','renderpeaks',48,
+  {{'なし',0},{'モーメンタリー',16},{'ショートターム',32}},graph,x1,355,loudness~=8192)
+ toggleconfig('renderpeaks:4','LUFSゲート対象外を色分け','renderpeaks',4,x1,411,false,loudness==0 and graph~=0)
+ toggleconfig('renderclosewhendone:128','ピーク超過箇所を強調','renderclosewhendone',128,x1,445,false)
+ card('統計ファイル',x2,152,w,161)
+ local html=(flags&32768)==0 and 0 or flags&0x28000
+ selectconfig('stats_html','HTMLレポート','renderclosewhendone',0x28000,
+  {{'保存しない',0},{'ファイルごとに保存',32768},{'まとめて保存',0x28000}},html,x2,181)
+ toggleconfig('renderclosewhendone:2097152','最後の統計をメモリに保持','renderclosewhendone',2097152,x2,248,false)
+ card('表示する情報',x2,326,w,178)
+ toggleconfig('renderpeaks:512','レンダー中にトラックメーターを表示','renderpeaks',512,x2,355,false)
+ toggleconfig('stats_paths','HTMLにファイルパスを含める','renderclosewhendone',0x40000,x2,397,true)
+ toggleconfig('stats_regions','HTMLにリージョン／マーカーを含める','renderclosewhendone',0x80000,x2,439,true)
+ if not enabled then label('REAPER v7.83以降とSWSが必要です。',36,522,11,C.faint,1,W-72,18)end
+end
 local function advanced()
  local x1,x2,w=36,W/2+19,W/2-55
- local subtabs={'出力・品質','開始待機'};A.detailTab=A.detailTab or 1
+ local subtabs={'出力・品質','開始待機','統計・表示'};A.detailTab=A.detailTab or 1
  tabrow('detail',subtabs,A.detailTab,30,103,W-60,23,13,function(i)A.detailTab=i end)
+ if A.detailTab==3 then render_statistics(x1,x2,w);return end
  if A.detailTab==2 then
   local x1,x2,w=36,286,212
   card('FXの初期化',x1,152,w,116)
@@ -6798,7 +6931,7 @@ local function draw()
  tick('closeAfter','レンダー後閉じる',closing,36,609,150,function(on)Model.setcloseafter(m.state,on)end,true,true)
  widgets[#widgets].y,widgets[#widgets].h=603,28
  small_button('native','標準レンダーを開く',194,604,134,24,native)
- cfgselect('projrenderlimit','レンダリング速度',{{'フルスピード・オフライン',0},{'1倍速・オフライン',1},{'オンライン',2},{'オンライン（アイドル）',3},{'オフライン（アイドル）',4}},356,550,256)
+ selectfield('projrenderlimit','レンダリング速度',Model.speedchoices(m.state),Model.speedchoice(m.state),356,550,256,function(v)return Model.setspeed(m.state,v)end,m.state.c.projrenderlimit~=nil)
  local rx,ry,rw,rh=338,597,W-374,36
  local parts={};for _,key in ipairs({'mono','stereo','multi'})do local n=A.channelCounts and A.channelCounts[key]or 0;if n>0 then parts[#parts+1]=key..'['..n..']' end end
  local renderLabel=Language.text('レンダー')..(#parts>0 and(' ('..table.concat(parts,' ')..')')or'')
@@ -6823,7 +6956,7 @@ end
 BLT.attach({R=R,C=C,Chrome=Chrome,Chameleon=Chameleon,section=SECTION,faces=fonts,font=font,
  geometry=function()return scale,ox,oy end,active=function()local f=gfx.getchar(65537);return(f&1)==0 or(f&2)~=0 end,
  wake=wake_visuals,defaults=Model.factory(m.state),capture=function()return m.state end,
- valid=Model.valid,apply=function(v)m.state=v;changed()end,
+ valid=Model.valid,apply=function(v)m.state=Model.complete_render_options(R,v);changed()end,
  busy=function()return A.busy end,commit=function()return finish_edit(false)end,cancelEdit=function()finish_edit(true)end,editing=function()return E~=nil end,modal=function()return A.renderConfirm~=nil end,
  tooltip=A.detail_tip,
  handle=gfx_window_handle,resizeHit=chrome_resize_hit,cursor=set_resize_cursor,beginResize=begin_window_resize,resize=update_window_resize})
