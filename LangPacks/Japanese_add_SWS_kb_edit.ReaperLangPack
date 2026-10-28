@@ -1,8 +1,8 @@
-#NAME:日本語 [JP] - For v7.82 + SWS
+#NAME:日本語 [JP] - For v7.83 + SWS
 ; @description 日本語 [JP] - REAPER + SWS
 ; @author Balrulu
-; @version 7.82.1
-; @changelog Japanese translation for REAPER v7.82 + SWS
+; @version 7.83.0
+; @changelog Japanese translation for REAPER v7.83 + SWS
 
 ; NOTE: this is the best starting point for making a new langpack.
 ; As you translate a string, remove the ; from the beginning of the
@@ -351,8 +351,6 @@ E044BDDEB9333E54=メディアアイテム
 B36DBB640BD652AA=音符:
 200265593F330955=スケール検索
 ;08328907B4EB71A0=?
-40734250890FBC24=結合
-7B58DF28A5C5EDAE=非表示リージョンをレンダリングしない
 87D8D79D63721460=レンダリングキューを開く...
 AAEC9E4F51E61BFA=レンダー (ファイル無し)
 6591A9846B673560=対象:
@@ -1487,10 +1485,7 @@ D52782E5368E8EA1=MIDI ファイル書き出しエラー
 33A5C54D35029E6F=ノート
 D790926420BA2EB7=通知
 BBA33ABA3D67B8AA=REAPER エラー
-05A130B04362C768=REAPER ノート
 ;88FD5B51957ED670=REAPER Warning
-E83CE539DBB569A7=レンダリング前に録音を停止...
-5945AF9182806811=設定をインポートする前に録音を停止してください（設定のインポートには再起動が必要です）
 D96196186C20B90D=:
 BA8A5EA843F33060=やり直せません
 99B80DC023AB26F6=元に戻せません
@@ -2129,6 +2124,21 @@ DDAB6253F0B71B7C=自動レンダー
 67DB0C104E15ABAD=開いているプロジェクトのリストを保存...
 75381D695414DB95=トラックを削除(s)
 14AB0E343C321037=すべてのトラックを表示
+8403ACDF3212460C=マーカーマネージャー...
+02823F9BF6E7CCD5=非表示リージョンをスキップ
+20D29012CAD3899C=トラックFXバイパスを学習...
+800BDA9B96FB45E5=トラックミュートを学習...
+130F9A6016E0BE7B=トラックパンを学習...
+EB0F804197628C33=トラック録音アームを学習...
+100F72E85010E0E3=トラックソロを学習...
+E3FBACB3D79F7DB8=トラック音量を学習...
+F12A8108E2F4FA9A=トラック幅を学習...
+5DDF7EA6834B8030=MIDI/OSC学習
+FE38622FBF1270FB=非表示FX
+7FC8C4AE92742E10=キャンセル済み
+283B45E9974ECF06=変換中
+F761F64742F84B2B=変換済み
+6811BD8E9941EEB4=エラー
 
 [DLG_102] ; IDD_MAIN
 246546A2AD3EB0B4=REAPER (初期化中)
@@ -2379,8 +2389,6 @@ C4E167520C3410DB=ピークを生成中...
 55272D5AF8EE3E11=停止時に編集カーソルまでスクロール
 2B7FC3F24C522975=負のメディア再生オフセット適用時のMIDI再生速度の最大値:
 1339F0A0D94DB142=(0=即時)
-7C0BC5B15B033895=ループ時にエフェクトをリセット (Auto-Tune等に有効、音源系には不向き等)
-1149F742BD0E8658=停止中もFXを動作させる（一部VSTiに有効）
 926B9B67161D84D0=停止時にFXバッファを初期化
 80EBAA875417D411=エフェクト停止までの時間
 F0D4137C641EE9CC=ms (リバーブ余韻などの用途)
@@ -2394,6 +2402,8 @@ FFCA9C88B7989F46=再生停止時
 CFC9442BD7D62C0E=再生のループ/スキップ時
 09573F4841142ECB=CCリセットの上書き:
 ;^49EB3CF2EE728EFF=Stop playback at end of loop if repeat is disabled
+F9A5F5016DF11A5F=ループ時にFXをリセット
+F780BB12E7CCF1F9=停止中もFXを実行
 
 [DLG_137] ; IDD_PREFS_REC
 5CA1E00000000000=1.2
@@ -2710,13 +2720,13 @@ BB30EBB441D29823=読込時にプロジェクトメモを表示
 ;^FBC77126B2213071=Word wrap
 
 [DLG_169] ; IDD_MARKEREDIT
-8403ACDF3212460C=マーカーマネージャー...
 ;^6AE6A7774B25EDEB=Edit Marker
 ;^48D899DD92FBC032=Name:
 ;^D405917E36F95CF8=ID:
 ;^22930147F74645ED=Lane:
 ;^472AFB5EEA3489E5=Lane
 ;^F9519A70026F7B52=Position:
+8403ACDF3212460C=マーカーマネージャー...
 ;^941DEA15C4817EEC=Set color...
 ;^E6B5A6A65044C93D=Reset color
 ;^D840E3186B2B9581=OK
@@ -3182,6 +3192,7 @@ DE1E80DDFDD48B40=マウス位置に縦線を表示:
 5BE54390A5BC8863=ドッカー内のウィンドウが1つの時、指定サイズ以下の時にタブを隠す:
 ;^649ECB151A2B4705=Slider1
 ;^10EC54E7BB0B3282=pixels
+C7B03E0579D9E466=OS標準の色選択ダイアログを使用
 
 [DLG_214] ; IDD_PREFS_AUDIOCONFIG2
 B0347433BD1E62FD=このページを表示するには、再生または録音を停止してください。
@@ -4243,6 +4254,7 @@ F33EC3BF0909E19D=バッチコンバーター
 ;^EAC3236C52A59642=Metadata
 ;^D8B3B3186B8C817F=ms
 B7D60A549F3AFA0B=設定を保存
+6ACB47265C620CDA=変換ファイルのプレビューを表示
 
 [DLG_446] ; IDD_ICONPICKER
 04F6ECC6DDB460B1=ツールバーのアイコンを選択
@@ -4409,6 +4421,7 @@ D532B8985FB622F9=非選択時:
 10EEA01CE7AD98F1=トラックメニューからトラックの、アイテムメニューからアイテムやテイクのカスタムカラーを設定可
 ;^10EC54E7BB0B3282=pixels
 ;^821B3CD32107333D=Track color
+3F6AEB8F4100573E=ズームアウト時もサンプル編集を強調表示
 
 [DLG_460] ; IDD_PREFS_APPEAR_METERS
 5CA1E00000000000=1.2
@@ -4503,6 +4516,7 @@ A1C5EC4ACA9C56C0=フリーズ
 [DLG_470] ; IDD_MAC_OKCANCEL
 ;^D840E3186B2B9581=OK
 ;^F09E4B5C35AA14B9=Cancel
+;^D7323C887B0A2951=Apply
 
 [DLG_471] ; IDD_GET_LICECAP
 5CA1E00000000000=1.1
@@ -4751,7 +4765,6 @@ D43728829B5F35B2=プラグインの完全な状態保存を無効にするとこ
 B96DC62C8DAD2307=キュー済みレンダーを遅延し、サンプル読込時間を確保
 0903AD556AF759BE=ファイルにレンダリング
 DB7A3E191C8F859B=範囲
-058E62675060DE32=リージョンマトリックス...
 1AF0BD09D018425D=テール:
 ;D98A68186C436FF7=..
 E557476A23EFCCC5=全て見る
@@ -4769,11 +4782,9 @@ A089A7AEDB6AAB1F=ディザリング
 529A671FEBBC78D0=メタデータ
 86C55D176585B2A2=出力フォーマット
 C781F39457E72180=無音になる場合はレンダリングをしない
-E99662FCBA2828E7=.wav.RPPにプロジェクトのコピーを保存
-A98CD5FFEC7866F9=.render_stats.htmlを保存
-A7B48DD0872C306B=レンダリングされたファイル毎
 AF90DDBE62A73728=完了時にこのウィンドウに戻る
 1C2E2E61B8B106CD=完了時にこのウィンドウを閉じる
+E99662FCBA2828E7=.wav.RPPにプロジェクトのコピーを保存
 CD1596364EF5BF14=レンダリングしたアイテムを新規トラックに追加
 EF3D50CDFE97A374=キュー...
 000A0965A36801DA=ドライラン (出力なし)
@@ -4784,7 +4795,6 @@ EF3D50CDFE97A374=キュー...
 ;^720CB39E31676E27=Start:
 ;^61B7599A40AF0062=End:
 ;^309B13D6E0AC1A0F=Length:
-;^7B58DF28A5C5EDAE=Do not render hidden regions
 ;^D8B3B3186B8C817F=ms
 ;^2555373B75AA89B2=Output
 ;^E0A7E8E6C8588D64=Directory:
@@ -4804,10 +4814,13 @@ EF3D50CDFE97A374=キュー...
 ;^E5C789E4D64D2DCE=Timecode start offset
 EAC3236C52A59642=メタデータ
 ;^22F397A203D21C30=Silently increment filenames to avoid overwriting
-;^40734250890FBC24=Combined
 ;^B7D60A549F3AFA0B=Save settings
 ;^AAEC9E4F51E61BFA=Render (no files)
 ;^F09E4B5C35AA14B9=Cancel
+628F3EBF2D23C540=レンダリング中にトラックメーターを表示
+;^7CE6FE4C74542BB2=Region Manager...
+;^02823F9BF6E7CCD5=Skip hidden regions
+;^BAFCE81B12CE0626=Stats/Charts
 
 [DLG_507] ; IDD_AUTOMUTE
 1BBEAE3E3D785C95=自動ミュート
@@ -4965,7 +4978,6 @@ AAFDD239DB19560C=固定レーントラックに自動パンチイン録音する
 5CA1E00000000000=1.1
 2774BF0E396FA6EA=オートメーション記録時の復帰速度:
 6A77E58CC1DB4B89=アクションの遷移時間:
-F3407898EA587963=オートメーション書き込みモード中にパラメータを操作した際、エンベロープを自動追加する
 A034ABCC948D1990=非表示のエンベロープ:
 0C24BC2FF418AD7F=Readオートメーションのフィードバックを表示
 60ED6B2EB49A67AF=オートメーション書込を許可
@@ -4983,6 +4995,8 @@ DCD3C6C7B5C8625F=アレンジビューをクリックすると、すべてのテ
 2715653EC997D088=オートメーション設定
 ;^D8B3B3186B8C817F=ms
 ;^20BAEAD47F4513A4=Reduce envelope point data when recording or drawing automation
+74DB5120DBC314F3=オートメーション書き込みモードでエンベロープを自動追加
+B561ED0CC6276704=ミュートを許可
 
 [DLG_520] ; IDD_TEMPOADJ
 78AE956D5D923E0E=テンポエンベロープ全体を変更
@@ -5221,6 +5235,7 @@ DC550AF3D8DE1D84=以後表示しない
 7BC1296313E80DF0=OSに従う
 6298602ED1180749=無効（推奨）
 8FEB39A275322DD7=強制オン
+1243E33A71969287=内蔵ダークモードは無効（reaper_darkmode.dll読込済）
 2E8A1FE4EFD81398=大
 7B08AA30FDEE9648=特大
 D90DB889070F72DA=自動（推奨、10.11以降はMetal）
@@ -5255,7 +5270,6 @@ B8AC798F77CEC1EF=スワイプ
 ;^D840E3186B2B9581=OK
 ;^F09E4B5C35AA14B9=Cancel
 ;^122368E92DE6E29F=Reset to defaults
-1243E33A71969287=内蔵ダークモードは無効（reaper_darkmode.dll読込済）
 
 [DLG_578] ; IDD_PREFS_AUDIOCONFIG_LINUX
 FFAE57EC0BA56FE1=ブロックサイズ:
@@ -5444,6 +5458,7 @@ F6943164E79D3997=最大:
 ;^F09E4B5C35AA14B9=Cancel
 
 [DLG_588] ; IDD_PREFS_GENADV_LIN
+02C04180B38268E7=IMEサポートを有効化（完全なGTK+読込の為、不具合が生じる場合があります）
 ;^0A6448A99C8A2834=Advanced UI/system settings
 ;^7AF19CA985602750=Note: some of these options are or have been considered experimental.
 ;^C4A83360D20BD06A=Custom splash screen image:
@@ -5457,7 +5472,6 @@ F6943164E79D3997=最大:
 ;^D840E3186B2B9581=OK
 ;^F09E4B5C35AA14B9=Cancel
 ;^122368E92DE6E29F=Reset to defaults
-02C04180B38268E7=IMEサポートを有効化（完全なGTK+読込の為、不具合が生じる場合があります）
 
 [DLG_589] ; IDD_ITEMRULER_SETTINGS
 9035BAF65A56139D=メディアアイテムルーラー設定
@@ -6443,6 +6457,14 @@ BBB17EF4311BA65F=環境設定...
 ;^9BC67B482921A263=About REAPER
 ;^0832A807B4EBA64D=
 ;^62473318FFD2829F=[recording settings]
+;^5DDF7EA6834B8030=MIDI/OSC learn
+;^E3FBACB3D79F7DB8=Learn track volume...
+;^130F9A6016E0BE7B=Learn track pan...
+;^F12A8108E2F4FA9A=Learn track width...
+;^800BDA9B96FB45E5=Learn track mute...
+;^100F72E85010E0E3=Learn track solo...
+;^20D29012CAD3899C=Learn track FX bypass...
+;^EB0F804197628C33=Learn track record arm...
 
 [MENU_136] ; IDR_MENU2
 7603F4809C8E5192=ミキサー(&I)
@@ -6628,6 +6650,7 @@ E85949C4173AD547=新規プラグインをスキャン\tF5
 ;^6EFA7E4EF87CA485=Auto-clear search field on close
 ;^32C5A9224C3188A6=Auto-clear folder view on close
 ;^240086858F17503C=Remove all empty folders
+;^FE38622FBF1270FB=Hidden FX
 
 [MENU_300] ; IDR_CONTEXTS_0
 ;5BD74D193D4FB34D=0TrackCtl
@@ -6773,6 +6796,14 @@ C9D51236E5A04162=Write
 ;^4BDEF546E82FD96D=Remove selected tracks from all track media/razor editing groups
 ;^26F024DA18D623CC=Track Group Manager...
 ;^0496A9EA1EEEE866=Track Grouping Matrix...
+;^5DDF7EA6834B8030=MIDI/OSC learn
+;^E3FBACB3D79F7DB8=Learn track volume...
+;^130F9A6016E0BE7B=Learn track pan...
+;^F12A8108E2F4FA9A=Learn track width...
+;^800BDA9B96FB45E5=Learn track mute...
+;^100F72E85010E0E3=Learn track solo...
+;^20D29012CAD3899C=Learn track FX bypass...
+;^EB0F804197628C33=Learn track record arm...
 
 [MENU_301] ; IDR_CONTEXTS_1
 ;B2B766E2DE1404E6=1MediaItems
@@ -7471,6 +7502,10 @@ C0BF6AE38F5FC824=全トラックのセンドスロットをミュート
 B19A3615EADF772D=トラックのルーティングウィンドウを表示
 F0411A69BCF40C1B=センド先のトラックに移動
 ;^476CA46F5CC9791B=Remove send
+3CF2F35D14D58F4F=センド音量の学習...
+07CC467D57C8C866=センドパンの学習...
+ABB0DE3BC99AD6AE=センドミュートの学習...
+;^5DDF7EA6834B8030=MIDI/OSC learn
 
 [MENU_316] ; IDR_CONTEXTS_16
 1D2B99D34B81AA37=マーカー/リージョンに飛ぶ
@@ -7616,6 +7651,7 @@ FD95107AE618F7DA=ナビゲーターウィンドウをドッキング
 ;^240086858F17503C=Remove all empty folders
 ;^146E11E319517217=Dock FX browser in Docker
 ;^BAC64C1B2E060EE5=Close
+;^FE38622FBF1270FB=Hidden FX
 
 [MENU_321] ; IDR_CONTEXTS_21
 F44B3B65D54ABF39=ドック位置: 下
@@ -8950,6 +8986,7 @@ CE789C6BF981D197=アイテム: フェードイン形状を鋭い凹に設定 ▲
 903EF5D17CEFC953=アイテム: フェードイン形状を順に切り替え ▲▼ Item: Cycle through fade-in shapes
 79D56D420E474765=アイテム: フェードアウト長を既定値に設定 ▲▼ Item: Set fade-out length to default
 253CE13E74FC50A8=アイテム: フェードアウト形状を既定に設定 ▲▼ Item: Set fade-out shape to default
+55573D4356284732=アイテム: フェードアウト形状をリニアに設定 ▲▼ Item: Set fade-out shape to linear
 D5C59282E86DA92B=アイテム: フェードアウト形状を緩い凸に設定 ▲▼ Item: Set fade-out shape to slight convex
 88355212D301AF99=アイテム: フェードアウト形状を緩い凹に設定 ▲▼ Item: Set fade-out shape to slight concave
 3151169B3A4D608C=アイテム: フェードアウト形状を鋭い凸に設定 ▲▼ Item: Set fade-out shape to sharp convex
@@ -11174,7 +11211,13 @@ A724F6AA892C6837=グリッド: 1/16に設定 ▲▼ Grid: Set to 1/16
 43BC6E6F21CDC3F8=グリッド: 4に設定 ▲▼ Grid: Set to 4
 322A7281794EFF1B=グリッド: アレンジビューとMIDIエディターで同じグリッドを使用 ▲▼ Grid: Use the same grid division in arrange view and MIDI editor
 F8E6A0B81A77C5E9=全MIDIデバイスリセット ▲▼ Reset all MIDI devices
-55573D4356284732=アイテム: フェードアウト形状をリニアに設定 ▲▼ Item: Set fade-out shape to linear
+336219BC959D4753=トラック: MIDI/OSC学習: 音量... ▲▼ Track: MIDI/OSC Learn: Volume...
+6DB5E67A4CE161DA=トラック: MIDI/OSC学習: パン... ▲▼ Track: MIDI/OSC Learn: Pan...
+49EDCC02A4449BB2=トラック: MIDI/OSC学習: ミュート... ▲▼ Track: MIDI/OSC Learn: Mute...
+3451292731B279E0=トラック: MIDI/OSC学習: ソロ... ▲▼ Track: MIDI/OSC Learn: Solo...
+F9D46B2B9D5269BD=トラック: MIDI/OSC学習: FXバイパス... ▲▼ Track: MIDI/OSC Learn: FX Bypass...
+5C9B7EB5B1247BE4=トラック: MIDI/OSC学習: 録音アーム... ▲▼ Track: MIDI/OSC Learn: Record Arm...
+C41F4F36EC773863=トラック: MIDI/OSC学習: 幅... ▲▼ Track: MIDI/OSC Learn: Width...
 
 [actions_fmt]
 6A859719FE602A01=トラック: %s の音量を設定（MIDI CC/OSCのみ） ▲▼ Track: Set volume for %s (MIDI CC/OSC only)
@@ -11556,9 +11599,7 @@ E1F3F7BA67B625C0=入力パス
 9E5495123541931D=出力パス
 164C3DDC98BB995A=セットアップ中
 3C83074D63B87DEA=分析中
-283B45E9974ECF06=変換中
 96B2B5A0A740BA8B=完了
-7FC8C4AE92742E10=キャンセルされました
 37CCB02B0246EA1C=上書き
 592F72004474817D=エラー:
 FB60F76FF2D51C73=バッチコンバータエラー
@@ -11573,8 +11614,6 @@ DAC1D23D1C02EAD6=出力ファイル名生成の内部エラー
 EE98230858002478=アイテム　
 3BC400D4D00CE61E=ディレクトリ
 B8344E2118C79696=ディレクトリ
-F761F64742F84B2B=変換済み
-6811BD8E9941EEB4=エラー
 AB3F65A93C153DE5=経過時間
 A0FF6EEEEFB2BDB0=分解
 68602921BF912A65=ペアを分解
@@ -11649,6 +11688,8 @@ C76DE2D9A9442E8A=コマンドラインで使用するために現在の設定を
 ;^2A6ED1B48E88BCC9=Status
 ;^5C048676E8CE02CB=Info
 ;^2555373B75AA89B2=Output
+283B45E9974ECF06=変換中
+7FC8C4AE92742E10=キャンセルされました
 ;^9EC3E20500624AAF=Error
 ;^3A43A253FE2BECE6=files
 ;^7EDD20633162E6FE=channel
@@ -11656,6 +11697,8 @@ C76DE2D9A9442E8A=コマンドラインで使用するために現在の設定を
 ;^E044BDDEB9333E54=media item
 ;^F0CDBE121A8CBFA9=Batch Converter
 ;^C129889B8F00B0F1=file
+F761F64742F84B2B=変換済み
+6811BD8E9941EEB4=エラー
 ;^2112CF591DBD3A60=Mono
 ;^21D9AFD3561EE5AB=Stereo
 ;^18C90F7E5DC51FCA=All
@@ -12067,6 +12110,7 @@ AEF50FE07D222364=パラメータモジュレーションをバイパス
 ;^480A73B43C308366= (folder)
 ;^DAB3750D3A516D7A=Container
 ;^E9991E9C69A2E870=Envelopes
+9AA2363A78613A26=学習を追加...
 
 [envdlg_heading]
 8A05470D183D5EF1=テイクエンベロープ
@@ -13387,6 +13431,9 @@ E7281E44C844A5FC=最初の %d 個の新規トラックからの MIDI を FX の 
 ;^6037A596D672320D=Shortcut
 ;^DBBA341045C77FD7=Show FX chain path in explorer/finder
 ;^82E42D2FF8D25A8D=Could not get channel info for effects (are they multichannel?)
+9282C78B25B5CB12=フォルダ以外の表示でFXを非表示（「非表示FX」フォルダに追加）
+7A9A42D5DBA7EB84=フォルダ以外の表示でFXの非表示を解除（このフォルダから削除）
+;^FE38622FBF1270FB=Hidden FX
 
 [fxmenu]
 FD159916B075BAE4=コンテナパラメーターにマップ
@@ -14144,7 +14191,6 @@ D93BF6697B8FE32E=ディレクトリをプロジェクトにインポート：
 19BC8EA394A09BD0=アイテムのレンダーエラー
 E15BEEF602EC337E=トラックFXの適用エラー
 B7B87EA07036FB51=レンダリング用の未使用のファイル名が見つかりません。ソースファイル:\r\n\t
-CD17057F9F13E590=%d 個のアイテムのソースプロパティを表示しますか？\r\n(すべてのプロパティが順番に表示されます)
 FA76193619885B9B=複数アイテムのプロパティ
 CD466664BAC48512=注意: 一部のメディアアイテム・ソースには、利用可能なプロパティがありません
 97E46AF050BD945E=アイテムソースのプロパティ
@@ -14164,9 +14210,6 @@ C84FDEC95BD3B8EB=選択範囲がアクティブではありません
 15150E9E3A687122=選択範囲がロックされています。ロックを解除して削除しますか？
 C3707F61E24A961C=ライブ出力の保存が完了しました！
 6A5065293C62F448=%d個のアイテムがオフラインです
-6CFBE6010F005CD1=新しいテイクにレンダリングする前に録音を停止してください
-85AF1E98BF2F4CFE=トラックFXを適用する前に録音を停止してください
-B5AEE049B9F8FED1=統合する前に録音を停止してください...
 B581897B00F73FF0=ループ/選択範囲がロックされています。ロックを解除して削除しますか？
 87D8D35B878FD1A0=トラックテンプレートを開く:
 1013F95E5E56BDAB=以下の MIDI 入力が開けませんでした。:
@@ -14310,14 +14353,15 @@ A5DD886F0B75CC0D="%s" を上書きしますか？
 ;^88FD5B51957ED670=REAPER Warning
 ;^E6A55E1F24BD208C=Choose ReaperConfigZip to import
 ;^D726E2A6E8466B26=Create new MIDI file:
-;^E83CE539DBB569A7=Stop recording before rendering...
-;^05A130B04362C768=REAPER Note
-;^5945AF9182806811=You must stop recording before importing configuration (as configuration import will require a restart)
 ;^D790926420BA2EB7=Notice
 ;^D52782E5368E8EA1=Error writing to MIDI file
 ;^043FBD1700F7067B=Render Warning
 ;^82E42D2FF8D25A8D=Could not get channel info for effects (are they multichannel?)
 ;^A752FB9BC4EC6C8C=Initializing...
+C3CCAC5172AB60CB=%d個のメディアアイテムが選択されています。
+0B53ACDBC0E8E7CF=クリックしたアイテムのみのソースプロパティを表示しますか？
+A40F4D28D3BC3069=最初の選択アイテムのみのソースプロパティを表示しますか？
+C98D5B3DE02D8A3B=「いいえ」をクリックすると、%d個すべてのアイテムのソースプロパティを順番に表示します。
 
 [menu]
 615DF6D7CF507235=テイク %d
@@ -18640,6 +18684,7 @@ A6F5715C7DFDA0E9=OPUS 解析エラー: ファイルに9チャンネル以上含�
 6117CC4FE43AF7F2=+0.0 (デフォルト)
 C8DA9526030E326C=サインテーパー
 3EBBFB1914C8EB44=リニアテーパー
+F1134D87C27DEC63=ハイブリッドテーパー（既定）
 041B2B4496DA7859=[非推奨のレガシーテーパー]
 A7213830E12E367B=プロジェクトデフォルト (ステレオバランス/モノパン)
 82F7D1EB412DAF11=プロジェクトデフォルト (ステレオパン)
@@ -18652,7 +18697,6 @@ CC85814B7AF4CCED=REAPER 3.x バランス(非推奨)
 82578278D5231120=PAN補正:
 ;^94DEF1C233373209=Project default
 ;^F4944DF4957B0C53= (default)
-F1134D87C27DEC63=ハイブリッドテーパー（既定）
 
 [panlaw]
 ;^DDDBC4B59922776E=Master Track
@@ -18855,7 +18899,6 @@ FC01B4E7A42BD3FD=キャッシュをクリアしてCLAPパスを再スキャン (
 3BECE4815452DB14=LV2パスを再スキャン
 71B84EAF08228529=プロジェクト開始位置に端数フレームのオフセットを許可にする
 16A177CDBB0BA2F9=変更は次回のレンダリング時に反映されます
-;048EB9368F1CBA37=RMS-M, RMS-S, RMS-I, RMS-RA
 ;30B0BFD703C13478=LUFS-M, LUFS-S, LUFS-I, LRA
 4645A0C0BE8944CC=レンダリング時に統計を計算
 ;^99FA828F906D3EE4=Find
@@ -18880,8 +18923,6 @@ FC01B4E7A42BD3FD=キャッシュをクリアしてCLAPパスを再スキャン (
 ;^F47146FFAED94D96=New project
 A3FAE16E6B2F9235=毎回確認
 ;^E6A55E1F24BD208C=Choose ReaperConfigZip to import
-;^5945AF9182806811=You must stop recording before importing configuration (as configuration import will require a restart)
-;^D790926420BA2EB7=Notice
 ;^A4C0C852A5B25572=Confirmation
 ;^BABD655B2A5AED87=Select a directory:
 ;^D811D5325411DBAD=Smooth
@@ -18896,6 +18937,11 @@ A3FAE16E6B2F9235=毎回確認
 ;^9905304762D60D7B=Reset project start measure
 ;^7B1FC13C44802440=Peak
 ;^24FA6053B8BF443E=True peak
+F5078D8A08BDB019=RMS-M、RMS-S、RMS-I、RMS-RA（高速）
+8DB3515B5E4C4ACB=ラウドネス統計なし（最速）
+8C75BAA9B0F41CF8=補足: ドライランレンダー中は常に統計が計算されます
+A9DBE85710F5BBDF=補足: レンダリング後は一時的な統計を常に確認できます
+091E1462A4CAA2FF=レンダリング後にHTML形式の統計を書き出す
 
 [prefs_REPLACEME_help]
 C0504B2988C86CC8=テキスト
@@ -18956,6 +19002,7 @@ F396B6521BCB7FAC=マーカーに名前がある場合、マーカー番号を表
 A58ADA2A7764C721=リージョン開始位置が画面左外にある場合、番号/名前を左へスクロールさせて画面外に出すか、画面内に固定するかを選べます。
 D82746AB91159511=ルーラー上のリージョンは、角丸or四角の端で描画できます。デフォルトは四角です。
 621C24022B97BE25=ルーラー上のマーカーは、角丸or四角の端で描画できます。デフォルトは角丸です。
+D1A43EFB72491298=REAPERの改良された色選択ダイアログではなく、OS標準の色選択ダイアログを使用します。
 
 [prefs_ara_help]
 0598BF5E8678F01D=ARAをサポートするプラグインに対してグローバルにARAを有効または無効にする
@@ -19077,6 +19124,7 @@ AC541C5957F50B6A=アレンジビューの空の領域をクリックすると、
 30B4D7807888FF78=アイテムの領域をクリックすると、指定されたアイテムのすべてのテイクエンベロープポイントが選択解除されます。
 EE8638C24542B2E3=オートメーションの録音時に複数の一致するエンベロープが選択されている場合、どのエンベロープが変更されるかを制御します。
 F65F5CD0B2A90467=有効にすると、ラッチ／ライトモード時にラッチが自動リセットされず、手動でリセットする必要があります。
+1364EF4408EDC468=タッチ/ラッチ/ライトモードでミュートを切り替えた際に、ミュートエンベロープの自動作成を許可します（初期値オフ）。
 
 [prefs_auto_items_help]
 9C3914B6F3A67C90=メディアアイテムのように、オートメーションアイテムはデフォルトでループまたはアンループすることができます。
@@ -19652,6 +19700,7 @@ F36541511CD33299=カスタムテイクカラーはカスタムアイテムカラ
 75D54645FB39B3AE=十分にズームインされている場合、スペクトログラムモードで高解像度スペクトログラム表示を有効にする
 70B81AC19EA0B35D=高解像度スペクトログラムが使用されるアレンジビューの最大幅（秒単位）。約20秒以上の範囲までズームアウトすると、高解像度スペクトログラムの計算が非常に遅くなる可能性があります
 7C5934E718613E19=高解像度スペクトログラムを使用する際の最低アイテム高さ（アレンジビュー全体の高さに対する割合）
+3498399496777A1E=個々のサンプルが見えないほどズームアウトしていても、サンプル編集があるピーク領域を強調表示します。
 
 [prefs_mediavu_help]
 36DB054027DB0B9B=各メディアアイテムの名前をアイテムの上部に表示します。
@@ -21403,12 +21452,12 @@ E4A819F476916F46=OGG Opus ファイルプロパティ
 [reaper_opus_DLG_155] ; IDD_OPUSSINK_CFG
 793C59618680CF12=3～8Chオーディオを 2.1-7.1 (LFE) としてエンコード
 47ADB9661E5394D9=チャンネルごと (6～256 kbps)
+;^40734250890FBC24=Combined
 E78E0DEFF53B4BF3=複雑度:
 1947FE678014C0F4=0-10。　10が最高品質ですがエンコードが遅くなります
 ;^46F1486DB9B6A7A6=Mode:
 ;^47721B0B3BD6F596=Bitrate:
 ;^0121AF72166A79F7=kbps
-;^40734250890FBC24=Combined
 
 [reaper_rex_DLG_120] ; IDD_REXITEMINFO
 0999DE12FA8081A3=ソースのテンポ: %.1f
@@ -22828,7 +22877,6 @@ AB22EA23710732F2=プロジェクトの全てのリージョン
 FA60ADA2FD0104C9=選択されたマーカー
 ;2F704078E2145B17=outfile
 1B341CD2B3DF9AB3=%s%s.RPPにプロジェクトコピーを保存
-689AD6D78707AEEB=%s.render_stats.htmlを保存
 6E94EBACB2B7E74E=1 ファイルをレンダリング
 0F54E3E0D9AAABFF=%d ファイルをレンダリング
 1CEAF95AE338E8FC=プリセットを置換
@@ -22860,7 +22908,6 @@ DE58EF8FB6E3E4A1=フェード
 8648FAB64EA8961B=レンダー警告
 AC21B0286E7A1ABE=レンダリングファイル名
 6725CDBA1AD49C8F=並列ポスト処理:
-76208652277E7628=すべてのファイルを同時に後処理します。これによりレンダリング速度が大幅に向上する場合があります。通常はほとんどのケースで自動的に行われますが、各ファイルを個別にノーマライズまたはリミットする場合は、自動では行われないため並列後処理を手動で有効にする必要があります。
 26664BEF929E4F1F=並列後処理を行っている間、すべてのファイルの後処理が完了するまで、レンダリングされたファイルはREAPERの外から利用できません。各レンダリングファイルをできるだけ早くREAPERの外でも使えるようにしたい場合は、全体のレンダリング時間が長くなっても構わないのであれば、並列後処理を無効にしてください。
 17604DA0D224B60B=並列レンダーのヘルプ
 38F381B9BC0CFF41=パフォーマンスに関する注意:
@@ -22920,11 +22967,6 @@ D3D35AE173ADE15A=リージョンマトリックス
 C9C02344D7F08EBA=選択メディアアイテム
 D71516387A98D7F9=レイザー編集エリア
 EB12981DDB84AAEC=(同時出力なし)
-7C52FAD1998A97D7=最高速オフライン
-ECEF5A49F432EB7D=実時間オフライン
-0694A6949DB4FAA8=オンライン
-3EFDB5F495A9454B=最高速オフライン(待機時優先)
-17A9CDE22D90C248=実時間オフライン(待機時優先)
 9F6D5A5E82166980=一部の後処理はビデオレンダーではサポートされていません。
 942DA131FFBCFCF4=レンダリングされたファイルの相対音量は同じままです。
 A10ED063A9520D14=開始／終了位置が異なるファイル間では相対音量が変化する場合があります。
@@ -22983,6 +23025,7 @@ A470F74E64C73E6B=フェードアウトがトリミング内容の内側にある
 D8813A9A9386C02B=自動増加サフィックスには、少なくとも1つの数字以外の文字と、それに続く最低1つの数字が含まれている必要があります。
 248A14563F32E013=既定のサフィックス: "%s"
 5EDC668654E009C6=連番フォーマットエラー
+;^05A130B04362C768=REAPER Note
 F15BBEAE9FE15E1D=オーディオデバイスを開けませんでした
 66A16C1A64B822AB=サンプルレートを%.0fに設定できませんでした、現在のレート%.0f
 E627935037102F9B=レンダリング: オーディオデバイスのサンプルレートを変更できませんでした
@@ -22998,15 +23041,13 @@ A04BF8C55578396B=対象ドライブ/パスが存在しない、利用不可、�
 FDA7DB8BA581BDA9=RMS-M
 FDA7D58BA581B377=RMS-S
 85DFAE4A3B60A4FF=RMS-RA
-33B9B14D3513257D=ノーマライズ
-18E4297E5DDC13B0=調整
 ACE51CE3A0283976=トゥルーピーク
 66F75BAC7E91BFD9=クリップ
 1534F52869A3A6D5=TPクリップ
-E3BE01AD62408C33=プリレンダリング
 49EC68EBB394EAF7=経過時間:
 A6D0F32CC811267B=残り時間:
 A429CCD0AE500AF2=実時間
+E3BE01AD62408C33=プリレンダリング
 15029CE244526DD2=トリミング中
 24AACBB929F44FED=ノーマライズ中
 B24612B36183EF56=リミッティング中
@@ -23018,7 +23059,6 @@ E258F1C722C966D2=ポストプロセス中
 A89994413557ED4B=ファイルパスを非表示
 2A1F528C353B6513=プロジェクトのリージョン/マーカーを非表示
 10CBE65210551686=レンダリング統計チャートをカスタマイズ
-5FB66A1E819B9914=レンダー終了後も統計をメモリに保持（レンダー統計ヘルプ参照）
 5F312EF9ECD2C065=レンダー統計ヘルプ
 F62F106418C235F2=LUFS-I に寄与しない領域にシェードを付ける（※LUFS統計が有効時）
 18F0F0D569009361=LUFS-I に寄与しない領域にシェードを付ける
@@ -23118,8 +23158,6 @@ E6F6E0AD3008E03B=既定ではレンダーウィンドウを閉じると統計は
 ;^73235A4845CE69AF=Master mix
 ;^844680552BC72AF0=Normalize:
 ;^85C76190B06B4D57=Brickwall limit
-;^E83CE539DBB569A7=Stop recording before rendering...
-;^05A130B04362C768=REAPER Note
 ;^9EC3E20500624AAF=Error
 ;^C0A402815EE4A2E1=LUFS-M
 ;^C0A3EC815EE47D7F=LUFS-S
@@ -23129,6 +23167,37 @@ E6F6E0AD3008E03B=既定ではレンダーウィンドウを閉じると統計は
 ;^898659B24A7C6FB8=Back
 ;^BAC64C1B2E060EE5=Close
 ;^30C7CFDF48505E4A=Failed
+058E62675060DE32=リージョンマトリックス...
+C3DF16C4B373B2CB=非表示マーカーをスキップ
+B569619AF7D86FD6=すべてのファイルを同時に後処理することで、レンダリング速度を大幅に向上できます。すべてのファイルを同時再生したものとしてノーマライズやリミッター処理を行う場合など、一部の状況では自動的に適用されます。
+2191D380C65CBDC8=オンラインレンダリング
+0BDC2BD9FCA2A8FC=オフラインレンダリング（全速）
+5E9119B94BA777FA=オフラインレンダリング（最大1倍速）
+5E8E13B94BA537F1=オフラインレンダリング（最大2倍速）
+5FF4C2DD095B4331=オフラインレンダリング（アイドル、全速）
+C011002C9E41DCDF=オフラインレンダリング（アイドル、最大1倍速）
+C006FE2C9E3984F4=オフラインレンダリング（アイドル、最大2倍速）
+5D41B133C9E9AA38=先にバッチコンバーターを停止してください！
+A29F6016FABEF26E=ノーマライズ調整
+933693B095FA956D=モノラル調整
+A3F51651D5AA458A=レンダリング完了後も統計をメモリに保持
+C8BF8B74C3765BE9=統合統計を[outfile].render_stats.htmlに書き出す
+BEDC9CBBC64B5D14=ファイルごとの統計を[each_outfile].render_stats.htmlに書き出す
+14B162708D15890F=統計をファイルに書き出さない
+D3748226F662248A=momentaryのグラフを表示（ラウドネス統計を有効にする必要があります）
+791A053FFD93F2C9=short-termのグラフを表示（ラウドネス統計を有効にする必要があります）
+DE0DF3C56FFBC1F9=ファイルを変換中...
+A5B16D62A7B66D17=変換済みファイル
+1E9591B83E3FD028=完了までの時間
+0FAC006E97A8A78D=経過時間:
+;^7CE6FE4C74542BB2=Region Manager...
+;^8403ACDF3212460C=Marker Manager...
+;^02823F9BF6E7CCD5=Skip hidden regions
+;^283B45E9974ECF06=Converting
+;^2F799723962762C7=Stop
+;^F761F64742F84B2B=converted
+;^6811BD8E9941EEB4=errors
+;^7FC8C4AE92742E10=Canceled
 
 [render_access]
 FB146BF654A1D583=レンダー出力ディレクトリ
@@ -23388,6 +23457,9 @@ C95E7D9935B89171= (ディレクトリは自動作成されます)
 ;^D3E64988F293BA3A=Recording
 ;^44D502BC3E71FBB7=Channels
 ;^E0B104299A7A8E2E=time
+83C655C0EBCB504A=自動連番の接尾辞を除いたプロジェクト名
+98FBEA33850E4F76=録音先ディスクの空き容量
+46D7CDEB3A084FE7=現在のトラック録音設定でのディスクの残り録音可能時間
 
 [render_wildcards]
 71F8F9962E86AFF3=$projectlength 用のカスタム時間フォーマット:
@@ -23564,6 +23636,7 @@ C63419CDFD42CA95=このリージョンのすべてのトラック
 CCB842E771C424B9=レンダリング (ステレオ強制)
 60058CCE208E1B25=レンダリング (マルチチャンネル強制)...
 63A7298466E2A945=リージョンを選択
+;^7B58DF28A5C5EDAE=Do not render hidden regions
 9BBBAC2B709017DC=グループ詳細を個別表示
 861A0F93E63BEAE1=個別のグループフラグを表示
 7FD87D5A648ED19F=宛先：マスター/親を表示
@@ -23654,7 +23727,6 @@ ECC9A80133B0E90A=、モニタリングなし
 ;^BB1D7DBC1BA8233C=Routing Matrix
 ;^F441E72B821F90E0=Track Grouping Matrix
 ;^ECD8A7FC74B3A45A=Region Render Matrix
-;^7B58DF28A5C5EDAE=Do not render hidden regions
 ;^82EE5475CB6FCE9F=Close window
 ;^DDDBC4B59922776E=Master Track
 ;^73235A4845CE69AF=Master mix
@@ -23714,7 +23786,7 @@ CC4326345B6CBD16=レーンを保持（重複内容は削除、固有内容は保
 ;^D35AD13842A55DEA=Markers
 
 [save]
-F684CC8DBBE0B1E6=プロジェクトファイル名を決定する際にエラーが発生しました。たくさんのプロジェクトがありすぎます！
+F684CC8DBBE0B1E6=プロジェクトのファイル名を決定する際にエラーが発生しました。プロジェクトが多すぎます。
 
 [saveas]
 AA6A93E8DD1BCFE5=プロジェクトを複製
@@ -23728,7 +23800,6 @@ F358F85B084C7F3F=プロジェクトを保存
 1D660BB3BCFDAF0F=サブディレクトリに保存するよう選択しましたが、その場所には既に同名のファイルが存在します:\r\n\r\n\t%s\r\n\r\nこのファイルを上書きしますか？
 4E0241866EAFE7E7=ファイルを上書きしますか？
 C8A8D1DE39277BF0=パスが指定されていないため、メディアのコピー/移動を伴う保存はできません
-5B0AAD670346064A=録音中はメディアのコピー/移動付きで保存できません。
 5477580BCBC870E7=メディアのトリム／変換付きでプロジェクトを保存
 3C8171D7CC0EEFE6=メディアの移動付きでプロジェクトを保存
 2DBAD84B57A723EA=メディアの変換付きでプロジェクトを保存
@@ -24170,6 +24241,8 @@ AD5757515F0FC801=.ReaperEnvColorListを追加:
 805B2FD8CB3CF2C5=デフォルトテーマは上書きできません
 B9E1C3CAD601A812=開くテーマを選択:
 BEA0C3700DE0C10A=既定色を読み込み
+1FD2F202B3A9AEA3=<画像ファイル名>
+5F1A48697239A880=<色の説明>
 823C90884A4B7B4A=テーマでメイン背景/文字/編集の通常Windows色を上書き:
 B67D70D4A3780314=メインウィンドウ/トランスポート背景
 212A27F36D591C07=メインウィンドウ/トランスポート文字
@@ -24586,16 +24659,6 @@ E1E7CECE4F2F45CE=グループ #9
 0C1965908D4579B4=グループ #63
 0C1964908D457801=グループ #64
 5735A0D86E41D458=ダークモードではウィンドウテーマを使わない
-;^C93417DD40352E1B=Error saving
-;^F685FB3A91025549=Browse...
-;^9F1CC771ED41C58F=Media item take marker
-;^BE8A32189AE58F83=Edit cursor
-;^3896D8BF3E72ED2C=Regions
-;^ED0A4DAC9B52D14C=Region edge
-;^D35AD13842A55DEA=Markers
-;^A26238D0F1C0A72A=Tempo/time signature change marker
-1FD2F202B3A9AEA3=<画像ファイル名>
-5F1A48697239A880=<色の説明>
 D83A87EBC7956AD1=Windowsダークモードのカスタマイズ（テーマ外） - クリックでオプション
 6C9FCAB5581D6E4F=ReaScript/JSFX/Video IDE（テーマ外）-- クリックでオプション
 88E09AF87790C0D9=通常の前景色
@@ -24649,6 +24712,19 @@ A08A617EFAA5F2B1=ダークモードのシステムウィンドウ色
 64D01A677661C73C=ダークモードのツリー選択背景色
 3DF18C5FD55C8B2C=ダークモードの非フォーカス時ツリー選択背景色
 085F2F060120A1E2=ダークモードのリストグリッド線色
+;^C93417DD40352E1B=Error saving
+;^F685FB3A91025549=Browse...
+;^9F1CC771ED41C58F=Media item take marker
+;^BE8A32189AE58F83=Edit cursor
+;^3896D8BF3E72ED2C=Regions
+;^ED0A4DAC9B52D14C=Region edge
+;^D35AD13842A55DEA=Markers
+;^A26238D0F1C0A72A=Tempo/time signature change marker
+7BBE29E9FFEC218E=ウィンドウリストのハイライト文字色（ダークモード）
+51BC09D78746F22F=ウィンドウリストの選択中ハイライト文字色（ダークモード）
+1DC9DD8BB2202EC0=メディアエクスプローラーの再生中アイテムの文字色
+422F6F652D55E773=メディアエクスプローラーの再生中アイテムの文字色（ダークモード）
+6CB136ADCFF65FB1=ダークモードのフォーカス中コントロール色
 
 [themeblend]
 D64ABE7656056465=オーバーレイ
@@ -26160,6 +26236,14 @@ FE4AF742FB913EDC=テイクのミュートを変更 (VST3経由)
 ;^5440034E9A5FAF6B=Clear transient guides
 ;^FA775AC5C0D28AA4=Calculate transient guides
 ;^B3E3EB828D92742C=Set time selection
+4210112D67D52436=トラックの学習を削除
+7771C83AD66FC543=センドミュートエンベロープを追加
+9047A5624ADEA371=センドの学習を削除
+9A74877861DFB0D2=センドの学習を追加
+535ED82503802577=センドの学習を設定
+517BB4800C26111D=ミュートエンベロープを追加
+5CB2F5D8B2F0B753=トラックの学習を追加
+35C10922B6691D6C=トラックの学習を設定
 
 [undohist]
 CBCF7F7CDF60CF24=--- 初期ステータス ---
@@ -26356,6 +26440,7 @@ DA3AFBB0ED0A8F69=エンコードされたビデオ形式:
 ;^B568BA4FF2C021AD=I420/YV12
 ;^63ACD193C4316F68=Normal
 ;^4D0B7C1B0447364A=Video processor
+0123AA9668A80448=Advanced Audio Codingファイル
 
 [video2_DLG_102] ; IDD_MAIN
 0BCDBB9F888031BA=ビデオウィンドウ
