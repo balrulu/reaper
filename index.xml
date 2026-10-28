@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<index version="1" name="BLT ReaScripts" commit="6ddcfbcacaeddafd323e9b0e0de2fa13b9f13ae6">
+<index version="1" name="BLT ReaScripts" commit="16a73d8d137717d0334902d84a5cbb4cc2a97f35">
   <category name="BLT">
     <reapack name="BLT_SPATIAL_FIELD.jsfx" type="effect" desc="BLT SPATIAL FIELD">
       <version name="0.5.4" author="Balrulu" time="2026-10-05T05:08:58Z">
@@ -155,9 +155,10 @@
 }
 ]]></description>
       </metadata>
-      <version name="0.14.14" author="Balrulu" time="2026-10-22T20:12:24Z">
+      
+      <version name="0.14.15" author="Balrulu" time="2026-10-28T17:11:43Z">
         <changelog><![CDATA[BLT SERIES Beta TEST UPLOAD]]></changelog>
-        <source main="main" file="../BLT_DEDICATED_RENDER.lua">https://github.com/balrulu/reaper/raw/d8ea2b4c24effbf24c630d7d4a5dcd8462813f74/BLT_ReaScripts/BLT_DEDICATED_RENDER.lua</source>
+        <source main="main" file="../BLT_DEDICATED_RENDER.lua">https://github.com/balrulu/reaper/raw/16a73d8d137717d0334902d84a5cbb4cc2a97f35/BLT_ReaScripts/BLT_DEDICATED_RENDER.lua</source>
       </version>
     </reapack>
     <reapack name="BLT_ENVELOPE_CANVAS_ITEM.lua" type="script" desc="ENVELOPE CANVAS ITEM">
@@ -338,7 +339,6 @@
   </category>
   <category name="LangPacks">
     <reapack name="Japanese_add_SWS_kb_edit.ReaperLangPack" type="langpack" desc="日本語 [JP] - REAPER + SWS">
-      
       <version name="7.83.0" author="Balrulu" time="2026-10-28T01:34:58Z">
         <changelog><![CDATA[Japanese translation for REAPER v7.83 + SWS]]></changelog>
         <source>https://github.com/balrulu/reaper/raw/6ddcfbcacaeddafd323e9b0e0de2fa13b9f13ae6/LangPacks/Japanese_add_SWS_kb_edit.ReaperLangPack</source>
