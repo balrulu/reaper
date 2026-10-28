@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<index version="1" name="BLT ReaScripts" commit="0d5d47473fc3264a5d3084151f5d9fa65e3fd2c4">
+<index version="1" name="BLT ReaScripts" commit="6ddcfbcacaeddafd323e9b0e0de2fa13b9f13ae6">
   <category name="BLT">
     <reapack name="BLT_SPATIAL_FIELD.jsfx" type="effect" desc="BLT SPATIAL FIELD">
       <version name="0.5.4" author="Balrulu" time="2026-10-05T05:08:58Z">
@@ -170,7 +170,6 @@
 }
 ]]></description>
       </metadata>
-      
       <version name="0.7.9" author="Balrulu" time="2026-10-24T17:47:51Z">
         <changelog><![CDATA[BLT SERIES Beta TEST UPLOAD]]></changelog>
         <source main="main" file="../BLT_ENVELOPE_CANVAS_ITEM.lua">https://github.com/balrulu/reaper/raw/0d5d47473fc3264a5d3084151f5d9fa65e3fd2c4/BLT_ReaScripts/BLT_ENVELOPE_CANVAS_ITEM.lua</source>
@@ -186,7 +185,6 @@
 }
 ]]></description>
       </metadata>
-      
       <version name="0.7.3" author="Balrulu" time="2026-10-24T17:47:51Z">
         <changelog><![CDATA[BLT SERIES Beta TEST UPLOAD]]></changelog>
         <source main="main" file="../BLT_ENVELOPE_CANVAS_TRACK.lua">https://github.com/balrulu/reaper/raw/0d5d47473fc3264a5d3084151f5d9fa65e3fd2c4/BLT_ReaScripts/BLT_ENVELOPE_CANVAS_TRACK.lua</source>
@@ -340,9 +338,10 @@
   </category>
   <category name="LangPacks">
     <reapack name="Japanese_add_SWS_kb_edit.ReaperLangPack" type="langpack" desc="日本語 [JP] - REAPER + SWS">
-      <version name="7.82.1" author="Balrulu" time="2026-10-14T17:54:55Z">
-        <changelog><![CDATA[Japanese translation for REAPER v7.82 + SWS]]></changelog>
-        <source>https://github.com/balrulu/reaper/raw/b606b323b3be7286e979ee2ef5ae5018cc6af520/LangPacks/Japanese_add_SWS_kb_edit.ReaperLangPack</source>
+      
+      <version name="7.83.0" author="Balrulu" time="2026-10-28T01:34:58Z">
+        <changelog><![CDATA[Japanese translation for REAPER v7.83 + SWS]]></changelog>
+        <source>https://github.com/balrulu/reaper/raw/6ddcfbcacaeddafd323e9b0e0de2fa13b9f13ae6/LangPacks/Japanese_add_SWS_kb_edit.ReaperLangPack</source>
       </version>
     </reapack>
   </category>
