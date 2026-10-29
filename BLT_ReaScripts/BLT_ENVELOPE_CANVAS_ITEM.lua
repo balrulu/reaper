@@ -1768,9 +1768,12 @@ function M.new(host,ui,reference)
   cached={size=calibrated,height=height};group[size]=cached;self.metricCount=self.metricCount+1
   return cached
  end
- function T:close(cancel)
+ function T:close(cancel,reason)
   local e=self.edit;self.edit=nil
-  if e and not cancel then e.done(e.text) end
+  if e and not cancel then
+   e.done(e.text)
+   if self.onCommit then self.onCommit(e.id,e.text,reason or'blur')end
+  end
  end
  function T:open(id,text,done)
   if self.edit then self:close(false) end
@@ -1835,7 +1838,9 @@ function M.new(host,ui,reference)
   I.PushStyleColor(ctx,I.Col_Text,item.enabled and self.textColor or self.disabledColor)
   I.BeginDisabled(ctx,not item.enabled);I.SetNextItemWidth(ctx,width)
   if e.frames==0 then I.SetKeyboardFocusHere(ctx) end
-  local _,text=I.InputText(ctx,item.label,e.text,I.InputTextFlags_AutoSelectAll)
+  local flags=I.InputTextFlags_AutoSelectAll
+  if self.onCommit then flags=flags|I.InputTextFlags_EnterReturnsTrue end
+  local accepted,text=I.InputText(ctx,item.label,e.text,flags)
   e.text=text;local deactivated=I.IsItemDeactivated(ctx)
   local cancel=deactivated and I.IsKeyPressed(ctx,I.Key_Escape,false)
   local focusLost=not I.IsWindowFocused(ctx);local outside
@@ -1847,6 +1852,7 @@ function M.new(host,ui,reference)
   I.EndDisabled(ctx);I.PopStyleColor(ctx);I.PopStyleVar(ctx);I.PopFont(ctx)
   e.frames=e.frames+1
   if cancel then self:close(true)
+  elseif self.onCommit and accepted and e.frames>1 then self:close(false,'enter')
   elseif e.frames>1 and (deactivated or outside or focusLost) then self:close(false) end
  end
  function T:frame()
@@ -3245,7 +3251,7 @@ function png_put32(word) local(c a b d e high) (
  crc_value<0 ? crc_value+=4294967296;
 );
 maxima=0;crc_table=groups;crc1=crc_table+256;crc2=crc1+256;crc3=crc2+256;pixels=crc3+256;
-operation==0 ? (
+operation<0 ? memset(pixels,0,rows*columns) : operation==0 ? (
  row=0;loop(rows,
   maximum=maxima[floor(row/height)];
   value=floor(min(1,max(0,(10*log(max(str_getchar(#power,row*4,'f'),power_floor)/max(maximum,normal_floor))/log(10)+80)/80))*255+0.5);
@@ -3317,18 +3323,20 @@ local function start_processor(api,j,quantizing)
    for i=0,255 do local c=table[i];values[#values+1]=c>=0x80000000 and c-0x100000000 or c end
   end
   I.Function_SetValue_Array(fn,'crc_table',api.new_array(values));j.native_encoding=true;j.encode_batch=max(1,floor(8192/(j.columns+6)))
+  if j.coverage then I.Function_SetValue(fn,'operation',-1);I.Function_Execute(fn);I.Function_SetValue(fn,'operation',0) end
  end
 end
-function M.start(v,view,span,map,lookup,scale,host)
+function M.start(v,view,span,map,lookup,scale,host,reader,coverage)
  local duration=map and lookup(map,view+span,'u','t')-lookup(map,view,'u','t') or v.len*span
- local columns=max(M.MIN_COLUMNS,min(M.MAX_COLUMNS,ceil(duration*M.SR/M.HOP)))
+ local columns=coverage and coverage.columns or max(M.MIN_COLUMNS,min(M.MAX_COLUMNS,ceil(duration*M.SR/M.HOP)))
  local bands={};for _,choice in ipairs(M.scales) do for _,band in ipairs(bands_for(choice.id)) do bands[#bands+1]=band end end
- return {v=v,view=view,span=span,map=map,lookup=lookup,host=host,scale=M.scale_id(scale),bands=bands,index=0,channel=1,phase='read',kind='analysis',
+ return {v=v,view=view,span=span,map=map,lookup=lookup,host=host,reader=reader,coverage=coverage,scale=M.scale_id(scale),bands=bands,index=0,channel=1,phase='read',kind='analysis',
   columns=columns,channels=min(64,v.channels),data={columns=columns,view=view,span=span,frames={},pngs={},maxima={0,0,0,0,0}}}
 end
 function M.render(v,data,scale,host)
  assert(data.complete,'Spectrogram analysis is incomplete')
- return {v=v,view=data.view,span=data.span,columns=data.columns,host=host,scale=M.scale_id(scale),data=data,index=0,phase='paint',kind='render'}
+ return {v=v,view=data.view,span=data.span,columns=data.columns,host=host,scale=M.scale_id(scale),data=data,index=0,phase='paint',kind='render',
+  done=data.empty or nil,palette=data.empty and M.palette or nil}
 end
 function M.release(api,result)
  if result and result.bitmap then api.JS_LICE_DestroyBitmap(result.bitmap);result.bitmap=nil end
@@ -3338,6 +3346,7 @@ function M.cancel(api,j)
  if not j then return end
  if j.accessor then local aa=j.accessor;j.accessor=nil;api.DestroyAudioAccessor(aa) end
  stop_processor(j);M.release(api,j);j.buffer=nil;j.fft=nil;j.values=nil;j.time=nil;j.power=nil;j.bin_power=nil;j.bands=nil;j.blocks=nil;j.row_bytes=nil;j.native_encoding=nil;j.data=nil
+ j.read_cache=nil;j.stitch=nil;j.input_buffer=nil;j.coverage=nil
 end
 function M.create_accessor(api,v)
  local mute=api.GetMediaItemInfo_Value(v.item,'B_MUTE')
@@ -3349,7 +3358,58 @@ function M.create_accessor(api,v)
  if not ok then error(aa,0) end
  return aa
 end
+local function sparse_block(api,j,range,first,last)
+ local cache=j.read_cache
+ for i,entry in ipairs(cache) do
+  if entry.range==range and entry.first<=first and entry.first+entry.count>=last then
+   if i>1 then table.remove(cache,i);table.insert(cache,1,entry) end
+   return entry
+  end
+ end
+ local entry=#cache>=2 and table.remove(cache) or {buffer=#cache==0 and j.buffer or api.new_array(j.block*j.channels)}
+ entry.range=range;entry.first=first;entry.count=min(j.block,range.last-first);entry.buffer.clear()
+ local rc=api.GetAudioAccessorSamples(j.accessor,M.SR,j.channels,j.first+first/M.SR,entry.count,entry.buffer)
+ assert(type(rc)=='number' and rc>=0,'スペクトログラムの音声読み出しに失敗しました。')
+ j.read_serial=(j.read_serial or 0)+1;entry.version=j.read_serial
+ entry.values=not j.processor and entry.buffer.table(1,entry.count*j.channels) or nil
+ table.insert(cache,1,entry);return entry
+end
+local function read_sparse_column(api,j)
+ local centers,ranges=j.coverage.centers,j.coverage.ranges
+ if centers[j.index+1]==false then
+  repeat j.index=j.index+1;j.data.frames[j.index]=false until j.index==j.columns or centers[j.index+1]~=false
+  return false
+ end
+ local start=centers[j.index+1]-M.N//2;local finish=start+M.N
+ local lo,hi=1,#ranges
+ while lo<hi do local mid=(lo+hi)//2;if ranges[mid].last<=start then lo=mid+1 else hi=mid end end
+ local range=ranges[lo];local first,last=max(start,range.first),min(finish,range.last)
+ local buffer,version
+ if not ranges[lo+1] or ranges[lo+1].first>=finish then
+  local entry=sparse_block(api,j,range,first,last)
+  buffer,version=entry.buffer,entry.version;j.values=entry.values
+  j.offset,j.count,j.source_offset=first-start,last-first,first-entry.first
+ else
+  j.stitch=j.stitch or api.new_array(M.N*j.channels);j.stitch.clear()
+  repeat
+   range=ranges[lo];first,last=max(start,range.first),min(finish,range.last)
+   local entry=sparse_block(api,j,range,first,last)
+   j.stitch.copy(entry.buffer,(first-entry.first)*j.channels+1,(last-first)*j.channels,(first-start)*j.channels+1)
+   lo=lo+1
+  until not ranges[lo] or ranges[lo].first>=finish
+  buffer=j.stitch;j.read_serial=(j.read_serial or 0)+1;version=j.read_serial
+  j.values=not j.processor and buffer.table(1,M.N*j.channels) or nil
+  j.offset,j.count,j.source_offset=0,M.N,0
+ end
+ if j.processor then
+  local I=j.host.I
+  if j.input_buffer~=buffer or j.input_version~=version then I.Function_SetValue_Array(j.processor,'input',buffer);j.input_buffer,j.input_version=buffer,version end
+  I.Function_SetValue(j.processor,'offset',j.offset);I.Function_SetValue(j.processor,'count',j.count);I.Function_SetValue(j.processor,'source_offset',j.source_offset)
+ else j.power={};for row=1,total_rows do j.power[row]=0 end end
+ j.column_ready=true;return true
+end
 local function read_column(api,j)
+ if j.coverage then return read_sparse_column(api,j) end
  local u=j.view+(j.index+.5)/j.columns*j.span
  local t=j.map and j.lookup(j.map,u,'u','t') or u*j.v.len
  local start=floor(t*M.SR-M.N/2);local requested=max(0,start)
@@ -3368,6 +3428,7 @@ local function read_column(api,j)
   I.Function_SetValue(j.processor,'offset',offset);I.Function_SetValue(j.processor,'count',count)
   I.Function_SetValue(j.processor,'source_offset',j.source_offset)
  else j.power={};for row=1,total_rows do j.power[row]=0 end end
+ return true
 end
 local function channel_fft(j)
  if j.processor then
@@ -3405,7 +3466,14 @@ local function channel_fft(j)
   j.index=j.index+1;j.channel=1;j.data.frames[j.index]=frame;j.power=nil;j.column_ready=false
  end
 end
+local zero_column=string.rep('\0',total_rows)
 local function quantize_column(j)
+ if j.data.frames[j.index+1]==false then
+  repeat
+   j.index=j.index+1;j.data.frames[j.index]=not j.processor and zero_column or nil
+  until j.index==j.columns or j.data.frames[j.index+1]~=false
+  return
+ end
  if j.processor then
   local I=j.host.I;I.Function_SetValue_String(j.processor,'#power',j.data.frames[j.index+1])
   I.Function_SetValue(j.processor,'column_index',j.index);I.Function_Execute(j.processor)
@@ -3470,19 +3538,24 @@ function M.step(api,j,budget)
  if j.done then return true end
  local deadline=api.time_precise()+(budget or .003);local work=0
  if not j.accessor and j.phase=='read' then
-  j.accessor=assert(M.create_accessor(api,j.v),'スペクトログラム用の音声を取得できません。')
-  j.first=api.GetAudioAccessorStartTime(j.accessor);j.last=api.GetAudioAccessorEndTime(j.accessor)
+  if j.reader then j.accessor,j.first,j.last=j.reader(api,j.v,j.coverage)
+  else
+   j.accessor=M.create_accessor(api,j.v)
+   if j.accessor then j.first=api.GetAudioAccessorStartTime(j.accessor);j.last=api.GetAudioAccessorEndTime(j.accessor) end
+  end
+  assert(j.accessor,'スペクトログラム用の音声を取得できません。')
   assert(j.last>j.first,'スペクトログラム用の音声範囲が空です。')
   j.samples=floor((j.last-j.first)*M.SR+1e-7);j.block=max(M.N,floor(131072/j.channels))
   j.buffer=api.new_array(j.block*j.channels);j.fft=api.new_array(M.N);start_processor(api,j)
+  if j.coverage then j.read_cache={} end
   if not j.processor then j.time={};j.bin_power={} end
  end
  repeat
   if j.phase=='read' then
-   if not j.column_ready then read_column(api,j) end
-   channel_fft(j)
+   if j.column_ready or read_column(api,j) then channel_fft(j) end
    if j.index==j.columns then
     api.DestroyAudioAccessor(j.accessor);j.accessor=nil;j.buffer=nil;j.fft=nil;j.time=nil;j.values=nil
+    j.read_cache=nil;j.stitch=nil;j.input_buffer=nil
     j.phase='quantize';j.index=0
     if j.processor then
      local maxima=api.new_array(#M.scales);j.host.I.Function_GetValue_Array(j.processor,'maxima',maxima);j.data.maxima=maxima.table()
@@ -6111,7 +6184,6 @@ function UI.key(k)
  elseif k==25 or (ctrl and (k==121 or k==89)) then UI.undo_draw(true)
  elseif k==6579564 or k==127 then UI.delete_selected()
  elseif k==13 then UI.apply()
- elseif k==32 then if A.v and R.EnumProjects(-1,'')==A.v.project then R.Main_OnCommand(40044,0) end
  elseif k>=49 and k<=51 then UI.set_mode(({'select','free','line'})[k-48])
  end
 end
@@ -6263,7 +6335,7 @@ end
 
 
 
--- BEGIN BLT SHORTCUTS 1.0.2 (generated from _shared/BLT_Shortcuts.lua)
+-- BEGIN BLT SHORTCUTS 1.0.3 (generated from _shared/BLT_Shortcuts.lua)
 local BLTShortcuts=(function()
 local M={}
 local special={[8]=8,[9]=9,[13]=13,[27]=27,[32]=32,
@@ -6313,13 +6385,19 @@ function M.install(api,view,options)
  local state={rows={},reload_at=0,focus=nil}
  local function forward(k)
   local cap=view.mouse_cap or 0
-  if options.blocked() or options.localKey(k,cap) then return false end
+  if options.blocked() then return false end
+  local space=k==32 and (cap&60)==0
+  if space then
+   if (getchar(65537)&2)==0 then return true end
+   if view.spacePressed and not view.spacePressed() then return true end
+  end
+  if options.localKey(k,cap) then return false end
   local now=api.time_precise()
   if now>=state.reload_at then
    state.reload_at=now+2
    state.rows=M.read(api.GetResourcePath()..'/reaper-kb.ini')
   end
-  if #state.rows==0 then return false end
+  if #state.rows==0 and not space then return false end
   local vk,mods,char=M.decode(k,cap)
   local flags=((mods&4)~=0 and 8 or 0)|((mods&8)~=0 and 4 or 0)|(mods&48)
   local physical
@@ -6347,13 +6425,19 @@ function M.install(api,view,options)
     end
    end
   end
-  if not found then return false end
+  if not found then
+   if not space then return false end
+   if options.beforeGlobal then options.beforeGlobal(k) end
+   return pcall(api.Main_OnCommand,40044,0)
+  end
   if options.beforeGlobal then options.beforeGlobal(k) end
   if (found.flags&1)~=0 and type(api.CF_SendActionShortcut)=='function' then
    local ok,result=pcall(api.CF_SendActionShortcut,api.GetMainHwnd(),found.section*100,found.key,mods)
-   return ok and (result==true or result==1)
+   if ok and (result==true or result==1) then return true end
+   if not space then return false end
   end
   local command=tonumber(found.command) or api.NamedCommandLookup(found.command)
+  if space and (not command or command<=0) then command=40044 end
   if not command or command<=0 then return false end
   return pcall(api.Main_OnCommand,command,0)
  end
@@ -6810,7 +6894,7 @@ end
 BLTShortcuts.install(R,gfx,{
  blocked=function() return U.editor.edit~=nil or shell.popupOpen or A.spectrum_menu_open or A.drag~=nil or A.number_drag~=nil or A.busy end,
  beforeGlobal=UI.number_commit,
- localKey=function(k,cap) return k==27 or k==13 or k==32 or k==25 or k==26 or k==6579564 or k==127 or k>=49 and k<=51
+ localKey=function(k,cap) return k==27 or k==13 or k==25 or k==26 or k==6579564 or k==127 or k>=49 and k<=51
   or (cap&4)~=0 and (k==89 or k==121 or k==90 or k==122) end})
 local finalized=false
 function UI.close()

@@ -1108,6 +1108,7 @@ function M.install(api,native,CanvasHost,options,ShellText,ChromeRaster,CanvasDr
   mouse_x=-10000,mouse_y=-10000,mouse_cap=0,mouse_wheel=0,ext_retina=1}
  local H,I,ctx,frame,insideCallback,closed
  local keys={}
+ local spaceUsed=false
  local dockID,requestedDock,rectRequest=0,nil,nil
  local redraw=true
  local dockWait,dockSettle=0,0
@@ -1147,6 +1148,7 @@ function M.install(api,native,CanvasHost,options,ShellText,ChromeRaster,CanvasDr
  function G.setfont(...)ensure();return G.setfont(...)end
  function G.measurestr(...)ensure();return G.measurestr(...)end
  local function input()
+  spaceUsed=false
   if not H.focused then keys={};return end
   local ctrl,alt=(G.mouse_cap&4)~=0 or H.mac and(G.mouse_cap&32)~=0,(G.mouse_cap&16)~=0
   local idx=0
@@ -1217,6 +1219,11 @@ function M.install(api,native,CanvasHost,options,ShellText,ChromeRaster,CanvasDr
   if mask==65536 or mask==65537 then return 1|(H and H.focused and 2 or 0)|(H and H.shown and 4 or 0)|(mask==65536 and H and H.hovered and 8 or 0)end
   if closed or H and H.requestClose then return -1 end
   return table.remove(keys,1)or 0
+ end
+ function G.spacePressed()
+  if spaceUsed then return false end
+  spaceUsed=true
+  return H and H.focused and I.IsKeyPressed(ctx,I.Key_Space,false)
  end
  function G.setCursor(kind)
   if not frame then return end
@@ -7023,17 +7030,22 @@ function M.install(api,view,options)
  local state={rows={},reload_at=0,focus=nil}
  local function forward(k)
   local cap=view.mouse_cap or 0
-  if options.blocked() or options.localKey(k,cap) then return false end
+  if options.blocked() then return false end
+  local space=k==32 and (cap&60)==0
+  if space then
+   if (getchar(65537)&2)==0 then return true end
+   if view.spacePressed and not view.spacePressed() then return true end
+  end
+  if options.localKey(k,cap) then return false end
   local now=api.time_precise()
   if now>=state.reload_at then
    state.reload_at=now+2
    state.rows=M.read(api.GetResourcePath()..'/reaper-kb.ini')
   end
-  if #state.rows==0 then return false end
+  if #state.rows==0 and not space then return false end
   local vk,mods,char=M.decode(k,cap)
   local flags=((mods&4)~=0 and 8 or 0)|((mods&8)~=0 and 4 or 0)|(mods&48)
   local physical
-
   local ambiguous=vk and vk>=48 and vk<=57 or k==8 or k==9 or k==13
   local needs_physical=not vk or ambiguous
   if needs_physical and type(api.JS_VKeys_GetState)=='function' then
@@ -7057,13 +7069,19 @@ function M.install(api,view,options)
     end
    end
   end
-  if not found then return false end
+  if not found then
+   if not space then return false end
+   if options.beforeGlobal then options.beforeGlobal(k) end
+   return pcall(api.Main_OnCommand,40044,0)
+  end
   if options.beforeGlobal then options.beforeGlobal(k) end
   if (found.flags&1)~=0 and type(api.CF_SendActionShortcut)=='function' then
    local ok,result=pcall(api.CF_SendActionShortcut,api.GetMainHwnd(),found.section*100,found.key,mods)
-   return ok and (result==true or result==1)
+   if ok and (result==true or result==1) then return true end
+   if not space then return false end
   end
   local command=tonumber(found.command) or api.NamedCommandLookup(found.command)
+  if space and (not command or command<=0) then command=40044 end
   if not command or command<=0 then return false end
   return pcall(api.Main_OnCommand,command,0)
  end

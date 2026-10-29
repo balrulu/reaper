@@ -4895,8 +4895,7 @@ function UI.key(k)
  elseif k==25 or ctrl and (k==121 or k==89) then UI.undo_draw(true)
  elseif k==6579564 or k==127 then UI.delete_selected()
  elseif k>=49 and k<=51 then UI.set_mode(({'select','free','line'})[k-48])
- elseif k==13 then UI.apply()
- elseif k==32 and A.v then R.Main_OnCommandEx(40044,0,A.v.project) end
+ elseif k==13 then UI.apply() end
 end
 function UI.settings_schema()
  if UI.preference_schema then return UI.preference_schema end
@@ -6415,7 +6414,7 @@ function BLT.captureEnvelope() return {settings=BLT.preferences()} end
 BLT.envelopeDefaults=BLT.copy(BLT.captureEnvelope())
 
 
--- BEGIN BLT SHORTCUTS 1.0.2 (generated from _shared/BLT_Shortcuts.lua)
+-- BEGIN BLT SHORTCUTS 1.0.3 (generated from _shared/BLT_Shortcuts.lua)
 local BLTShortcuts=(function()
 local M={}
 local special={[8]=8,[9]=9,[13]=13,[27]=27,[32]=32,
@@ -6465,13 +6464,19 @@ function M.install(api,view,options)
  local state={rows={},reload_at=0,focus=nil}
  local function forward(k)
   local cap=view.mouse_cap or 0
-  if options.blocked() or options.localKey(k,cap) then return false end
+  if options.blocked() then return false end
+  local space=k==32 and (cap&60)==0
+  if space then
+   if (getchar(65537)&2)==0 then return true end
+   if view.spacePressed and not view.spacePressed() then return true end
+  end
+  if options.localKey(k,cap) then return false end
   local now=api.time_precise()
   if now>=state.reload_at then
    state.reload_at=now+2
    state.rows=M.read(api.GetResourcePath()..'/reaper-kb.ini')
   end
-  if #state.rows==0 then return false end
+  if #state.rows==0 and not space then return false end
   local vk,mods,char=M.decode(k,cap)
   local flags=((mods&4)~=0 and 8 or 0)|((mods&8)~=0 and 4 or 0)|(mods&48)
   local physical
@@ -6499,13 +6504,19 @@ function M.install(api,view,options)
     end
    end
   end
-  if not found then return false end
+  if not found then
+   if not space then return false end
+   if options.beforeGlobal then options.beforeGlobal(k) end
+   return pcall(api.Main_OnCommand,40044,0)
+  end
   if options.beforeGlobal then options.beforeGlobal(k) end
   if (found.flags&1)~=0 and type(api.CF_SendActionShortcut)=='function' then
    local ok,result=pcall(api.CF_SendActionShortcut,api.GetMainHwnd(),found.section*100,found.key,mods)
-   return ok and (result==true or result==1)
+   if ok and (result==true or result==1) then return true end
+   if not space then return false end
   end
   local command=tonumber(found.command) or api.NamedCommandLookup(found.command)
+  if space and (not command or command<=0) then command=40044 end
   if not command or command<=0 then return false end
   return pcall(api.Main_OnCommand,command,0)
  end
@@ -6912,7 +6923,7 @@ end
 BLTShortcuts.install(R,gfx,{
  blocked=function() return U.editor.edit~=nil or shell.popupOpen or A.drag~=nil or A.number_drag~=nil or A.busy or UI.context~=nil or A.spectrum_menu_open end,
  beforeGlobal=UI.number_commit,
- localKey=function(k,cap) return k==27 or k==13 or k==32 or k==25 or k==26 or k==6579564 or k==127 or k>=49 and k<=51
+ localKey=function(k,cap) return k==27 or k==13 or k==25 or k==26 or k==6579564 or k==127 or k>=49 and k<=51
   or (cap&4)~=0 and (k==89 or k==121 or k==90 or k==122) end})
 local finalized=false
 function UI.close()

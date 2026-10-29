@@ -4527,7 +4527,7 @@ local function work_step()
   end
 end
 
--- BEGIN BLT SHORTCUTS 1.0.2 (generated from _shared/BLT_Shortcuts.lua)
+-- BEGIN BLT SHORTCUTS 1.0.3 (generated from _shared/BLT_Shortcuts.lua)
 local BLTShortcuts=(function()
 local M={}
 local special={[8]=8,[9]=9,[13]=13,[27]=27,[32]=32,
@@ -4577,13 +4577,19 @@ function M.install(api,view,options)
  local state={rows={},reload_at=0,focus=nil}
  local function forward(k)
   local cap=view.mouse_cap or 0
-  if options.blocked() or options.localKey(k,cap) then return false end
+  if options.blocked() then return false end
+  local space=k==32 and (cap&60)==0
+  if space then
+   if (getchar(65537)&2)==0 then return true end
+   if view.spacePressed and not view.spacePressed() then return true end
+  end
+  if options.localKey(k,cap) then return false end
   local now=api.time_precise()
   if now>=state.reload_at then
    state.reload_at=now+2
    state.rows=M.read(api.GetResourcePath()..'/reaper-kb.ini')
   end
-  if #state.rows==0 then return false end
+  if #state.rows==0 and not space then return false end
   local vk,mods,char=M.decode(k,cap)
   local flags=((mods&4)~=0 and 8 or 0)|((mods&8)~=0 and 4 or 0)|(mods&48)
   local physical
@@ -4611,13 +4617,19 @@ function M.install(api,view,options)
     end
    end
   end
-  if not found then return false end
+  if not found then
+   if not space then return false end
+   if options.beforeGlobal then options.beforeGlobal(k) end
+   return pcall(api.Main_OnCommand,40044,0)
+  end
   if options.beforeGlobal then options.beforeGlobal(k) end
   if (found.flags&1)~=0 and type(api.CF_SendActionShortcut)=='function' then
    local ok,result=pcall(api.CF_SendActionShortcut,api.GetMainHwnd(),found.section*100,found.key,mods)
-   return ok and (result==true or result==1)
+   if ok and (result==true or result==1) then return true end
+   if not space then return false end
   end
   local command=tonumber(found.command) or api.NamedCommandLookup(found.command)
+  if space and (not command or command<=0) then command=40044 end
   if not command or command<=0 then return false end
   return pcall(api.Main_OnCommand,command,0)
  end
