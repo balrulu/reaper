@@ -1716,9 +1716,12 @@ function M.new(host,ui,reference)
   cached={size=calibrated,height=height};group[size]=cached;self.metricCount=self.metricCount+1
   return cached
  end
- function T:close(cancel)
+ function T:close(cancel,reason)
   local e=self.edit;self.edit=nil
-  if e and not cancel then e.done(e.text) end
+  if e and not cancel then
+   e.done(e.text)
+   if self.onCommit then self.onCommit(e.id,e.text,reason or'blur')end
+  end
  end
  function T:open(id,text,done)
   if self.edit then self:close(false) end
@@ -1756,13 +1759,72 @@ function M.new(host,ui,reference)
   if p.optical then y=floor((host.originY+p.by+p.center-p.padY+p.numberOffset)*dpi+.5)/dpi end
   I.DrawList_AddTextEx(host.draw,p.font,p.size,x,y+p.padY,item.enabled and self.textColor or self.disabledColor,item.value,0,x,y,x+p.w,y+p.h)
  end
+ local prefixKeys={'cursor','first','last'}
+ function T:caretFunction()
+  if not self.caret then
+   self.caret=I.CreateFunctionFromEEL([[
+    restore ? (CursorPos=caret;SelectionStart=caret;SelectionEnd=caret;restore=0;);
+    pointer ? (CursorPos=min(strlen(#Buf),hit);SelectionStart=min(strlen(#Buf),anchor);SelectionEnd=CursorPos;);
+    cursor=CursorPos;first=SelectionStart;last=SelectionEnd;strcpy(#value,#Buf);valid=1;
+   ]])
+   I.Attach(ctx,self.caret)
+  end
+  return self.caret
+ end
+ local function textHit(text,pixel)
+  local lo,hi=0,utf8.len(text) or #text
+  while lo<hi do
+   local mid=floor((lo+hi+1)/2);local at=(utf8.offset(text,mid+1) or #text+1)-1
+   if I.CalcTextSize(ctx,text:sub(1,at))<=pixel then lo=mid else hi=mid-1 end
+  end
+  local at=(utf8.offset(text,lo+1) or #text+1)-1
+  if at<#text then
+   local nextAt=(utf8.offset(text,lo+2) or #text+1)-1
+   local a,b=I.CalcTextSize(ctx,text:sub(1,at)),I.CalcTextSize(ctx,text:sub(1,nextAt))
+   if pixel>(a+b)/2 then at=nextAt end
+  end
+  return at
+ end
+ function T:aligned(e,item,x,y,width,height,font,size)
+  local text=e.text;local p=e.render or {};e.render=p
+  local cursor=min(#text,max(0,e.cursor or #text));local first=min(#text,max(0,e.first or cursor));local last=min(#text,max(0,e.last or cursor))
+  if p.text~=text or p.size~=size or p.font~=font then
+   p.text,p.size,p.font=text,size,font;p.width=I.CalcTextSize(ctx,text);p.cursor,p.first,p.last=nil,nil,nil
+  end
+  for _,key in ipairs(prefixKeys) do
+   local at=key=='cursor' and cursor or key=='first' and first or last
+   if p[key]~=at then p[key],p[key..'Width']=at,I.CalcTextSize(ctx,text:sub(1,at)) end
+  end
+  local available=max(1,width-2);local scroll=min(e.scroll or 0,max(0,p.width-available))
+  if p.width>available then
+   if p.cursorWidth<scroll then scroll=p.cursorWidth elseif p.cursorWidth>scroll+available then scroll=p.cursorWidth-available end
+  else scroll=0 end
+  e.scroll=scroll
+  local base=host.originX+item.bounds.x
+  local px=floor(base+max(0,width-p.width-2)-scroll);e.textX=px
+  local ink=item.enabled and self.textColor or self.disabledColor
+  I.DrawList_PushClipRect(host.draw,x,y,base+width,y+height,true)
+  if e.active and first~=last then
+   I.DrawList_AddRectFilled(host.draw,px+min(p.firstWidth,p.lastWidth),y,px+max(p.firstWidth,p.lastWidth),y+height,self.selectionColor)
+  end
+  if text~='' then I.DrawList_AddTextEx(host.draw,font,size,px,y,ink,text,0,x,y,base+width,y+height) end
+  local now=ui.now or 0
+  if e.blinkText~=text or e.blinkCursor~=cursor or e.blinkFirst~=first or e.blinkLast~=last or I.IsMouseClicked(ctx,0) then
+   e.blinkText,e.blinkCursor,e.blinkFirst,e.blinkLast,e.blinkAt=text,cursor,first,last,now
+  end
+  if e.active and (now-(e.blinkAt or now))%1.2<.8 then
+   local cx=px+p.cursorWidth;I.DrawList_AddLine(host.draw,cx,y,cx,y+height,ink,1)
+  end
+  I.DrawList_PopClipRect(host.draw)
+ end
  function T:draw(item)
   local e=self.edit and self.edit.id==item.id and self.edit or nil
   if not e then self:idle(item);return end
   local b=item.bounds
   local metrics=self:fontMetrics(b)
   local x,y=floor(host.originX+b.x),floor(host.originY+b.y)
-  I.PushFont(ctx,host:fontFor(b.face,b.bold),metrics and metrics.size or max(8,floor(b.size+.5)))
+  local font=host:fontFor(b.face,b.bold)
+  I.PushFont(ctx,font,metrics and metrics.size or max(8,floor(b.size+.5)))
   local width=b.w
   local height=I.GetTextLineHeight(ctx);local padY=0
   if metrics then
@@ -1773,13 +1835,42 @@ function M.new(host,ui,reference)
    local offset=host:numberOffset(I.GetFontSize(ctx))
    y=floor((host.originY+b.y+(b.h-height)/2-padY+offset)*dpi+.5)/dpi
   end
+  local aligned=b.align=='right';local callback;local padX=0
+  if aligned then
+   callback=self:caretFunction();I.Function_SetValue(callback,'valid',0);I.Function_SetValue(callback,'pointer',0)
+   local measured=e.render and e.render.text==e.text and e.render.size==I.GetFontSize(ctx) and e.render.width or I.CalcTextSize(ctx,e.text)
+   padX=max(0,width-measured-2)
+   local down=I.IsMouseDown(ctx,0)
+   if not down then e.dragAnchor,e.dragAll=nil,nil end
+   if e.active and down and ((e.scroll or 0)>0 or e.dragAnchor) then
+    local mx,my=I.GetMousePos(ctx)
+    local pressed=I.IsMouseClicked(ctx,0) and mx>=x and mx<x+width and my>=y and my<y+height+2*padY
+    local hit=textHit(e.text,mx-(e.textX or x))
+    if pressed then
+     e.dragAnchor=(I.GetKeyMods(ctx)&I.Mod_Shift)~=0 and (e.first~=e.last and e.first or e.cursor or 0) or hit
+     e.dragAll=I.IsMouseDoubleClicked(ctx,0)
+    end
+    if down and e.dragAnchor then
+     I.Function_SetValue(callback,'pointer',1);I.Function_SetValue(callback,'hit',e.dragAll and #e.text or hit);I.Function_SetValue(callback,'anchor',e.dragAll and 0 or e.dragAnchor)
+    end
+   end
+   I.PushStyleColor(ctx,I.Col_InputTextCursor,0);I.PushStyleColor(ctx,I.Col_TextSelectedBg,0)
+  end
   I.SetCursorScreenPos(ctx,x,y)
-  I.PushStyleVar(ctx,I.StyleVar_FramePadding,0,padY)
-  I.PushStyleColor(ctx,I.Col_Text,item.enabled and self.textColor or self.disabledColor)
+  I.PushStyleVar(ctx,I.StyleVar_FramePadding,padX,padY)
+  I.PushStyleColor(ctx,I.Col_Text,aligned and 0 or item.enabled and self.textColor or self.disabledColor)
   I.BeginDisabled(ctx,not item.enabled);I.SetNextItemWidth(ctx,width)
   if e.frames==0 then I.SetKeyboardFocusHere(ctx) end
-  local _,text=I.InputText(ctx,item.label,e.text,I.InputTextFlags_AutoSelectAll)
-  e.text=text;local deactivated=I.IsItemDeactivated(ctx)
+  local flags=I.InputTextFlags_AutoSelectAll
+  if self.onCommit then flags=flags|I.InputTextFlags_EnterReturnsTrue end
+  if aligned then flags=flags|I.InputTextFlags_CallbackAlways|I.InputTextFlags_NoHorizontalScroll end
+  local accepted,text=I.InputText(ctx,item.label,e.text,flags,callback)
+  e.text=text;e.active=I.IsItemActive(ctx)
+  if callback and I.Function_GetValue(callback,'valid')~=0 then
+   e.text=I.Function_GetValue_String(callback,'#value')
+   e.cursor,e.first,e.last=I.Function_GetValue(callback,'cursor'),I.Function_GetValue(callback,'first'),I.Function_GetValue(callback,'last')
+  end
+  local deactivated=I.IsItemDeactivated(ctx)
   local cancel=deactivated and I.IsKeyPressed(ctx,I.Key_Escape,false)
   local focusLost=not I.IsWindowFocused(ctx);local outside
   if I.IsMouseClicked(ctx,0) or I.IsMouseClicked(ctx,1) then
@@ -1787,9 +1878,11 @@ function M.new(host,ui,reference)
    local left,top=host.originX+hit.x,host.originY+hit.y
    outside=mx<left or mx>=left+hit.w or my<top or my>=top+hit.h
   end
-  I.EndDisabled(ctx);I.PopStyleColor(ctx);I.PopStyleVar(ctx);I.PopFont(ctx)
+  if aligned then self:aligned(e,item,x,y+padY,width,height,font,I.GetFontSize(ctx)) end
+  I.EndDisabled(ctx);I.PopStyleColor(ctx,aligned and 3 or 1);I.PopStyleVar(ctx);I.PopFont(ctx)
   e.frames=e.frames+1
   if cancel then self:close(true)
+  elseif self.onCommit and accepted and e.frames>1 then self:close(false,'enter')
   elseif e.frames>1 and (deactivated or outside or focusLost) then self:close(false) end
  end
  function T:frame()
@@ -1806,10 +1899,11 @@ function M.new(host,ui,reference)
    for i=#list,1,-1 do list[i]=nil end
    return
   end
+  self.selectionColor=color(C.accent,.65)
   I.PushStyleVar(ctx,I.StyleVar_FrameRounding,0);I.PushStyleVar(ctx,I.StyleVar_FrameBorderSize,0)
   I.PushStyleVar(ctx,I.StyleVar_DisabledAlpha,1)
   I.PushStyleColor(ctx,I.Col_FrameBg,0);I.PushStyleColor(ctx,I.Col_FrameBgHovered,0);I.PushStyleColor(ctx,I.Col_FrameBgActive,0)
-  I.PushStyleColor(ctx,I.Col_TextSelectedBg,color(C.accent,.65));I.PushStyleColor(ctx,I.Col_NavCursor,0)
+  I.PushStyleColor(ctx,I.Col_TextSelectedBg,self.selectionColor);I.PushStyleColor(ctx,I.Col_NavCursor,0)
   for _,item in ipairs(list) do self:draw(item) end
   I.PopStyleColor(ctx,5);I.PopStyleVar(ctx,3)
   for i=#list,1,-1 do list[i]=nil end
@@ -4240,15 +4334,16 @@ local caret=I.CreateFunctionFromEEL([[
 I.Attach(ctx,caret)
 local inputAPI=setmetatable({}, {__index=I})
 local inputHost=setmetatable({I=inputAPI}, {__index=Host})
-inputAPI.InputText=function(context,id,value,flags)
+inputAPI.InputText=function(context,id,value,flags,callback)
  local e=U.editor.edit;local state=cursorStates[e.id] or {};cursorStates[e.id]=state
+ local fn=callback or caret
  if state.restore then
-  I.Function_SetValue(caret,'caret',state.restore);I.Function_SetValue(caret,'restore',1);state.restore=nil
+  I.Function_SetValue(fn,'caret',state.restore);I.Function_SetValue(fn,'restore',1);state.restore=nil
   flags=flags&~I.InputTextFlags_AutoSelectAll
- else I.Function_SetValue(caret,'restore',0) end
- local changed,text=I.InputText(context,id,value,flags|I.InputTextFlags_CallbackAlways,caret)
+ else I.Function_SetValue(fn,'restore',0) end
+ local changed,text=I.InputText(context,id,value,flags|I.InputTextFlags_CallbackAlways,fn)
  if I.IsItemActive(context) then
-  state.cursor,state.first,state.last=I.Function_GetValue(caret,'cursor'),I.Function_GetValue(caret,'first'),I.Function_GetValue(caret,'last')
+  state.cursor,state.first,state.last=I.Function_GetValue(fn,'cursor'),I.Function_GetValue(fn,'first'),I.Function_GetValue(fn,'last')
  end
  return changed,text
 end
