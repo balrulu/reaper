@@ -1,5 +1,5 @@
 -- @description MARKER REGION DESK
--- @version 0.6.10
+-- @version 0.6.11
 -- @author Balrulu
 -- @provides
 --   . > ../
@@ -10,12 +10,19 @@
 
 local reaper=reaper
 do
--- BEGIN BLT NATIVE DIALOGS 1.1.0 (generated from _shared/BLT_NativeDialogs.lua)
+-- BEGIN BLT NATIVE DIALOGS 1.2.0 (generated from _shared/BLT_NativeDialogs.lua)
 local BLTNativeDialogs=(function()
  local M={}
  function M.install(api,view)
   local P=setmetatable({}, {__index=api})
   local title,depth=nil,0
+  local active,pending,scheduled,rounds,exitHandler=nil,nil,false,0,nil
+  local host=api
+  for _=1,8 do
+   local mt=getmetatable(host)
+   if type(mt)~='table' or type(mt.__index)~='table' then break end
+   host=mt.__index
+  end
   local windowsOS=api.GetOS and (api.GetOS() or ''):match('Win')~=nil
   if view and view.init then
    local init=view.init
@@ -81,13 +88,37 @@ local BLTNativeDialogs=(function()
     end
    end
   end
+  local function has_flag(hwnd,name,mask,on)
+   local ok,value=pcall(api.JS_Window_GetLong,hwnd,name)
+   return ok and type(value)=='number' and value==value and math.abs(value)<math.huge
+    and ((math.floor(value)&mask)~=0)==on
+  end
   local function restore(session)
+   local failed={}
    for i=#session.windows,1,-1 do
     local entry=session.windows[i]
     local checked,exists=pcall(valid,entry.hwnd)
     if not checked or exists then
-     if entry.enabled then pcall(api.JS_Window_Enable,entry.hwnd,true) end
-     if entry.topmost then pcall(api.JS_Window_SetZOrder,entry.hwnd,'TOPMOST') end
+     local enabled,topmost=not entry.enabled,not entry.topmost
+     for _=1,3 do
+      if not enabled then
+       enabled=has_flag(entry.hwnd,'STYLE',0x08000000,false)
+       if not enabled then
+        pcall(api.JS_Window_Enable,entry.hwnd,true)
+        enabled=has_flag(entry.hwnd,'STYLE',0x08000000,false)
+       end
+      end
+      if not topmost then
+       topmost=has_flag(entry.hwnd,'EXSTYLE',8,true)
+       if not topmost then
+        pcall(api.JS_Window_SetZOrder,entry.hwnd,'TOPMOST')
+        topmost=has_flag(entry.hwnd,'EXSTYLE',8,true)
+       end
+      end
+      if enabled and topmost then break end
+     end
+     entry.inputRestored=enabled
+     if not enabled or not topmost then failed[#failed+1]=entry end
     end
    end
    -- Do not take focus back if the user switched to another application.
@@ -95,25 +126,76 @@ local BLTNativeDialogs=(function()
     local current=api.JS_Window_GetForeground and api.JS_Window_GetForeground()
     if session.foreground and valid(session.foreground) and (current==session.main or owned(current,session.main)) then
      for _,entry in ipairs(session.windows) do
-      if entry.enabled and (session.foreground==entry.hwnd or owned(session.foreground,entry.hwnd)) then
+      if entry.enabled and entry.inputRestored and (session.foreground==entry.hwnd or owned(session.foreground,entry.hwnd)) then
        if api.JS_Window_SetForeground then api.JS_Window_SetForeground(entry.hwnd) end
        break
       end
      end
     end
    end)
+   return failed
+  end
+  local function warn()
+   if host.ShowConsoleMsg then
+    pcall(host.ShowConsoleMsg,'BLT: ウィンドウの操作状態／最前面状態を復元できませんでした。操作できないBLTはアクションリストから終了・再実行してください。\nBLT window recovery failed after retries. Stop and restart the affected BLT action.\n')
+   end
+  end
+  local function retry()
+   scheduled=false
+   if not pending then return end
+   if depth>0 then
+    if host.defer then scheduled=true;host.defer(retry) end
+    return
+   end
+   pending.windows=restore(pending)
+   if #pending.windows==0 then pending=nil;return end
+   rounds=rounds+1
+   if rounds<8 and host.defer then scheduled=true;host.defer(retry) else warn() end
+  end
+  local function recover(session,failed)
+   if #failed==0 then return end
+   if not pending then pending={windows={},main=session.main,foreground=session.foreground};rounds=0 end
+   for _,entry in ipairs(failed) do
+    local duplicate=false
+    for _,old in ipairs(pending.windows) do
+     if old.hwnd==entry.hwnd then
+      old.enabled,old.topmost=old.enabled or entry.enabled,old.topmost or entry.topmost;duplicate=true;break
+     end
+    end
+    if not duplicate then pending.windows[#pending.windows+1]=entry end
+   end
+   if not scheduled then
+    if host.defer then scheduled=true;host.defer(retry) else retry() end
+   end
+  end
+  if type(api.atexit)=='function' then
+   local function finish()
+    if active then local session=active;active=nil;local failed=restore(session);if #failed>0 then warn() end end
+    if pending then pending.windows=restore(pending);if #pending.windows>0 then warn() end end
+    if exitHandler then exitHandler() end
+   end
+   P.atexit=function(fn) exitHandler=fn;return api.atexit(finish) end
+   api.atexit(finish)
   end
   local function call(fn,...)
    if depth>0 then return fn(...) end
-   local args=table.pack(...);local session={windows={}};depth=depth+1
+   local args=table.pack(...);local session={windows={}};depth=depth+1;active=session
    local result=table.pack(xpcall(function() suspend(session);return fn(table.unpack(args,1,args.n)) end,debug.traceback))
-   depth=depth-1;restore(session)
+   local failed=restore(session);active=nil;depth=depth-1;recover(session,failed)
    if not result[1] then error(result[2],0) end
    return table.unpack(result,2,result.n)
   end
-  for _,name in ipairs({'GetUserInputs','MB','ShowMessageBox','GetUserFileNameForRead','JS_Dialog_BrowseForSaveFile','JS_Dialog_BrowseForOpenFiles','JS_Dialog_BrowseForFolder','GR_SelectColor'}) do
+  for _,name in ipairs({'GetUserInputs','MB','ShowMessageBox','GetUserFileName','GetUserFileNameForRead','JS_Dialog_BrowseForSaveFile','JS_Dialog_BrowseForOpenFiles','JS_Dialog_BrowseForFolder','GR_SelectColor','Main_OnCommand','Main_OnCommandEx','CF_SendActionShortcut','MIDIEditor_LastFocused_OnCommand'}) do
    local fn=api[name]
    if type(fn)=='function' then P[name]=function(...) return call(fn,...) end end
+  end
+  if type(api.GetSetProjectInfo_String)=='function' then
+   local fn=api.GetSetProjectInfo_String
+   P.GetSetProjectInfo_String=function(project,key,value,...)
+    local stats=key=='RENDER_STATS' or key=='RENDER_STATS_SUMMARY'
+    if stats and value and value~='' and tonumber(value)~=0 then return call(fn,project,key,value,...) end
+    return fn(project,key,value,...)
+   end
   end
   -- Native actions may also display modal progress or error windows.
   P.BLT_WithNativeDialog=call
@@ -662,7 +744,7 @@ function M.new(g,clock,palette)
    local requested=max(self.minFontSize or 8,floor((opt.size or 15)*self.scale+.5))
    bounds.size=requested
    if opt.autoSize~=false then
-    local text=self.editor and self.editor.edit and self.editor.edit.id==id and self.editor.edit.text or (opt.format and opt.format(value) or tostring(value))
+    local text=opt.format and opt.format(value) or tostring(value)
     local minimum=max(self.minFontSize or 8,(opt.minSize or 13)*self.scale)
     local fit=s.valueFit or {};s.valueFit=fit
     if fit.text~=text or fit.width~=bounds.w or fit.requested~=requested or fit.minimum~=minimum or
@@ -1439,11 +1521,6 @@ function M.new(host,ui,reference)
   local x,y=floor(host.originX+b.x),floor(host.originY+b.y)
   I.PushFont(ctx,host:fontFor(b.face,b.bold),metrics and metrics.size or max(8,floor(b.size+.5)))
   local width=b.w
-  if b.align=='right' then
-   local measured=I.CalcTextSize(ctx,e.text)
-   local offset=max(0,width-measured-2)
-   x=floor(host.originX+b.x+offset);width=width-offset
-  end
   local height=I.GetTextLineHeight(ctx);local padY=0
   if metrics then
    y=floor(host.originY+b.y+max(0,(b.h-metrics.height)/2)+max(0,(metrics.height-height)/2))
@@ -2981,7 +3058,17 @@ local LanguageCatalog={en={
  ["個別の非表示は解除しました。レーンやREAPERの表示設定も確認してください。"]="Individual visibility restored. Also check lane and REAPER display settings.",
  ["Undoを実行できませんでした。"]="Cannot perform Undo.",
  ["選択が変わりました。対象を確認して貼り付け直してください。"]="Selection changed. Check targets and paste again.",
- ["コピー|一覧情報をコピー|名前を貼り付け"]="Copy|Copy list details|Paste names",
+ ["名前をコピー"]="Copy names",
+ ["一覧情報をコピー"]="Copy list details",
+ ["名前を貼り付け"]="Paste names",
+ ["色を設定…"]="Set color...",
+ ["カスタムカラー"]="Custom colors",
+ ["カスタムカラー %d"]="Custom color %d",
+ ["カスタムカラーの取得にはSWS Extensionが必要です。"]="Custom colors require SWS Extension.",
+ ["カスタムカラーを取得できませんでした。"]="Could not read the custom color.",
+ ["色の値が不正です。"]="Invalid color value.",
+ ["色の設定結果を確認できません。"]="Cannot verify the color change.",
+ ["変更に失敗したため、元の色に戻しました。"]="Change failed. Original colors restored.",
  ["コピーしました"]="Copied",
  ["カスタムタイトルバーには js_ReaScriptAPI が必要です。\nReaPack から js_ReaScriptAPI をインストールしてください。"]="The app bar requires js_ReaScriptAPI.\nInstall js_ReaScriptAPI via ReaPack.",
  ["〈空欄〉"]="<empty>",
@@ -3473,6 +3560,19 @@ function Core.set_name(project,v,name)
   local read,current=R.GetSetRegionOrMarkerInfo_String(project,ptr,"P_NAME","",false)
   return ok and read and current==name
 end
+function Core.set_color(project,v,color)
+  local ptr=Core.resolve(project,v.guid)
+  R.SetRegionOrMarkerInfo_Value(project,ptr,"I_CUSTOMCOLOR",color)
+  return R.GetRegionOrMarkerInfo_Value(project,ptr,"I_CUSTOMCOLOR")==color
+end
+function Core.color_rows(items,native)
+  if not finite(native) or native%1~=0 or native<0 or native>0xFFFFFF then error("色の値が不正です。",0) end
+  local rows={};local color=native|0x1000000
+  for _,v in ipairs(items) do if v.selected then
+    rows[#rows+1]={info=v,before=v.color,after=color,change=v.color~=color}
+  end end
+  return rows
+end
 function Core.set_flag(project,guid,key,on)
   local ptr=Core.resolve(project,guid)
   R.SetRegionOrMarkerInfo_Value(project,ptr,key,on and 1 or 0)
@@ -3605,19 +3705,27 @@ function Core.preflight(project,items)
   for i,v in ipairs(items) do
     if not Core.same(v,current[i]) then return nil,"マーカー／リージョンが変更されました。対応関係を確認してください。" end
   end
-  return true
+  return true,nil,current
 end
-function Core.apply(project,items,rows)
-  local ok,err=Core.preflight(project,items); if not ok then return nil,err end
+function Core.apply(project,items,rows,field)
+  local color=field=="color"
+  local ok,err,current=Core.preflight(project,items); if not ok then return nil,err end
+  if color then for i,v in ipairs(items) do
+    if v.selected~=current[i].selected then return nil,"対象が変更されました。選択を確認してください。" end
+  end end
   local changes={}; for _,row in ipairs(rows) do if row.change then changes[#changes+1]=row end end
   if #changes==0 then return nil,"変更予定がありません。" end
   local touched={}
+  local setter=color and Core.set_color or Core.set_name
   R.Undo_BeginBlock2(project); R.PreventUIRefresh(1)
   local success,detail=xpcall(function()
     for _,row in ipairs(changes) do
       touched[#touched+1]=row
-      local set=Core.set_name(project,row.info,row.after)
-      if not set then error(string.format("名前の設定結果を確認できません（%s ID %.0f）。",row.info.isrgn and "リージョン" or "マーカー",row.info.id),0) end
+      local set=setter(project,row.info,row.after)
+      if not set then
+        if color then error("色の設定結果を確認できません。",0) end
+        error(string.format("名前の設定結果を確認できません（%s ID %.0f）。",row.info.isrgn and "リージョン" or "マーカー",row.info.id),0)
+      end
     end
   end,debug.traceback)
   local restored=true
@@ -3625,16 +3733,17 @@ function Core.apply(project,items,rows)
     for i=#touched,1,-1 do
       local row=touched[i]
       local call,result=pcall(function()
-        return Core.set_name(project,row.info,row.before)
+        return setter(project,row.info,row.before)
       end)
       if not call or not result then restored=false end
     end
   end
   R.PreventUIRefresh(-1); R.UpdateArrange()
-  R.Undo_EndBlock2(project,success and APP_NAME..": marker and region names" or APP_NAME..": restored after failure",8)
+  if color then R.UpdateTimeline() end
+  R.Undo_EndBlock2(project,success and APP_NAME..(color and ": marker and region colors" or ": marker and region names") or APP_NAME..": restored after failure",8)
   if not success then
     R.ShowConsoleMsg(APP_NAME..":\n"..BLT.publicError(detail).."\n")
-    return nil,restored and "変更に失敗したため、元の名前に戻しました。" or "復元に失敗した項目があります。REAPERのUndoで戻してください。"
+    return nil,restored and (color and "変更に失敗したため、元の色に戻しました。" or "変更に失敗したため、元の名前に戻しました。") or "復元に失敗した項目があります。REAPERのUndoで戻してください。"
   end
   return #changes
 end
@@ -4114,6 +4223,7 @@ local W,H,scale,ox,oy,mx,my=BASE_W,BASE_H,1,0,4,-1,-1
 local density=BLT.Controls.compactScale
 local T={x=24,y=180,w=492,h=704,row=32,header=32,bar=14}
 local renameTarget,contextGUID,contextOpen,scrollDrag,rowPress,rightPress
+local contextColors,pendingColor
 local function visible() return floor((T.h-T.header)/T.row) end
 local function max_offset() return max(0,#A.rows-visible()) end
 local function inside(x,y,w,h) return mx>=x and mx<x+w and my>=y and my<y+h end
@@ -4235,26 +4345,93 @@ local function toggle(id,text,x,y,w,on,action)
  local value,clicked=U:toggle(id,Language.text(text),on,x/density,y/density,w/density,30/density,true,switchOptions)
  if clicked and value~=on then commit();guarded(action);wake() end
 end
+local function applyColor(request,native)
+ local rows=Core.color_rows(request.items,native)
+ local changed=false;for _,row in ipairs(rows) do if row.change then changed=true;break end end
+ if changed then
+  local n,err=Core.apply(request.project,request.items,rows,'color')
+  if not n then report_error(err) end
+ end
+ local offset=A.offset;sync_selection();A.offset=clamp(offset,0,max_offset());wake()
+end
+local function contextRequest(capture)
+ commit();sync_selection()
+ local target
+ for _,v in ipairs(A.items) do if v.guid==contextGUID then target=v;break end end
+ if not target then return end
+ if not target.selected then select_row(target.guid,0,true) end
+ local items=A.items
+ if capture then
+  items={}
+  for i,v in ipairs(A.items) do
+   local copy={};for key,value in pairs(v) do copy[key]=value end;items[i]=copy
+  end
+ end
+ return {project=A.project,items=items}
+end
+local function chooseColor()
+ local request=pendingColor;pendingColor=nil
+ if not request then return end
+ local ok,err=Core.preflight(request.project,request.items)
+ if not ok then report_error(err);return end
+ local parent=Host.nativeWindow
+ if not parent or parent==0 then parent=R.GetMainHwnd() end
+ local accepted,native=R.GR_SelectColor(parent)
+ if accepted==true or type(accepted)=='number' and accepted~=0 then applyColor(request,native) end
+ displayDirty=true;wake()
+end
+local function customColors()
+ if contextColors then return contextColors end
+ contextColors={}
+ for i=1,16 do
+  local ok,native=pcall(R.CF_GetCustomColor,i-1)
+  if ok and finite(native) and native%1==0 and native>=0 and native<=0xFFFFFF then
+   local r,g,b=R.ColorFromNative(native)
+   contextColors[i]={native=native,rgba=Host.rgba(r/255,g/255,b/255,1)}
+  else contextColors[i]=false end
+ end
+ return contextColors
+end
 local function drawContext()
  I.PushStyleColor(ctx,I.Col_PopupBg,Host.rgba(C.panel[1],C.panel[2],C.panel[3],1))
  I.PushStyleColor(ctx,I.Col_Text,Host.rgba(C.text[1],C.text[2],C.text[3],1))
  local shown=I.BeginPopup(ctx,'BLT_MARKER_ROW_CONTEXT')
  contextOpen=shown
- if not shown then I.PopStyleColor(ctx,2);contextGUID=nil;return end
+ if not shown then I.PopStyleColor(ctx,2);contextGUID=nil;contextColors=nil;return end
+ local action,native
  I.PushFont(ctx,Host.font,13)
- for i,text in ipairs({'コピー','一覧情報をコピー','名前を貼り付け'}) do
+ for i,text in ipairs({'名前をコピー','一覧情報をコピー','名前を貼り付け'}) do
   if I.Selectable(ctx,Language.text(text),false,0,180,25) then
-   guarded(function()
-    sync_selection()
-    local target
-    for _,v in ipairs(A.items) do if v.guid==contextGUID then target=v;break end end
-    if not target then return end
-    if not target.selected then select_row(target.guid,0,true) end
-    if i==1 then copy_information(true,true) elseif i==2 then copy_information(false,true) else paste_selected() end
-   end);wake()
+   action=i
   end
  end
+ I.Separator(ctx)
+ if I.Selectable(ctx,Language.text('色を設定…'),false,0,180,25) then action='choose' end
+ local paletteAvailable=type(R.CF_GetCustomColor)=='function'
+ if I.BeginMenu(ctx,Language.text('カスタムカラー'),paletteAvailable) then
+  local colors=customColors()
+  for i=1,16 do
+   local color=colors[i];local x,y=I.GetCursorScreenPos(ctx)
+   I.BeginDisabled(ctx,not color)
+   if I.Selectable(ctx,'     '..string.format(Language.text('カスタムカラー %d'),i),false,0,180,25) then action,native='color',color.native end
+   if color then I.DrawList_AddRectFilled(I.GetWindowDrawList(ctx),x+4,y+5,x+18,y+19,color.rgba) end
+   I.EndDisabled(ctx)
+   if not color and I.IsItemHovered(ctx,I.HoveredFlags_AllowWhenDisabled) then I.SetTooltip(ctx,Language.text('カスタムカラーを取得できませんでした。')) end
+  end
+  I.EndMenu(ctx)
+ end
+ if not paletteAvailable and I.IsItemHovered(ctx,I.HoveredFlags_AllowWhenDisabled) then I.SetTooltip(ctx,Language.text('カスタムカラーの取得にはSWS Extensionが必要です。')) end
  I.PopFont(ctx);I.EndPopup(ctx);I.PopStyleColor(ctx,2)
+ if action then
+  guarded(function()
+   local request=contextRequest(action=='choose');if not request then return end
+   if action==1 then copy_information(true,true)
+   elseif action==2 then copy_information(false,true)
+   elseif action==3 then paste_selected()
+   elseif action=='choose' then pendingColor=request
+   else applyColor(request,native) end
+  end);wake()
+ end
 end
 local function releaseRename()
  local p=A.pending_rename;if not p then return end
@@ -4433,7 +4610,7 @@ local function draw()
  local message=A.blt_status or (#A.items==0 and 'マーカー／リージョンがありません。' or string.format('%d件  選択 %d件',#A.items,A.selected_count or 0))
  local bad=A.blt_bad
  if BLT.notice then message,bad=BLT.notice,BLT.noticeBad end
- shell:footer(message,bad,W,H+22,'0.6.5')
+ shell:footer(message,bad,W,H+22,'0.6.11')
  shell:drawBar();drawContext()
  U.scale,U.ox,U.oy=density*scale,ox,oy
 end
@@ -4448,7 +4625,7 @@ g.getchar=function(query)
  return key,0
 end
 BLTShortcuts.install(R,g,{
- blocked=function() return U.editor.edit~=nil or shell.popupOpen or contextOpen or A.closing end,
+ blocked=function() return U.editor.edit~=nil or shell.popupOpen or contextOpen or pendingColor~=nil or A.closing end,
  localKey=function(key,cap)
   return key==27 or key==9 or key==1 or key==3 or key==22 or key==13 or key==6579564 or
    key==1752132965 or key==6647396 or key==1885828464 or key==1885824110 or key==30064 or key==1685026670 or
@@ -4484,6 +4661,7 @@ local function run()
  if finalized then return end
  local begun=false
  local success,err=xpcall(function()
+  if pendingColor then guarded(chooseColor) end
   local now=R.time_precise();poll(now);shell.theme.tick(now)
   if changed(worldState,A.rows,A.offset,A.generation,A.selected_count,A.blt_status,Language.code,C.bg,
    Presets.current,BLT.noticeUntil,Host.requestReset,shell.icon.dirty) then displayDirty=true end

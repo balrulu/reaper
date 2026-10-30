@@ -10,12 +10,19 @@
 
 local reaper=reaper
 do
--- BEGIN BLT NATIVE DIALOGS 1.1.0 (generated from _shared/BLT_NativeDialogs.lua)
+-- BEGIN BLT NATIVE DIALOGS 1.2.0 (generated from _shared/BLT_NativeDialogs.lua)
 local BLTNativeDialogs=(function()
  local M={}
  function M.install(api,view)
   local P=setmetatable({}, {__index=api})
   local title,depth=nil,0
+  local active,pending,scheduled,rounds,exitHandler=nil,nil,false,0,nil
+  local host=api
+  for _=1,8 do
+   local mt=getmetatable(host)
+   if type(mt)~='table' or type(mt.__index)~='table' then break end
+   host=mt.__index
+  end
   local windowsOS=api.GetOS and (api.GetOS() or ''):match('Win')~=nil
   if view and view.init then
    local init=view.init
@@ -81,13 +88,37 @@ local BLTNativeDialogs=(function()
     end
    end
   end
+  local function has_flag(hwnd,name,mask,on)
+   local ok,value=pcall(api.JS_Window_GetLong,hwnd,name)
+   return ok and type(value)=='number' and value==value and math.abs(value)<math.huge
+    and ((math.floor(value)&mask)~=0)==on
+  end
   local function restore(session)
+   local failed={}
    for i=#session.windows,1,-1 do
     local entry=session.windows[i]
     local checked,exists=pcall(valid,entry.hwnd)
     if not checked or exists then
-     if entry.enabled then pcall(api.JS_Window_Enable,entry.hwnd,true) end
-     if entry.topmost then pcall(api.JS_Window_SetZOrder,entry.hwnd,'TOPMOST') end
+     local enabled,topmost=not entry.enabled,not entry.topmost
+     for _=1,3 do
+      if not enabled then
+       enabled=has_flag(entry.hwnd,'STYLE',0x08000000,false)
+       if not enabled then
+        pcall(api.JS_Window_Enable,entry.hwnd,true)
+        enabled=has_flag(entry.hwnd,'STYLE',0x08000000,false)
+       end
+      end
+      if not topmost then
+       topmost=has_flag(entry.hwnd,'EXSTYLE',8,true)
+       if not topmost then
+        pcall(api.JS_Window_SetZOrder,entry.hwnd,'TOPMOST')
+        topmost=has_flag(entry.hwnd,'EXSTYLE',8,true)
+       end
+      end
+      if enabled and topmost then break end
+     end
+     entry.inputRestored=enabled
+     if not enabled or not topmost then failed[#failed+1]=entry end
     end
    end
    -- Do not take focus back if the user switched to another application.
@@ -95,25 +126,76 @@ local BLTNativeDialogs=(function()
     local current=api.JS_Window_GetForeground and api.JS_Window_GetForeground()
     if session.foreground and valid(session.foreground) and (current==session.main or owned(current,session.main)) then
      for _,entry in ipairs(session.windows) do
-      if entry.enabled and (session.foreground==entry.hwnd or owned(session.foreground,entry.hwnd)) then
+      if entry.enabled and entry.inputRestored and (session.foreground==entry.hwnd or owned(session.foreground,entry.hwnd)) then
        if api.JS_Window_SetForeground then api.JS_Window_SetForeground(entry.hwnd) end
        break
       end
      end
     end
    end)
+   return failed
+  end
+  local function warn()
+   if host.ShowConsoleMsg then
+    pcall(host.ShowConsoleMsg,'BLT: ウィンドウの操作状態／最前面状態を復元できませんでした。操作できないBLTはアクションリストから終了・再実行してください。\nBLT window recovery failed after retries. Stop and restart the affected BLT action.\n')
+   end
+  end
+  local function retry()
+   scheduled=false
+   if not pending then return end
+   if depth>0 then
+    if host.defer then scheduled=true;host.defer(retry) end
+    return
+   end
+   pending.windows=restore(pending)
+   if #pending.windows==0 then pending=nil;return end
+   rounds=rounds+1
+   if rounds<8 and host.defer then scheduled=true;host.defer(retry) else warn() end
+  end
+  local function recover(session,failed)
+   if #failed==0 then return end
+   if not pending then pending={windows={},main=session.main,foreground=session.foreground};rounds=0 end
+   for _,entry in ipairs(failed) do
+    local duplicate=false
+    for _,old in ipairs(pending.windows) do
+     if old.hwnd==entry.hwnd then
+      old.enabled,old.topmost=old.enabled or entry.enabled,old.topmost or entry.topmost;duplicate=true;break
+     end
+    end
+    if not duplicate then pending.windows[#pending.windows+1]=entry end
+   end
+   if not scheduled then
+    if host.defer then scheduled=true;host.defer(retry) else retry() end
+   end
+  end
+  if type(api.atexit)=='function' then
+   local function finish()
+    if active then local session=active;active=nil;local failed=restore(session);if #failed>0 then warn() end end
+    if pending then pending.windows=restore(pending);if #pending.windows>0 then warn() end end
+    if exitHandler then exitHandler() end
+   end
+   P.atexit=function(fn) exitHandler=fn;return api.atexit(finish) end
+   api.atexit(finish)
   end
   local function call(fn,...)
    if depth>0 then return fn(...) end
-   local args=table.pack(...);local session={windows={}};depth=depth+1
+   local args=table.pack(...);local session={windows={}};depth=depth+1;active=session
    local result=table.pack(xpcall(function() suspend(session);return fn(table.unpack(args,1,args.n)) end,debug.traceback))
-   depth=depth-1;restore(session)
+   local failed=restore(session);active=nil;depth=depth-1;recover(session,failed)
    if not result[1] then error(result[2],0) end
    return table.unpack(result,2,result.n)
   end
-  for _,name in ipairs({'GetUserInputs','MB','ShowMessageBox','GetUserFileNameForRead','JS_Dialog_BrowseForSaveFile','JS_Dialog_BrowseForOpenFiles','JS_Dialog_BrowseForFolder','GR_SelectColor'}) do
+  for _,name in ipairs({'GetUserInputs','MB','ShowMessageBox','GetUserFileName','GetUserFileNameForRead','JS_Dialog_BrowseForSaveFile','JS_Dialog_BrowseForOpenFiles','JS_Dialog_BrowseForFolder','GR_SelectColor','Main_OnCommand','Main_OnCommandEx','CF_SendActionShortcut','MIDIEditor_LastFocused_OnCommand'}) do
    local fn=api[name]
    if type(fn)=='function' then P[name]=function(...) return call(fn,...) end end
+  end
+  if type(api.GetSetProjectInfo_String)=='function' then
+   local fn=api.GetSetProjectInfo_String
+   P.GetSetProjectInfo_String=function(project,key,value,...)
+    local stats=key=='RENDER_STATS' or key=='RENDER_STATS_SUMMARY'
+    if stats and value and value~='' and tonumber(value)~=0 then return call(fn,project,key,value,...) end
+    return fn(project,key,value,...)
+   end
   end
   -- Native actions may also display modal progress or error windows.
   P.BLT_WithNativeDialog=call
@@ -1571,11 +1653,6 @@ function M.new(host,ui,reference)
   local x,y=floor(host.originX+b.x),floor(host.originY+b.y)
   I.PushFont(ctx,host:fontFor(b.face,b.bold),metrics and metrics.size or max(8,floor(b.size+.5)))
   local width=b.w
-  if b.align=='right' then
-   local measured=I.CalcTextSize(ctx,e.text)
-   local offset=max(0,width-measured-2)
-   x=floor(host.originX+b.x+offset);width=width-offset
-  end
   local height=I.GetTextLineHeight(ctx);local padY=0
   if metrics then
    y=floor(host.originY+b.y+max(0,(b.h-metrics.height)/2)+max(0,(metrics.height-height)/2))

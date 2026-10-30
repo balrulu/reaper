@@ -1,5 +1,5 @@
 -- @description INTERVAL
--- @version 0.6.23
+-- @version 0.6.25
 -- @author Balrulu
 -- @provides
 --   . > ../
@@ -360,8 +360,8 @@ function M.new(g,clock,palette)
   if self.editor then self.editor:frame() end
   if self.released then self.capture=nil end
  end
- function U:interaction(id,x,y,w,h,enabled)
-  enabled=enabled~=false and not self.blocked and not (self.editor and self.editor.edit);local s=self:state(id);local hot=enabled and self:inside(x,y,w,h)
+ function U:interaction(id,x,y,w,h,enabled,allowWhileEditing)
+  enabled=enabled~=false and not self.blocked and (allowWhileEditing or not (self.editor and self.editor.edit));local s=self:state(id);local hot=enabled and self:inside(x,y,w,h)
   if enabled then self.order[#self.order+1]=id end
   if hot and self.pressed then self.capture=id;self.focus=id;self.hit=true end
   local held=enabled and self.capture==id and self.down
@@ -837,7 +837,7 @@ function M.new(g,clock,palette)
  end
  function U:execute(id,label,x,y,w,h,opt)
   opt=opt or empty;local busy=opt.busy;local enabled=opt.enabled~=false
-  local click,hot,held,s=self:interaction(id,x,y,w,h,enabled and (not busy or opt.cancelable==true))
+  local click,hot,held,s=self:interaction(id,x,y,w,h,enabled and (not busy or opt.cancelable==true),opt.allowWhileEditing)
   held=held or opt.preview=='pressed'
   local frame=s.frame or {};s.frame=frame
   frame.disabled,frame.hot,frame.pressed,frame.focus,frame.lightX=not enabled,busy and .85 or enabled and max(.12,s.hover) or s.hover,held,self.focus==id and enabled,s.lightX
@@ -987,7 +987,7 @@ function M.new(g,clock,palette)
    local requested=max(self.minFontSize or 8,floor((opt.size or 15)*self.scale+.5))
    bounds.size=requested
    if opt.autoSize~=false then
-    local text=self.editor and self.editor.edit and self.editor.edit.id==id and self.editor.edit.text or (opt.format and opt.format(value) or tostring(value))
+    local text=opt.format and opt.format(value) or tostring(value)
     local minimum=max(self.minFontSize or 8,(opt.minSize or 13)*self.scale)
     local fit=s.valueFit or {};s.valueFit=fit
     if fit.text~=text or fit.width~=bounds.w or fit.requested~=requested or fit.minimum~=minimum or
@@ -1772,11 +1772,6 @@ function M.new(host,ui,reference)
   local x,y=floor(host.originX+b.x),floor(host.originY+b.y)
   I.PushFont(ctx,host:fontFor(b.face,b.bold),metrics and metrics.size or max(8,floor(b.size+.5)))
   local width=b.w
-  if b.align=='right' then
-   local measured=I.CalcTextSize(ctx,e.text=='' and '0' or e.text)
-   local offset=max(0,width-measured-2)
-   x=floor(host.originX+b.x+offset);width=width-offset
-  end
   local height=I.GetTextLineHeight(ctx);local padY=0
   if metrics then
    y=floor(host.originY+b.y+max(0,(b.h-metrics.height)/2)+max(0,(metrics.height-height)/2))
@@ -2849,7 +2844,7 @@ local function public_error(value,fallback)
   return text
 end
 local App={
-  version="0.6.23",section="BLT_INTERVAL",windowTitle="BLT Interval",
+  version="0.6.25",section="BLT_INTERVAL",windowTitle="BLT Interval",
   chromeTitle="I N T E R V A L",title="INTERVAL",
   subtitle="ITEM SPACING  アイテム間隔を整列",
 }
@@ -4035,7 +4030,7 @@ local scopeOptions={led='top',ledScale=Layout.controls.scope_all[4]/(44*density)
 local unitOptions={led='top',ledScale=Layout.controls.unit_sec[4]/(44*density),size=11/density,bold=true}
 local switchOptions={background=false,showState=false,switchScale=Layout.controls.close_after[4]/(44*density),size=10/density,bold=true}
 local rulerOptions={background=false,showState=false,switchScale=Layout.controls.include_ruler[4]/(44*density),size=11.5/density,bold=true}
-local execution={finishWhenDisabled=true,captionY=2/density,captionHeight=10/density,captionSize=7/density,
+local execution={finishWhenDisabled=true,allowWhileEditing=true,captionY=2/density,captionHeight=10/density,captionSize=7/density,
  labelY=12/density,labelHeight=20/density,size=12/density,bold=true}
 local summary={glow=false,panel=true}
 local function label(text,x,y,w,h,size,color,bold,align,face,opticalCenter)
@@ -4184,10 +4179,9 @@ local function draw()
  end
  execution.enabled=plan~=nil
  x,y,w,h=rect('apply')
- if U:execute('apply',Language.text('整列を実行'),x,y,w,h,execution) then process() end
- if executeKey then process() end
+ local executeClick=U:execute('apply',Language.text('整列を実行'),x,y,w,h,execution)
  U:finish()
- if editing and key==13 and not U.editor.edit and not shell.popupOpen then process() end
+ if executeClick or executeKey or editing and key==13 and not U.editor.edit and not shell.popupOpen then process() end
  U.scale,U.ox,U.oy=viewScale,vx,vy
  local statusVisible=R.time_precise()<status_until
  local message=statusVisible and status or (not plan and reason or '')

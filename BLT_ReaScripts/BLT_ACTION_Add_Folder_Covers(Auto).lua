@@ -1,5 +1,5 @@
 -- @description ACTION - Add Folder Covers (Auto)
--- @version 1.0.3
+-- @version 1.0.6
 -- @author Balrulu
 -- @provides
 --   . > ../
@@ -9,6 +9,205 @@
 --   BLT SERIES Beta TEST UPLOAD
 
 -- BEGIN BLT TOGGLE RESTORE EMBEDDED 1.1.0
+local reaper=reaper
+do
+-- BEGIN BLT NATIVE DIALOGS 1.2.0 (generated from _shared/BLT_NativeDialogs.lua)
+local BLTNativeDialogs=(function()
+ local M={}
+ function M.install(api,view)
+  local P=setmetatable({}, {__index=api})
+  local title,depth=nil,0
+  local active,pending,scheduled,rounds,exitHandler=nil,nil,false,0,nil
+  local host=api
+  for _=1,8 do
+   local mt=getmetatable(host)
+   if type(mt)~='table' or type(mt.__index)~='table' then break end
+   host=mt.__index
+  end
+  local windowsOS=api.GetOS and (api.GetOS() or ''):match('Win')~=nil
+  if view and view.init then
+   local init=view.init
+   view.init=function(name,...)
+    title=name;return init(name,...)
+   end
+  end
+  local function valid(hwnd)
+   if not hwnd or hwnd==0 then return false end
+   local value=api.JS_Window_IsWindow(hwnd);return value==true or value==1
+  end
+  local function owned(hwnd,main)
+   if not main then return false end
+   local seen={}
+   for _=1,32 do
+    if hwnd==main then return true end
+    if not hwnd or seen[hwnd] then return false end;seen[hwnd]=true
+    local parent=api.JS_Window_GetParent and api.JS_Window_GetParent(hwnd)
+    if parent==0 or parent==hwnd then parent=nil end
+    hwnd=parent or (api.JS_Window_GetRelated and api.JS_Window_GetRelated(hwnd,'OWNER'))
+   end
+   return false
+  end
+  local function suspend(session)
+   if not api.JS_Window_Find or not api.JS_Window_IsWindow then return end
+   local own=title and api.JS_Window_Find(title,true)
+   local main=api.GetMainHwnd and api.GetMainHwnd()
+   local candidates,seen={},{}
+   local function add(hwnd)
+    if hwnd~=main and valid(hwnd) and not seen[hwnd] then candidates[#candidates+1]=hwnd;seen[hwnd]=true end
+   end
+   add(own)
+   if api.JS_Window_ListAllTop and api.JS_Window_HandleFromAddress and api.JS_Window_GetTitle then
+    local _,list=api.JS_Window_ListAllTop()
+    for address in (list or ''):gmatch('[^,]+') do
+     local n=tonumber(address) or tonumber(address,16)
+     local hwnd=n and api.JS_Window_HandleFromAddress(n)
+     if valid(hwnd) then
+      local caption=api.JS_Window_GetTitle(hwnd) or ''
+      if (caption:match('^BLT[%s_:]') or caption=='LOUDNESS TRACE') and owned(hwnd,main) then add(hwnd) end
+     end
+    end
+   end
+   if #candidates==0 then return end
+   assert(api.JS_Window_Enable and api.JS_Window_GetLong,'Native dialogs require JS_Window_Enable and JS_Window_GetLong (js_ReaScriptAPI).')
+   session.foreground=api.JS_Window_GetForeground and api.JS_Window_GetForeground()
+   session.main=main
+   for _,hwnd in ipairs(candidates) do
+    local style=api.JS_Window_GetLong(hwnd,'STYLE')
+    assert(type(style)=='number','Cannot read BLT window input state.')
+    local topmost=windowsOS and (math.floor(api.JS_Window_GetLong(hwnd,'EXSTYLE'))&8)~=0
+    local enabled=(math.floor(style)&0x08000000)==0
+    if enabled or topmost then
+     local entry={hwnd=hwnd,enabled=enabled,topmost=topmost};session.windows[#session.windows+1]=entry
+     if topmost then
+      assert(api.JS_Window_SetZOrder,'Native dialogs require JS_Window_SetZOrder (js_ReaScriptAPI).')
+      assert(api.JS_Window_SetZOrder(hwnd,'NOTOPMOST'),'Cannot suspend BLT always-on-top state.')
+     end
+     if enabled then
+      api.JS_Window_Enable(hwnd,false)
+      assert((math.floor(api.JS_Window_GetLong(hwnd,'STYLE'))&0x08000000)~=0,'Cannot suspend BLT window input.')
+     end
+    end
+   end
+  end
+  local function has_flag(hwnd,name,mask,on)
+   local ok,value=pcall(api.JS_Window_GetLong,hwnd,name)
+   return ok and type(value)=='number' and value==value and math.abs(value)<math.huge
+    and ((math.floor(value)&mask)~=0)==on
+  end
+  local function restore(session)
+   local failed={}
+   for i=#session.windows,1,-1 do
+    local entry=session.windows[i]
+    local checked,exists=pcall(valid,entry.hwnd)
+    if not checked or exists then
+     local enabled,topmost=not entry.enabled,not entry.topmost
+     for _=1,3 do
+      if not enabled then
+       enabled=has_flag(entry.hwnd,'STYLE',0x08000000,false)
+       if not enabled then
+        pcall(api.JS_Window_Enable,entry.hwnd,true)
+        enabled=has_flag(entry.hwnd,'STYLE',0x08000000,false)
+       end
+      end
+      if not topmost then
+       topmost=has_flag(entry.hwnd,'EXSTYLE',8,true)
+       if not topmost then
+        pcall(api.JS_Window_SetZOrder,entry.hwnd,'TOPMOST')
+        topmost=has_flag(entry.hwnd,'EXSTYLE',8,true)
+       end
+      end
+      if enabled and topmost then break end
+     end
+     entry.inputRestored=enabled
+     if not enabled or not topmost then failed[#failed+1]=entry end
+    end
+   end
+   -- Do not take focus back if the user switched to another application.
+   pcall(function()
+    local current=api.JS_Window_GetForeground and api.JS_Window_GetForeground()
+    if session.foreground and valid(session.foreground) and (current==session.main or owned(current,session.main)) then
+     for _,entry in ipairs(session.windows) do
+      if entry.enabled and entry.inputRestored and (session.foreground==entry.hwnd or owned(session.foreground,entry.hwnd)) then
+       if api.JS_Window_SetForeground then api.JS_Window_SetForeground(entry.hwnd) end
+       break
+      end
+     end
+    end
+   end)
+   return failed
+  end
+  local function warn()
+   if host.ShowConsoleMsg then
+    pcall(host.ShowConsoleMsg,'BLT: ウィンドウの操作状態／最前面状態を復元できませんでした。操作できないBLTはアクションリストから終了・再実行してください。\nBLT window recovery failed after retries. Stop and restart the affected BLT action.\n')
+   end
+  end
+  local function retry()
+   scheduled=false
+   if not pending then return end
+   if depth>0 then
+    if host.defer then scheduled=true;host.defer(retry) end
+    return
+   end
+   pending.windows=restore(pending)
+   if #pending.windows==0 then pending=nil;return end
+   rounds=rounds+1
+   if rounds<8 and host.defer then scheduled=true;host.defer(retry) else warn() end
+  end
+  local function recover(session,failed)
+   if #failed==0 then return end
+   if not pending then pending={windows={},main=session.main,foreground=session.foreground};rounds=0 end
+   for _,entry in ipairs(failed) do
+    local duplicate=false
+    for _,old in ipairs(pending.windows) do
+     if old.hwnd==entry.hwnd then
+      old.enabled,old.topmost=old.enabled or entry.enabled,old.topmost or entry.topmost;duplicate=true;break
+     end
+    end
+    if not duplicate then pending.windows[#pending.windows+1]=entry end
+   end
+   if not scheduled then
+    if host.defer then scheduled=true;host.defer(retry) else retry() end
+   end
+  end
+  if type(api.atexit)=='function' then
+   local function finish()
+    if active then local session=active;active=nil;local failed=restore(session);if #failed>0 then warn() end end
+    if pending then pending.windows=restore(pending);if #pending.windows>0 then warn() end end
+    if exitHandler then exitHandler() end
+   end
+   P.atexit=function(fn) exitHandler=fn;return api.atexit(finish) end
+   api.atexit(finish)
+  end
+  local function call(fn,...)
+   if depth>0 then return fn(...) end
+   local args=table.pack(...);local session={windows={}};depth=depth+1;active=session
+   local result=table.pack(xpcall(function() suspend(session);return fn(table.unpack(args,1,args.n)) end,debug.traceback))
+   local failed=restore(session);active=nil;depth=depth-1;recover(session,failed)
+   if not result[1] then error(result[2],0) end
+   return table.unpack(result,2,result.n)
+  end
+  for _,name in ipairs({'GetUserInputs','MB','ShowMessageBox','GetUserFileName','GetUserFileNameForRead','JS_Dialog_BrowseForSaveFile','JS_Dialog_BrowseForOpenFiles','JS_Dialog_BrowseForFolder','GR_SelectColor','Main_OnCommand','Main_OnCommandEx','CF_SendActionShortcut','MIDIEditor_LastFocused_OnCommand'}) do
+   local fn=api[name]
+   if type(fn)=='function' then P[name]=function(...) return call(fn,...) end end
+  end
+  if type(api.GetSetProjectInfo_String)=='function' then
+   local fn=api.GetSetProjectInfo_String
+   P.GetSetProjectInfo_String=function(project,key,value,...)
+    local stats=key=='RENDER_STATS' or key=='RENDER_STATS_SUMMARY'
+    if stats and value and value~='' and tonumber(value)~=0 then return call(fn,project,key,value,...) end
+    return fn(project,key,value,...)
+   end
+  end
+  -- Native actions may also display modal progress or error windows.
+  P.BLT_WithNativeDialog=call
+  return P
+ end
+ return M
+end)()
+-- END BLT NATIVE DIALOGS
+reaper=BLTNativeDialogs.install(reaper,gfx)
+end
+
 do
 local BLTToggleRestoreSource = [====[
 -- BLT toggle persistence 1.1.0. Embedded in each supported action.
@@ -282,6 +481,8 @@ local display_names = {}
 local cover_states = {}
 local deleted_sets = {}
 local stopped = false
+local arrange_pending = false
+local function request_arrange() arrange_pending = true end
 local next_audit, audit_item, audit_track, was_editing = 0, 1, 1, false
 
 -- Native item drag action IDs. Only movement assignments are constrained;
@@ -353,7 +554,7 @@ end
 
 constrain_input = function(p, flags, revision)
   if input_project and input_project ~= p then restore_input() end
-  if input_guard and (flags & 4) ~= 0 then return end
+  if (flags & 5) ~= 0 then return end
   local x, y = R.GetMousePosition()
   local now = R.time_precise()
   local window = R.JS_Window_FromPoint and R.JS_Window_FromPoint(x, y)
@@ -416,15 +617,16 @@ end
 
 -- Repair vertical motion before matching or deletion can see the wrong track.
 -- This keeps the same item/takes/GUIDs instead of recreating a blank cover.
-local function restore_known_tracks(p)
+local function restore_known_tracks(p, drivers)
   local changed = false
-  for item, state in pairs(cover_states) do
+  for item, state in pairs(drivers or cover_states) do
+    if drivers then state = state.state;item = state.item end
     if R.ValidatePtr2(p, item, 'MediaItem*') and R.GetMediaItemTrack(item) ~= state.track
         and R.ValidatePtr2(p, state.track, 'MediaTrack*') and is_blank(item) and string_info(item, TAG) == TAG_VALUE then
       return_to_track(p, item, state.track);changed = true
     end
   end
-  if changed then R.UpdateArrange() end
+  if changed then request_arrange() end
 end
 
 -- A single track/item traversal supplies every ancestor, with no synthetic-item feedback.
@@ -435,7 +637,7 @@ local function snapshot(p)
   for ti = 0, R.CountTracks(p) - 1 do
     local track = assert(R.GetTrack(p, ti), 'Track disappeared.')
     local depth = R.GetMediaTrackInfo_Value(track, 'I_FOLDERDEPTH')
-    local row = {track = track, key = R.GetTrackGUID(track), depth = depth, ranges = {}, ranges_by_guid = {}, owned = {}, item_count = R.CountTrackMediaItems(track)}
+    local row = {track = track, key = R.GetTrackGUID(track), index = ti, depth = depth, related = #parents > 0, ranges = {}, ranges_by_guid = {}, owned = {}, item_count = R.CountTrackMediaItems(track)}
     tracks[#tracks + 1] = row
     tracks.by_track[track] = row
     by_guid[row.key] = row
@@ -494,7 +696,7 @@ local function snapshot(p)
     end
     row.owned = retained
   end
-  if returned then R.UpdateArrange();return snapshot(p) end
+  if returned then request_arrange();return snapshot(p) end
   for _, row in ipairs(tracks) do
     if #row.owned > 1 then table.sort(row.owned, by_position) end
   end
@@ -502,46 +704,72 @@ local function snapshot(p)
   return tracks
 end
 
--- During a mouse edit, reuse the known hierarchy and source identities. Only
--- geometry is read; structural changes fall back to a fresh traversal.
+-- Mouse edits only need geometry from cover tracks and their original children.
+-- Keep unchanged rows and groups intact; a structural change uses a full scan.
 local function refresh_rows(p, cached)
   if R.CountTracks(p) ~= #cached then return nil end
-  local rows, ranges = {by_track = {}}, {}
-  for _, prior in ipairs(cached) do
-    if not R.ValidatePtr2(p, prior.track, 'MediaTrack*')
-        or R.CountTrackMediaItems(prior.track) ~= prior.item_count
-        or R.GetMediaTrackInfo_Value(prior.track, 'I_FOLDERDEPTH') ~= prior.depth then return nil end
-    local row = {track = prior.track, key = prior.key, depth = prior.depth,
+  for _, row in ipairs(cached.watch_tracks) do
+    if R.GetTrack(p, row.index) ~= row.track
+        or R.CountTrackMediaItems(row.track) ~= row.item_count
+        or R.GetMediaTrackInfo_Value(row.track, 'I_FOLDERDEPTH') ~= row.depth then return nil end
+  end
+  local changed, dirty, indexed = {}, {}, {}
+  for _, entry in ipairs(cached.watch_items) do
+    local item = entry.item
+    local slots = indexed[entry.track]
+    if not slots and R.GetTrackMediaItem(entry.track, entry.slot) ~= item then
+      slots = {};indexed[entry.track] = slots
+      for i = 0, cached.by_track[entry.track].item_count - 1 do
+        local current = R.GetTrackMediaItem(entry.track, i)
+        if not current then return nil end
+        slots[current] = i
+      end
+    end
+    if slots then
+      entry.slot = slots[item]
+      if entry.slot == nil then return nil end
+    end
+    local s = R.GetMediaItemInfo_Value(item, 'D_POSITION')
+    local e = s + R.GetMediaItemInfo_Value(item, 'D_LENGTH')
+    if math.abs(s - entry.s) > EPS or math.abs(e - entry.e) > EPS then
+      changed[item] = {s = s, e = e}
+      for _, track in ipairs(entry.parents) do dirty[track] = true end
+    end
+  end
+  if not next(changed) then return false end
+  local rows, ranges = cached, {}
+  rows.dirty, rows.geometry, rows.dirty_rows = dirty, changed, {}
+  for track in pairs(dirty) do
+    local prior = cached.by_track[track]
+    local row = {track = prior.track, key = prior.key, index = prior.index, depth = prior.depth, related = prior.related,
       item_count = prior.item_count, ranges = {}, ranges_by_guid = {}, owned = {}}
-    rows[#rows + 1] = row
-    rows.by_track[row.track] = row
     for _, old in ipairs(prior.owned) do
-      if not R.ValidatePtr2(p, old.item, 'MediaItem*') or R.GetMediaItemTrack(old.item) ~= row.track then return nil end
-      if not is_blank(old.item) or string_info(old.item, TAG) ~= TAG_VALUE then return nil end
-      local copy = {};for k, v in pairs(old) do copy[k] = v end
-      copy.s = R.GetMediaItemInfo_Value(old.item, 'D_POSITION')
-      copy.e = copy.s + R.GetMediaItemInfo_Value(old.item, 'D_LENGTH')
-      copy.locked = (math.floor(R.GetMediaItemInfo_Value(old.item, 'C_LOCK')) & 1) ~= 0
+      local copy, value = old, changed[old.item]
+      if value then
+        copy = {};for k, v in pairs(old) do copy[k] = v end
+        copy.s, copy.e = value.s, value.e
+      end
       row.owned[#row.owned + 1] = copy
     end
-    for _, prior_range in ipairs(prior.ranges) do
-      local range = ranges[prior_range.item]
+    for _, previous in ipairs(prior.ranges) do
+      local range = ranges[previous.item]
       if not range then
-        if not R.ValidatePtr2(p, prior_range.item, 'MediaItem*')
-            or R.GetMediaItemTrack(prior_range.item) ~= prior_range.track then return nil end
-        range = {};for k, v in pairs(prior_range) do range[k] = v end
-        range.s = R.GetMediaItemInfo_Value(range.item, 'D_POSITION')
-        range.e = range.s + R.GetMediaItemInfo_Value(range.item, 'D_LENGTH')
-        ranges[range.item] = range
+        range = previous;local value = changed[previous.item]
+        if value then
+          range = {};for k, v in pairs(previous) do range[k] = v end
+          range.s, range.e = value.s, value.e
+        end
+        ranges[previous.item] = range
       end
       if finite(range.s) and finite(range.e) and range.e > range.s then
         row.ranges[#row.ranges + 1] = range;row.ranges_by_guid[range.guid] = range
       end
     end
     if #row.owned > 1 then table.sort(row.owned, by_position) end
+    rows[prior.index + 1] = row;rows.by_track[track] = row
+    rows.dirty_rows[#rows.dirty_rows + 1] = row
   end
-  rows.all_items = cached.all_items
-  rows.audit_items, rows.audit_by_item = cached.audit_items, cached.audit_by_item
+  table.sort(rows.dirty_rows, function(a, b) return a.index < b.index end)
   return rows
 end
 
@@ -577,7 +805,7 @@ local function sync_removed_covers(p, rows, suppress_delete)
     end
     for _, guid in ipairs(completed) do saved[guid] = nil end
     if not next(saved) then deleted_sets[p] = nil end
-    if changed then R.UpdateArrange();return true end
+    if changed then request_arrange();return true end
   end
   if suppress_delete then return false end
 
@@ -659,7 +887,7 @@ local function sync_removed_covers(p, rows, suppress_delete)
   end
   saved = deleted_sets[p] or {};deleted_sets[p] = saved
   for guid, children in pairs(batches) do saved[guid] = children end
-  R.UpdateArrange();return true
+  request_arrange();return true
 end
 
 local function begin_gesture()
@@ -716,7 +944,7 @@ local function move_gesture_children(p, session)
     for i = #journal, 1, -1 do pcall(R.SetMediaItemInfo_Value, journal[i].item, 'D_POSITION', journal[i].position) end
     error(err, 0)
   end
-  if changed then R.UpdateArrange() end
+  if changed then request_arrange() end
 end
 
 -- Also recognize item-only native Undo/Redo or a position edit outside a mouse
@@ -746,28 +974,30 @@ end
 -- Keep original child GUID sets for the entire drag. Passing another group must
 -- not change membership or delete a cover midway through the gesture.
 local function freeze_groups(rows, session)
-  for _, row in ipairs(rows) do
-    local owned, available, assigned, groups = {}, row.ranges_by_guid, {}, {}
-    for _, old in ipairs(row.owned) do owned[old.item] = old end
-    for _, state in ipairs(session.by_track[row.track] or {}) do
-      local old = owned[state.item]
-      if old then
-        local group = {s = math.huge, e = -math.huge, members = {}, old = old}
-        for _, child in ipairs(state.children) do
-          local range = available[child.guid]
-          if range then
-            group.s, group.e = math.min(group.s, range.s), math.max(group.e, range.e)
-            group.members[#group.members + 1] = range.guid;assigned[range.guid] = true
+  for _, row in ipairs(rows.dirty_rows or rows) do
+    if not rows.dirty or rows.dirty[row.track] then
+      local owned, available, assigned, groups = {}, row.ranges_by_guid, {}, {}
+      for _, old in ipairs(row.owned) do owned[old.item] = old end
+      for _, state in ipairs(session.by_track[row.track] or {}) do
+        local old = owned[state.item]
+        if old then
+          local group = {s = math.huge, e = -math.huge, members = {}, old = old}
+          for _, child in ipairs(state.children) do
+            local range = available[child.guid]
+            if range then
+              group.s, group.e = math.min(group.s, range.s), math.max(group.e, range.e)
+              group.members[#group.members + 1] = range.guid;assigned[range.guid] = true
+            end
           end
+          if #group.members > 0 then groups[#groups + 1] = group end
         end
-        if #group.members > 0 then groups[#groups + 1] = group end
       end
+      local extra = {}
+      for _, range in ipairs(row.ranges) do if not assigned[range.guid] then extra[#extra + 1] = range end end
+      for _, group in ipairs(groups_from(extra)) do groups[#groups + 1] = group end
+      if #groups > 1 then table.sort(groups, function(a, b) return a.s < b.s end) end
+      row.groups = groups
     end
-    local extra = {}
-    for _, range in ipairs(row.ranges) do if not assigned[range.guid] then extra[#extra + 1] = range end end
-    for _, group in ipairs(groups_from(extra)) do groups[#groups + 1] = group end
-    if #groups > 1 then table.sort(groups, function(a, b) return a.s < b.s end) end
-    row.groups = groups
   end
 end
 
@@ -954,41 +1184,55 @@ local function clone_chunk(chunk)
   end)
 end
 
+local function writable_cover(old)
+  if not is_blank(old.item) or string_info(old.item, TAG) ~= TAG_VALUE then return false end
+  old.locked = (math.floor(R.GetMediaItemInfo_Value(old.item, 'C_LOCK')) & 1) ~= 0
+  return true
+end
+
 local function make_plan(rows)
   local plan = {create = {}, move = {}, remove = {}, source_id = {}, track_id = {}, display = {}}
-  for _, row in ipairs(rows) do
-    local used = match_groups(row, bindings[row.key])
-    for _, group in ipairs(row.groups) do
-      local old = group.old
-      group.source_id = group.members[1]
-      if old then
-        for _, guid in ipairs(group.members) do
-          if guid == old.source_id then group.source_id = old.source_id; break end
+  for _, row in ipairs(rows.dirty_rows or rows) do
+    if not rows.dirty or rows.dirty[row.track] then
+      local used = match_groups(row, bindings[row.key])
+      for _, group in ipairs(row.groups) do
+        local old = group.old
+        group.source_id = group.members[1]
+        if old then
+          for _, guid in ipairs(group.members) do
+            if guid == old.source_id then group.source_id = old.source_id; break end
+          end
         end
-      end
-      if not old then
-        plan.create[#plan.create + 1] = {row = row, group = group}
-      elseif not old.locked and (math.abs(old.s - group.s) > EPS or math.abs(old.e - group.e) > EPS) then
-        plan.move[#plan.move + 1] = {row = row, group = group, item = old.item}
-      end
-      if old and not old.locked and old.source_id ~= group.source_id then
-        plan.source_id[#plan.source_id + 1] = {row = row, group = group, item = old.item}
-      end
-      if old and not old.locked and old.home_id ~= row.key then
-        plan.track_id[#plan.track_id + 1] = {row = row, item = old.item}
-      end
-      if old and not old.locked and old.display_name ~= nil then
-        local previous = display_names[old.item]
-        local clear_label = previous and previous.name ~= '' and old.display_name == '' and old.notes == previous.name
-        if (old.display_name ~= '' or clear_label)
-            and (old.notes ~= old.display_name or not previous or previous.name ~= old.display_name or previous.notes ~= old.notes) then
+        local previous, display
+        if old then
+          previous = display_names[old.item]
+          local clear_label = previous and previous.name ~= '' and old.display_name == '' and old.notes == previous.name
+          display = old.display_name ~= nil and (old.display_name ~= '' or clear_label)
+            and (old.notes ~= old.display_name or not previous or previous.name ~= old.display_name or previous.notes ~= old.notes)
+          if (math.abs(old.s - group.s) > EPS or math.abs(old.e - group.e) > EPS
+              or old.source_id ~= group.source_id or old.home_id ~= row.key or display)
+              and not writable_cover(old) then return nil end
+        end
+        if not old then
+          plan.create[#plan.create + 1] = {row = row, group = group}
+        elseif not old.locked and (math.abs(old.s - group.s) > EPS or math.abs(old.e - group.e) > EPS) then
+          plan.move[#plan.move + 1] = {row = row, group = group, item = old.item}
+        end
+        if old and not old.locked and old.source_id ~= group.source_id then
+          plan.source_id[#plan.source_id + 1] = {row = row, group = group, item = old.item}
+        end
+        if old and not old.locked and old.home_id ~= row.key then
+          plan.track_id[#plan.track_id + 1] = {row = row, item = old.item}
+        end
+        if old and not old.locked and display then
           plan.display[#plan.display + 1] = {row = row, item = old.item, old = old, name = old.display_name, previous = previous}
         end
       end
-    end
-    for _, old in ipairs(row.owned) do
-      if not used[old.item] and not old.locked then
-        plan.remove[#plan.remove + 1] = {row = row, item = old.item}
+      for _, old in ipairs(row.owned) do
+        if not used[old.item] then
+          if not writable_cover(old) then return nil end
+          if not old.locked then plan.remove[#plan.remove + 1] = {row = row, item = old.item} end
+        end
       end
     end
   end
@@ -996,56 +1240,103 @@ local function make_plan(rows)
 end
 
 local function remember(rows)
-  local current, names, states = {}, {}, {}
-  for _, row in ipairs(rows) do
-    local live, kept, lookup = {}, {}, row.ranges_by_guid
-    if #row.groups > 0 then
-      local map = {}
-      for _, group in ipairs(row.groups) do
-        local item = group.item or (group.old and group.old.item)
-        for _, guid in ipairs(group.members) do map[guid] = item end
-        local old = group.old
-        if not old then
-          local original = group.template
-          old = {item = item, order = 1000000000 + #live, display_name = group.display_name or '',
-            s = group.s, e = group.e, source_id = group.source_id, home_id = row.key,
-            notes = original and original.notes or '', locked = original and original.locked or false,
-            guid = string_info(item, 'GUID')}
-        elseif not old.locked then
-          old.s, old.e, old.source_id, old.home_id = group.s, group.e, group.source_id, row.key
+  local incremental = rows.dirty ~= nil
+  local current = incremental and bindings or {}
+  local names = incremental and display_names or {}
+  local states = incremental and cover_states or {}
+  for _, row in ipairs(rows.dirty_rows or rows) do
+    if not incremental or rows.dirty[row.track] then
+      current[row.key] = nil
+      local live, kept, lookup = {}, {}, row.ranges_by_guid
+      if #row.groups > 0 then
+        local map = {}
+        for _, group in ipairs(row.groups) do
+          local item = group.item or (group.old and group.old.item)
+          for _, guid in ipairs(group.members) do map[guid] = item end
+          local old = group.old
+          if not old then
+            local original = group.template
+            old = {item = item, order = 1000000000 + #live, display_name = group.display_name or '',
+              s = group.s, e = group.e, source_id = group.source_id, home_id = row.key,
+              notes = original and original.notes or '', locked = original and original.locked or false,
+              guid = string_info(item, 'GUID')}
+          elseif not old.locked then
+            old.s, old.e, old.source_id, old.home_id = group.s, group.e, group.source_id, row.key
+          end
+          local previous = display_names[item]
+          if old.locked then names[item] = previous
+          elseif not previous or previous.name ~= old.display_name or previous.notes ~= old.notes then
+            names[item] = {name = old.display_name, notes = old.notes}
+          else names[item] = previous end
+          live[#live + 1] = old;kept[item] = true
+          rows.all_items[old.guid] = item
+          local entry = rows.audit_by_item[item]
+          if not entry then
+            entry = {item = item, guid = old.guid};rows.audit_items[#rows.audit_items + 1] = entry
+            rows.audit_by_item[item] = entry
+          end
+          entry.track, entry.s, entry.e, entry.managed, entry.cover = row.track, old.s, old.e, true, old
+          local state = incremental and cover_states[item]
+          local changed = not state or state.s ~= old.s or state.e ~= old.e or state.locked ~= old.locked or #state.children ~= #group.members
+          if not changed then
+            for i, guid in ipairs(group.members) do
+              if state.children[i] ~= lookup[guid] then changed = true;break end
+            end
+          end
+          if changed then
+            state = {item = item, guid = old.guid, track = row.track, s = old.s, e = old.e, locked = old.locked, children = {}}
+            for _, guid in ipairs(group.members) do state.children[#state.children + 1] = lookup[guid] end
+          end
+          states[item] = state
         end
-        if old.locked then names[item] = display_names[item]
-        else names[item] = {name = old.display_name, notes = old.notes} end
-        live[#live + 1] = old;kept[item] = true
-        rows.all_items[old.guid] = item
-        local entry = rows.audit_by_item[item]
-        if not entry then
-          entry = {item = item, guid = old.guid};rows.audit_items[#rows.audit_items + 1] = entry
-          rows.audit_by_item[item] = entry
-        end
-        entry.track, entry.s, entry.e, entry.managed, entry.cover = row.track, old.s, old.e, true, old
-        local state = {item = item, guid = old.guid, track = row.track, s = old.s, e = old.e, locked = old.locked, children = {}}
-        for _, guid in ipairs(group.members) do
-          local range = lookup[guid]
-          state.children[#state.children + 1] = range
-        end
-        states[item] = state
+        current[row.key] = map
       end
-      current[row.key] = map
-    end
-    for _, old in ipairs(row.owned) do
-      if not kept[old.item] then
-        if old.locked then
-          live[#live + 1] = old;rows.audit_by_item[old.item].cover = old
-        else rows.all_items[old.guid] = nil end
+      for _, old in ipairs(row.owned) do
+        if not kept[old.item] then
+          names[old.item], states[old.item] = nil, nil
+          if old.locked then
+            live[#live + 1] = old;rows.audit_by_item[old.item].cover = old
+          else rows.all_items[old.guid] = nil end
+        end
       end
+      row.owned = live
+      if #live > 1 then table.sort(live, by_position) end
     end
-    row.owned = live
-    if #live > 1 then table.sort(live, by_position) end
   end
   bindings = current
   display_names = names
   cover_states, last_rows = states, rows
+  if incremental and not rows.rebuild_watch then
+    for item, value in pairs(rows.geometry) do
+      local entry = rows.watch_by_item[item]
+      if entry then entry.s, entry.e = value.s, value.e end
+    end
+    for i, prior in ipairs(rows.watch_tracks) do
+      local row = rows.by_track[prior.track];rows.watch_tracks[i] = row
+      if rows.dirty[row.track] then
+        for _, old in ipairs(row.owned) do
+          local entry = rows.watch_by_item[old.item]
+          if entry then entry.s, entry.e = old.s, old.e end
+        end
+      end
+    end
+    return
+  end
+  local watched = {}
+  rows.watch_items, rows.watch_tracks, rows.watch_by_item = {}, {}, watched
+  local function watch(item, track, s, e, parent)
+    local entry = watched[item]
+    if not entry then
+      entry = {item = item, track = track, slot = R.GetMediaItemInfo_Value(item, 'IP_ITEMNUMBER'), s = s, e = e, parents = {}}
+      watched[item] = entry;rows.watch_items[#rows.watch_items + 1] = entry
+    end
+    entry.parents[#entry.parents + 1] = parent
+  end
+  for _, row in ipairs(rows) do
+    if row.related or row.depth > 0 or #row.owned > 0 then rows.watch_tracks[#rows.watch_tracks + 1] = row end
+    for _, old in ipairs(row.owned) do watch(old.item, row.track, old.s, old.e, row.track) end
+    for _, range in ipairs(row.ranges) do watch(range.item, range.track, range.s, range.e, row.track) end
+  end
 end
 
 local function validate_plan(p, plan)
@@ -1154,13 +1445,13 @@ local function apply_plan(p, plan)
     end
   end, debug.traceback)
   R.PreventUIRefresh(-1)
-  R.UpdateArrange()
+  request_arrange()
   if not ok then
     local restored = true
     for i = #journal, 1, -1 do
       local success, result = pcall(journal[i]);if not success or result == false or result == nil then restored = false end
     end
-    R.UpdateArrange()
+    request_arrange()
     error(tostring(err) .. (restored and '\nThe automatic changes were restored.' or '\nSome automatic changes could not be restored.'), 0)
   end
 end
@@ -1245,21 +1536,36 @@ local function update()
   if not changed_project and applied_revision == revision and not editing and not gesture and not released and not counts_changed then
     silent = audit_changed(p, R.time_precise());if not silent then return end
   end
-  restore_known_tracks(p)
+  if not editing then restore_known_tracks(p) end
   if moving and not gesture and not undoing and next(cover_states) then gesture = begin_gesture() end
-  if gesture then move_gesture_children(p, gesture)
-  elseif not changed_project and (revision ~= applied_revision or silent or counts_changed) then move_changed_covers(p) end
+  if gesture then restore_known_tracks(p, gesture.drivers);move_gesture_children(p, gesture)
+  elseif not editing and not changed_project and (revision ~= applied_revision or silent or counts_changed) then move_changed_covers(p) end
   local rows
-  if editing and last_rows and not undoing then rows = refresh_rows(p, last_rows) end
+  if editing and last_rows and not undoing and not counts_changed then
+    rows = refresh_rows(p, last_rows)
+    if rows == false then
+      applied_revision = R.GetProjectStateChangeCount(p);history_index = current_history
+      return
+    end
+  end
   rows = rows or snapshot(p)
   if R.EnumProjects(-1, '') ~= p then return end
   if sync_removed_covers(p, rows, changed_project or suppress_delete) then rows = snapshot(p) end
   if moving and gesture then freeze_groups(rows, gesture)
   else
     gesture = nil
-    for _, row in ipairs(rows) do row.groups = groups_from(row.ranges) end
+    for _, row in ipairs(rows.dirty_rows or rows) do
+      row.groups = groups_from(row.ranges)
+    end
   end
   local plan = make_plan(rows)
+  if not plan then
+    rows = snapshot(p)
+    if moving and gesture then freeze_groups(rows, gesture)
+    else for _, row in ipairs(rows) do row.groups = groups_from(row.ranges) end end
+    plan = assert(make_plan(rows), 'Cover ownership changed during the update.')
+  end
+  rows.rebuild_watch = #plan.create + #plan.remove > 0
   if #plan.create + #plan.move + #plan.remove + #plan.source_id + #plan.track_id + #plan.display > 0 then apply_plan(p, plan) end
   remember(rows)
   rows.item_count = R.CountMediaItems(p)
@@ -1279,6 +1585,13 @@ end
 local function run_update()
   if stopped then return false end
   local ok, err = xpcall(update, debug.traceback)
+  if arrange_pending then
+    arrange_pending = false
+    local drawn, why = pcall(R.UpdateArrange)
+    if not drawn then
+      if ok then ok, err = false, why else err = tostring(err) .. '\n' .. tostring(why) end
+    end
+  end
   if not ok then
     cleanup()
     R.ShowMessageBox(tostring(err), TITLE, 0)
