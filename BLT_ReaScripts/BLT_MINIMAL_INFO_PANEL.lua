@@ -1,5 +1,5 @@
 -- @description MINIMAL INFO PANEL
--- @version 0.2.25
+-- @version 0.2.28
 -- @author Balrulu
 -- @provides
 --   . > ../
@@ -1279,12 +1279,19 @@ if type(reaper.ImGui_GetBuiltinPath)~='function'then reaper.MB('ReaImGui 0.10以
 local reaper,gfx=AppCanvas.install(reaper,gfx,AppCanvasHost,
  {section='BLT_MINIMAL_INFO_PANEL',title='BLT MINIMAL INFO PANEL',width=1070,height=100,minWidth=1070,minHeight=70},AppShellText,AppChromeRaster,AppCanvasDraw)
 do
--- BEGIN BLT NATIVE DIALOGS 1.1.0 (generated from _shared/BLT_NativeDialogs.lua)
+-- BEGIN BLT NATIVE DIALOGS 1.2.0 (generated from _shared/BLT_NativeDialogs.lua)
 local BLTNativeDialogs=(function()
  local M={}
  function M.install(api,view)
   local P=setmetatable({}, {__index=api})
   local title,depth=nil,0
+  local active,pending,scheduled,rounds,exitHandler=nil,nil,false,0,nil
+  local host=api
+  for _=1,8 do
+   local mt=getmetatable(host)
+   if type(mt)~='table' or type(mt.__index)~='table' then break end
+   host=mt.__index
+  end
   local windowsOS=api.GetOS and (api.GetOS() or ''):match('Win')~=nil
   if view and view.init then
    local init=view.init
@@ -1350,13 +1357,37 @@ local BLTNativeDialogs=(function()
     end
    end
   end
+  local function has_flag(hwnd,name,mask,on)
+   local ok,value=pcall(api.JS_Window_GetLong,hwnd,name)
+   return ok and type(value)=='number' and value==value and math.abs(value)<math.huge
+    and ((math.floor(value)&mask)~=0)==on
+  end
   local function restore(session)
+   local failed={}
    for i=#session.windows,1,-1 do
     local entry=session.windows[i]
     local checked,exists=pcall(valid,entry.hwnd)
     if not checked or exists then
-     if entry.enabled then pcall(api.JS_Window_Enable,entry.hwnd,true) end
-     if entry.topmost then pcall(api.JS_Window_SetZOrder,entry.hwnd,'TOPMOST') end
+     local enabled,topmost=not entry.enabled,not entry.topmost
+     for _=1,3 do
+      if not enabled then
+       enabled=has_flag(entry.hwnd,'STYLE',0x08000000,false)
+       if not enabled then
+        pcall(api.JS_Window_Enable,entry.hwnd,true)
+        enabled=has_flag(entry.hwnd,'STYLE',0x08000000,false)
+       end
+      end
+      if not topmost then
+       topmost=has_flag(entry.hwnd,'EXSTYLE',8,true)
+       if not topmost then
+        pcall(api.JS_Window_SetZOrder,entry.hwnd,'TOPMOST')
+        topmost=has_flag(entry.hwnd,'EXSTYLE',8,true)
+       end
+      end
+      if enabled and topmost then break end
+     end
+     entry.inputRestored=enabled
+     if not enabled or not topmost then failed[#failed+1]=entry end
     end
    end
    -- Do not take focus back if the user switched to another application.
@@ -1364,25 +1395,76 @@ local BLTNativeDialogs=(function()
     local current=api.JS_Window_GetForeground and api.JS_Window_GetForeground()
     if session.foreground and valid(session.foreground) and (current==session.main or owned(current,session.main)) then
      for _,entry in ipairs(session.windows) do
-      if entry.enabled and (session.foreground==entry.hwnd or owned(session.foreground,entry.hwnd)) then
+      if entry.enabled and entry.inputRestored and (session.foreground==entry.hwnd or owned(session.foreground,entry.hwnd)) then
        if api.JS_Window_SetForeground then api.JS_Window_SetForeground(entry.hwnd) end
        break
       end
      end
     end
    end)
+   return failed
+  end
+  local function warn()
+   if host.ShowConsoleMsg then
+    pcall(host.ShowConsoleMsg,'BLT: ウィンドウの操作状態／最前面状態を復元できませんでした。操作できないBLTはアクションリストから終了・再実行してください。\nBLT window recovery failed after retries. Stop and restart the affected BLT action.\n')
+   end
+  end
+  local function retry()
+   scheduled=false
+   if not pending then return end
+   if depth>0 then
+    if host.defer then scheduled=true;host.defer(retry) end
+    return
+   end
+   pending.windows=restore(pending)
+   if #pending.windows==0 then pending=nil;return end
+   rounds=rounds+1
+   if rounds<8 and host.defer then scheduled=true;host.defer(retry) else warn() end
+  end
+  local function recover(session,failed)
+   if #failed==0 then return end
+   if not pending then pending={windows={},main=session.main,foreground=session.foreground};rounds=0 end
+   for _,entry in ipairs(failed) do
+    local duplicate=false
+    for _,old in ipairs(pending.windows) do
+     if old.hwnd==entry.hwnd then
+      old.enabled,old.topmost=old.enabled or entry.enabled,old.topmost or entry.topmost;duplicate=true;break
+     end
+    end
+    if not duplicate then pending.windows[#pending.windows+1]=entry end
+   end
+   if not scheduled then
+    if host.defer then scheduled=true;host.defer(retry) else retry() end
+   end
+  end
+  if type(api.atexit)=='function' then
+   local function finish()
+    if active then local session=active;active=nil;local failed=restore(session);if #failed>0 then warn() end end
+    if pending then pending.windows=restore(pending);if #pending.windows>0 then warn() end end
+    if exitHandler then exitHandler() end
+   end
+   P.atexit=function(fn) exitHandler=fn;return api.atexit(finish) end
+   api.atexit(finish)
   end
   local function call(fn,...)
    if depth>0 then return fn(...) end
-   local args=table.pack(...);local session={windows={}};depth=depth+1
+   local args=table.pack(...);local session={windows={}};depth=depth+1;active=session
    local result=table.pack(xpcall(function() suspend(session);return fn(table.unpack(args,1,args.n)) end,debug.traceback))
-   depth=depth-1;restore(session)
+   local failed=restore(session);active=nil;depth=depth-1;recover(session,failed)
    if not result[1] then error(result[2],0) end
    return table.unpack(result,2,result.n)
   end
-  for _,name in ipairs({'GetUserInputs','MB','ShowMessageBox','GetUserFileNameForRead','JS_Dialog_BrowseForSaveFile','JS_Dialog_BrowseForOpenFiles','JS_Dialog_BrowseForFolder','GR_SelectColor'}) do
+  for _,name in ipairs({'GetUserInputs','MB','ShowMessageBox','GetUserFileName','GetUserFileNameForRead','JS_Dialog_BrowseForSaveFile','JS_Dialog_BrowseForOpenFiles','JS_Dialog_BrowseForFolder','GR_SelectColor','Main_OnCommand','Main_OnCommandEx','CF_SendActionShortcut','MIDIEditor_LastFocused_OnCommand'}) do
    local fn=api[name]
    if type(fn)=='function' then P[name]=function(...) return call(fn,...) end end
+  end
+  if type(api.GetSetProjectInfo_String)=='function' then
+   local fn=api.GetSetProjectInfo_String
+   P.GetSetProjectInfo_String=function(project,key,value,...)
+    local stats=key=='RENDER_STATS' or key=='RENDER_STATS_SUMMARY'
+    if stats and value and value~='' and tonumber(value)~=0 then return call(fn,project,key,value,...) end
+    return fn(project,key,value,...)
+   end
   end
   -- Native actions may also display modal progress or error windows.
   P.BLT_WithNativeDialog=call
@@ -1739,6 +1821,7 @@ local LanguageCatalog={en={
  ["ボリューム"]="Volume",
  ["ピッチ"]="Pitch",
  ["再生速度"]="Rate",
+ ["ピッチ維持"]="Preserve pitch",
  ["逆再生"]="Reverse",
  ["ミュート"]="Mute",
  ["ロック"]="Lock",
@@ -2603,6 +2686,7 @@ function Core.row(project,item,key,trackNumbers)
   v.midi=R.TakeIsMIDI(take)
   v.name=R.GetTakeName(take) or '';v.pitch=R.GetMediaItemTakeInfo_Value(take,'D_PITCH');v.pan=R.GetMediaItemTakeInfo_Value(take,'D_PAN')*100
   local rate=R.GetMediaItemTakeInfo_Value(take,'D_PLAYRATE');if finite(rate) and rate>0 then v.rate=rate end
+  if not v.midi then v.preservePitch=R.GetMediaItemTakeInfo_Value(take,'B_PPITCH')~=0 end
   if not v.midi and R.BR_GetMediaSourceProperties then
    local ok,section,start,len,fade,reverse=R.BR_GetMediaSourceProperties(take)
    if ok then v.reverse=reverse;v.sourceProps={section,start,len,fade,reverse} end
@@ -2630,7 +2714,7 @@ end
 function Core.display(project,selection)
  local first,track,pos,index
  local mixed,trackNumbers={},{}
- local mute,lock,reverse,hasMidi=nil,nil,nil,false
+ local mute,lock,reverse,preservePitch,hasMidi=nil,nil,nil,nil,false
  local count=selection and #selection or R.CountSelectedMediaItems(project)
  for i=0,count-1 do
   local item=selection and selection[i+1] or R.GetSelectedMediaItem(project,i)
@@ -2646,10 +2730,16 @@ function Core.display(project,selection)
    if not hasMidi then
     local take=R.GetActiveTake(item)
     if take and R.TakeIsMIDI(take) then hasMidi=true
-    elseif take and not mixed.reverse and R.BR_GetMediaSourceProperties then
-     local ok,_,_,_,_,value=R.BR_GetMediaSourceProperties(take)
-     if ok and value~=nil then
-      if reverse~=nil and reverse~=value then mixed.reverse=true end;reverse=value
+    elseif take then
+     if not mixed.preservePitch then
+      local value=R.GetMediaItemTakeInfo_Value(take,'B_PPITCH')~=0
+      if preservePitch~=nil and preservePitch~=value then mixed.preservePitch=true end;preservePitch=value
+     end
+     if not mixed.reverse and R.BR_GetMediaSourceProperties then
+      local ok,_,_,_,_,value=R.BR_GetMediaSourceProperties(take)
+      if ok and value~=nil then
+       if reverse~=nil and reverse~=value then mixed.reverse=true end;reverse=value
+      end
      end
     end
    end
@@ -2760,12 +2850,18 @@ function Core.set(v,key,value,restore)
  elseif key=='length' then return R.SetMediaItemInfo_Value(v.item,'D_LENGTH',value)
  elseif key=='volume' then return R.SetMediaItemInfo_Value(v.item,'D_VOL',restore and v.gain or (value<=-150 and 0 or 10^(value/20)))
  elseif key=='pitch' then return R.SetMediaItemTakeInfo_Value(v.take,'D_PITCH',value)
+ elseif key=='preservePitch' then return R.SetMediaItemTakeInfo_Value(v.take,'B_PPITCH',value and 1 or 0)
  elseif key=='rate' then
   local length=restore and v.length or v.length*v.rate/value
+  local pitchOK=true
+  if v.preservePitch~=nil and (restore or v.preservePitch) then
+   pitchOK=R.SetMediaItemTakeInfo_Value(v.take,'B_PPITCH',restore and (v.preservePitch and 1 or 0) or 0)
+   if not pitchOK and not restore then return false end
+  end
   local rateOK=R.SetMediaItemTakeInfo_Value(v.take,'D_PLAYRATE',value)
   if not rateOK and not restore then return false end
   local lengthOK=R.SetMediaItemInfo_Value(v.item,'D_LENGTH',length)
-  return rateOK and lengthOK
+  return pitchOK and rateOK and lengthOK
  elseif key=='pan' then return R.SetMediaItemTakeInfo_Value(v.take,'D_PAN',value/100)
  elseif key=='mute' then return R.SetMediaItemInfo_Value(v.item,'B_MUTE_ACTUAL',value and 1 or 0)
  elseif key=='lock' then return R.SetMediaItemInfo_Value(v.item,'C_LOCK',(v.lockBits&(~1))|(value and 1 or 0))
@@ -2809,7 +2905,7 @@ function Core.commit(s,key,changes,defer_undo)
  end,debug.traceback)
  local restored=true
  if not success then for i=attempted,1,-1 do local c=changes[i];local worked,result=pcall(Core.set,c.row,c.key or key,c.before,true);if not worked or not result then restored=false end end end
- if key=='reverse'or key=='rate'then
+ if key=='reverse'or key=='rate'or key=='preservePitch'then
   for i=1,attempted do BLT.cleanup(Core.refresh_item,changes[i].row)end
  end
  -- End the transaction before any fallible window/arrange redraw.
@@ -2913,7 +3009,8 @@ function WheelUndo.has_changes(p,rows)
    if p.key=='pitch' and R.GetMediaItemTakeInfo_Value(v.take,'D_PITCH')~=v.pitch then return true end
    if p.key=='pan' and R.GetMediaItemTakeInfo_Value(v.take,'D_PAN')*100~=v.pan then return true end
    if p.key=='rate' and (R.GetMediaItemTakeInfo_Value(v.take,'D_PLAYRATE')~=v.rate
-      or R.GetMediaItemInfo_Value(v.item,'D_LENGTH')~=v.length) then return true end
+      or R.GetMediaItemInfo_Value(v.item,'D_LENGTH')~=v.length
+      or (v.preservePitch~=nil and (R.GetMediaItemTakeInfo_Value(v.take,'B_PPITCH')~=0)~=v.preservePitch)) then return true end
   end
  end
  return false
@@ -3164,10 +3261,18 @@ local function line(x,y,xx,yy,c,a) color(c,a); gfx.line(sx(x),sy(y),sx(xx),sy(yy
 
 local function font(size,kind,bold) BLT.font(size,kind,bold,scale,fonts) end
 local function value_offset(text,kind,size) return valueMetrics:offset(kind==1,text,size,gfx.ext_retina or 1)end
-local function label(text,x,y,w,h,size,c,bold,flags,kind,literal,optical)
+local function label(text,x,y,w,h,size,c,bold,flags,kind,literal,optical,shrink)
   local shown=literal and tostring(text) or Language.message(text)
   font(size,kind,bold); color(c or C.text); gfx.x,gfx.y=sx(x),sy(y)
-  if w then shown=BLT.ui.fit(shown,w*scale) end
+  if shrink and w then
+    if BLT.ui.textMetrics(shown)>w*scale then
+      local pixels=max(1,math.floor(size*scale+.5))
+      gfx.setfont('minimal-label-shrink',fonts[kind or 1],pixels,bold and 98 or 0)
+      while pixels>1 and gfx.measurestr(shown)>w*scale do
+        pixels=pixels-1;gfx.setfont('minimal-label-shrink',fonts[kind or 1],pixels,bold and 98 or 0)
+      end
+    end
+  elseif w then shown=BLT.ui.fit(shown,w*scale) end
   if optical then optical=optical(shown,kind,size)end
   gfx.drawstr(BLT.cleanText(shown),flags or 0,sx(x+w),sy(y+h),optical)
 end
@@ -3525,7 +3630,8 @@ end
 local function clear_chrome_tooltip() BLT.clearTooltip() end
 
 local fields={{key='name',label='名前'}, {key='length',label='長さ',width=130},
- {key='volume',label='ボリューム',width=93},{key='pitch',label='ピッチ',width=88},{key='rate',label='再生速度',width=180},{key='pan',label='PAN',width=93},
+ {key='volume',label='ボリューム',width=93},{key='pitch',label='ピッチ',width=88},{key='rate',label='再生速度',width=180},
+ {key='preservePitch',label='ピッチ維持',width=36,check=true},{key='pan',label='PAN',width=93},
  {key='reverse',label='逆再生',width=36,check=true},{key='mute',label='ミュート',width=36,check=true},{key='lock',label='ロック',width=36,check=true}}
 
 -- REAPER's projpeaksgain is a linear display multiplier, not item audio gain.
@@ -3694,7 +3800,7 @@ local function poll(force)
   local previous=A.items[1];local first=rows[1]
   local dirty=force or n~=A.count or midi~=A.hasMidi or not A.display
    or (previous and previous.name=='')~=(first and first.name=='')
-  for _,key in ipairs({'mute','lock','reverse'}) do if mixed[key]~=(A.mixed and A.mixed[key]) then dirty=true end end
+  for _,key in ipairs({'mute','lock','reverse','preservePitch'}) do if mixed[key]~=(A.mixed and A.mixed[key]) then dirty=true end end
   A.items,A.count,A.mixed,A.hasMidi=rows,n,mixed,midi;A.project=project;A.revision=rev
   A.display=A.display or {}
   for _,f in ipairs(fields) do
@@ -3940,7 +4046,7 @@ local function draw()
  local top=row_y()
  local first=A.items[1]
  for _,f in ipairs(fields) do
-  local value=first and first[f.key];local disabled=f.key=='reverse' and A.hasMidi
+  local value=first and first[f.key];local disabled=(f.key=='reverse' or f.key=='preservePitch') and A.hasMidi
   local enabled=value~=nil and not disabled
   if enabled and Core.specs[f.key]then gfx.wheelRegion(f.x,top,f.w,39)end
   local hot=not disabled and mx>=f.x and mx<f.x+f.w and my>=top and my<=top+39
@@ -3948,12 +4054,12 @@ local function draw()
   local mixed=not disabled and f.check and A.mixed and A.mixed[f.key]
   local multi=(A.count or 0)>1
   fieldUI:fieldFrame(f.key,f.x/density,top/density,f.w/density,39/density,enabled,on or hot or E and E.key==f.key)
-  label(f.label,f.x+(f.check and 2 or 7),top+1,f.w-(f.check and 4 or 14),12,(f.check and 7 or 9),disabled and C.disabled or enabled and (multi and C.warn or C.muted) or C.faint,true)
+  label(f.label,f.x+(f.check and 2 or 7),top+1,f.w-(f.check and 4 or 14),12,(f.check and 7 or 9),disabled and C.disabled or enabled and (multi and C.warn or C.muted) or C.faint,true,nil,nil,nil,nil,f.key=='preservePitch')
   if f.check then
    local cx=f.x+(f.w-16)/2
    rect(cx,top+18,16,16,disabled and C.field or on and not mixed and C.accent2 or C.bg)
    color(disabled and C.disabled or mixed and C.warn or (on and C.accent2 or C.edge2));gfx.rect(cx,top+18,16,16,0)
-   local icon=f.key=='reverse' and 'R' or f.key=='mute' and 'M' or 'L'
+   local icon=f.key=='reverse' and 'R' or f.key=='preservePitch' and '✓' or f.key=='mute' and 'M' or 'L'
    if mixed then rect(cx+3,top+25,10,2,C.warn)
    elseif on then label(icon,cx,top+18,16,16,12,not enabled and C.faint or C.bg,true,5,2,true) end
   else
@@ -4002,7 +4108,7 @@ local function interact()
   end
  end
  A.rightLast=right
- if down and not downLast and f and not (f.key=='reverse' and A.hasMidi) then
+ if down and not downLast and f and not ((f.key=='reverse' or f.key=='preservePitch') and A.hasMidi) then
   if f.key=='name'then
    if A.items[1]and A.items[1].name~=nil then gesture={key=f.key,field=f}end
   else
@@ -4249,8 +4355,9 @@ local function tooltip(x,y)
  if PeakZoom.at(x,y) then return nil end
  local f=field_at(x,y);if not f then return nil end
  if f.key=='reverse' and A.hasMidi then return Language.code=='JP' and 'MIDIアイテムを含む選択では逆再生を変更できません。' or 'Reverse is unavailable when the selection includes MIDI.' end
+ if f.key=='preservePitch' and A.hasMidi then return Language.code=='JP' and 'MIDIアイテムを含む選択ではピッチ維持を変更できません。' or 'Pitch preservation is unavailable when the selection includes MIDI.' end
  if f.check then return Language.code=='JP' and 'クリックで全選択を同じON / OFFに設定' or 'Click to set all selected items ON / OFF' end
- if f.key=='rate' then return Language.code=='JP' and '再生速度（半音換算） · ホイール: 次の1 st位置（Shift: 0.1 st） · Ctrl+クリック: 1.0\n半音換算は速度比の参考値です。ピッチ維持設定は保持し、アイテムの長さは速度に追従します。' or 'Playback rate · Wheel: next semitone (Shift: 0.1 st) · Ctrl (Cmd)+click: 1.0\nPitch preservation stays unchanged; item length follows the rate.' end
+ if f.key=='rate' then return Language.code=='JP' and '再生速度（半音換算） · ホイール: 次の1 st位置（Shift: 0.1 st） · Ctrl+クリック: 1.0\n半音換算は速度比の参考値です。速度を変更するとピッチ維持はOFFになり、アイテムの長さは速度に追従します。' or 'Playback rate · Wheel: next semitone (Shift: 0.1 st) · Ctrl (Cmd)+click: 1.0\nChanging the rate turns pitch preservation OFF; item length follows the rate.' end
  if f.key=='length' then return Language.code=='JP' and '右クリック: 尺度を選択 · 入力も選択した尺度を使用' or 'Right-click: units · Input uses selected units' end
  if f.key=='name' then
   local name=A.items[1] and A.items[1].name or ''
