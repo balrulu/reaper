@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<index version="1" name="BLT ReaScripts" commit="78aef7f89786eb0e788c73f68e1b24c5d68de302">
+<index version="1" name="BLT ReaScripts" commit="324cae9835786f33bcd60a817f8d7411d288b0ac">
   <category name="BLT">
     <reapack name="BLT_SPATIAL_FIELD.jsfx" type="effect" desc="BLT SPATIAL FIELD">
       <version name="0.5.4" author="Balrulu" time="2026-10-05T05:08:58Z">
@@ -200,9 +200,10 @@
 }
 ]]></description>
       </metadata>
-      <version name="0.6.22" author="Balrulu" time="2026-10-23T21:21:31Z">
+      
+      <version name="0.6.23" author="Balrulu" time="2026-10-30T17:03:39Z">
         <changelog><![CDATA[BLT SERIES Beta TEST UPLOAD]]></changelog>
-        <source main="main" file="../BLT_INTERVAL.lua">https://github.com/balrulu/reaper/raw/22c80dba19ed5ddd5d18cd4120fb0ccc6083f828/BLT_ReaScripts/BLT_INTERVAL.lua</source>
+        <source main="main" file="../BLT_INTERVAL.lua">https://github.com/balrulu/reaper/raw/324cae9835786f33bcd60a817f8d7411d288b0ac/BLT_ReaScripts/BLT_INTERVAL.lua</source>
       </version>
     </reapack>
     <reapack name="BLT_LOOP_RM_STUDIO.lua" type="script" desc="LOOP RM STUDIO">
@@ -260,7 +261,6 @@
 }
 ]]></description>
       </metadata>
-      
       <version name="0.2.28" author="Balrulu" time="2026-10-30T06:58:07Z">
         <changelog><![CDATA[BLT SERIES Beta TEST UPLOAD]]></changelog>
         <source main="main" file="../BLT_MINIMAL_INFO_PANEL.lua">https://github.com/balrulu/reaper/raw/78aef7f89786eb0e788c73f68e1b24c5d68de302/BLT_ReaScripts/BLT_MINIMAL_INFO_PANEL.lua</source>
