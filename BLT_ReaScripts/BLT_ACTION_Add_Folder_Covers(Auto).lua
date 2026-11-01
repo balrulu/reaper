@@ -1,5 +1,5 @@
 -- @description ACTION - Add Folder Covers (Auto)
--- @version 1.0.6
+-- @version 1.0.8
 -- @author Balrulu
 -- @provides
 --   . > ../
@@ -475,7 +475,7 @@ local TRACK_KEY = 'P_EXT:BLT_FOLDER_COVER_TRACK'
 local EPS = 1e-9
 local _, _, section, command = R.get_action_context()
 local has_action = section and command and section >= 0 and command > 0
-local project, applied_revision, last_rows, gesture, history_index
+local project, applied_revision, last_rows, gesture, history_index, import_wait
 local bindings = {}
 local display_names = {}
 local cover_states = {}
@@ -609,6 +609,45 @@ local function groups_from(ranges)
   return groups
 end
 
+local function build_groups(rows)
+  local list = rows.dirty_rows or rows
+  local nonempty = 0
+  for _, row in ipairs(list) do
+    if #row.ranges > 0 then nonempty = nonempty + 1;if nonempty == 2 then break end end
+  end
+  local cache = nonempty > 1 and {} or nil
+  for _, row in ipairs(list) do
+    local ranges, reused = row.ranges, false
+    if cache and #ranges > 0 then
+      local sum = 0
+      for _, range in ipairs(ranges) do sum = sum + range.order end
+      local key = #ranges .. ':' .. sum
+      local bucket = cache[key]
+      if bucket then
+        for _, entry in ipairs(bucket) do
+          local same = true
+          for _, range in ipairs(ranges) do
+            if entry.lookup[range.guid] ~= range then same = false;break end
+          end
+          if same then
+            local groups = {}
+            for _, group in ipairs(entry.groups) do
+              groups[#groups + 1] = {s = group.s, e = group.e, members = group.members}
+            end
+            row.groups, reused = groups, true
+            break
+          end
+        end
+      else bucket = {};cache[key] = bucket end
+      if not reused then
+        row.groups = groups_from(ranges)
+        -- Parent-specific group fields stay separate; member GUID lists are read-only.
+        bucket[#bucket + 1] = {lookup = row.ranges_by_guid, groups = row.groups}
+      end
+    else row.groups = groups_from(ranges) end
+  end
+end
+
 local function return_to_track(p, item, track)
   assert(R.ValidatePtr2(p, track, 'MediaTrack*'), 'Original cover track disappeared.')
   assert(R.MoveMediaItemToTrack(item, track), 'Cannot return cover to its original track.')
@@ -651,6 +690,7 @@ local function snapshot(p)
       order = order + 1
       local tag = string_info(item, TAG)
       local managed = tag == TAG_VALUE and is_blank(item)
+      if not managed and last_rows and not last_rows.all_items[guid] then tracks.added_items = true end
       local entry = {item = item, guid = guid, track = track, s = s, e = e, managed = managed}
       tracks.audit_items[#tracks.audit_items + 1] = entry;tracks.audit_by_item[item] = entry
       if managed then
@@ -891,11 +931,11 @@ local function sync_removed_covers(p, rows, suppress_delete)
 end
 
 local function begin_gesture()
-  local session = {by_track = {}, drivers = {}}
+  local session = {by_track = {}, drivers = {}, original = {}, groups = {}}
   for _, state in pairs(cover_states) do
     local states = session.by_track[state.track]
     if not states then states = {};session.by_track[state.track] = states end
-    states[#states + 1] = state
+    states[#states + 1] = state;session.original[state.item] = state
     if not state.locked and R.IsMediaItemSelected(state.item) then
       session.drivers[#session.drivers + 1] = {state = state, active = false, last_position = state.s}
     end
@@ -907,6 +947,11 @@ end
 
 local function move_gesture_children(p, session)
   local targets, journal, changed = {}, {}, false
+  local checked
+  for i = 2, #session.drivers do
+    if session.drivers[i].state.track ~= session.drivers[1].state.track then checked = {};break end
+  end
+  local rejected
   for _, driver in ipairs(session.drivers) do
     local state = driver.state
     local valid = R.ValidatePtr2(p, state.item, 'MediaItem*') and R.GetMediaItemTrack(state.item) == state.track
@@ -920,8 +965,18 @@ local function move_gesture_children(p, session)
     end
     if valid then
       for _, child in ipairs(state.children) do
-        if not R.ValidatePtr2(p, child.item, 'MediaItem*') or R.GetMediaItemTrack(child.item) ~= child.track
-            or (math.floor(R.GetMediaItemInfo_Value(child.item, 'C_LOCK')) & 1) ~= 0 then valid = false;break end
+        local child_valid
+        if checked and checked[child.item] == child.track then child_valid = true
+        elseif rejected and rejected[child.item] == child.track then child_valid = false
+        else
+          child_valid = R.ValidatePtr2(p, child.item, 'MediaItem*') and R.GetMediaItemTrack(child.item) == child.track
+            and (math.floor(R.GetMediaItemInfo_Value(child.item, 'C_LOCK')) & 1) == 0
+          if checked then
+            if child_valid then checked[child.item] = child.track
+            else rejected = rejected or {};rejected[child.item] = child.track end
+          end
+        end
+        if not child_valid then valid = false;break end
       end
     end
     if valid then
@@ -981,15 +1036,19 @@ local function freeze_groups(rows, session)
       for _, state in ipairs(session.by_track[row.track] or {}) do
         local old = owned[state.item]
         if old then
-          local group = {s = math.huge, e = -math.huge, members = {}, old = old}
+          local group = session.groups[state.item]
+          if not group then group = {members = {}};session.groups[state.item] = group end
+          group.s, group.e, group.old, group.item, group.template = math.huge, -math.huge, old, nil, nil
+          local count = 0
           for _, child in ipairs(state.children) do
             local range = available[child.guid]
             if range then
               group.s, group.e = math.min(group.s, range.s), math.max(group.e, range.e)
-              group.members[#group.members + 1] = range.guid;assigned[range.guid] = true
+              count = count + 1;group.members[count] = range.guid;assigned[range.guid] = true
             end
           end
-          if #group.members > 0 then groups[#groups + 1] = group end
+          for i = #group.members, count + 1, -1 do group.members[i] = nil end
+          if count > 0 then groups[#groups + 1] = group end
         end
       end
       local extra = {}
@@ -1284,8 +1343,11 @@ local function remember(rows)
             end
           end
           if changed then
-            state = {item = item, guid = old.guid, track = row.track, s = old.s, e = old.e, locked = old.locked, children = {}}
-            for _, guid in ipairs(group.members) do state.children[#state.children + 1] = lookup[guid] end
+            -- The gesture's original child positions must stay immutable.
+            if not state or (gesture and gesture.original[item] == state) then state = {children = {}} end
+            state.item, state.guid, state.track, state.s, state.e, state.locked = item, old.guid, row.track, old.s, old.e, old.locked
+            for i, guid in ipairs(group.members) do state.children[i] = lookup[guid] end
+            for i = #state.children, #group.members + 1, -1 do state.children[i] = nil end
           end
           states[item] = state
         end
@@ -1461,7 +1523,7 @@ local function cleanup()
   stopped = true
   bindings = {}
   display_names = {}
-  cover_states, last_rows, gesture = {}, nil, nil
+  cover_states, last_rows, gesture, import_wait = {}, nil, nil, nil
   deleted_sets = {}
   pcall(restore_input)
   if R.set_action_options then pcall(R.set_action_options, 9) end
@@ -1506,20 +1568,56 @@ local function audit_changed(p, now)
   return false
 end
 
+-- A native import can pump deferred scripts while building peaks/loading media.
+-- Keep ancestor item lists unchanged until the host is ready to finish the batch.
+local function import_host_busy()
+  local main = R.GetMainHwnd and R.GetMainHwnd()
+  if main and R.JS_Window_GetLong then
+    local ok, style = pcall(R.JS_Window_GetLong, main, 'STYLE')
+    if ok and type(style) == 'number' and (math.floor(style) & 0x08000000) ~= 0 then return true end
+  end
+  if R.JS_Mouse_GetState then
+    local ok, buttons = pcall(R.JS_Mouse_GetState, 1)
+    if ok and type(buttons) == 'number' and (math.floor(buttons) & 1) ~= 0 then return true end
+  end
+  return false
+end
+
+local function wait_for_import(p, count, revision, history, editing)
+  if not import_wait then
+    if not last_rows or editing or count <= last_rows.item_count then return false, false end
+    if history ~= nil and history_index ~= nil and history ~= history_index and not import_host_busy() then return false, false end
+    if input_guard then restore_input() end
+    import_wait = {count = count, revision = revision, history = history, tracks = R.CountTracks(p), deadline = R.time_precise() + .25}
+    return true, false
+  end
+  local now, tracks = R.time_precise(), R.CountTracks(p)
+  local waiting = import_wait
+  local changed = count ~= waiting.count or revision ~= waiting.revision or tracks ~= waiting.tracks
+  if changed then
+    waiting.count, waiting.revision, waiting.tracks = count, revision, tracks
+    waiting.deadline = now + .25
+  end
+  if not editing and import_host_busy() then waiting.deadline = now + .25;return true, false end
+  local committed = history ~= nil and waiting.history ~= nil and history ~= waiting.history
+  if not editing and not committed and now < waiting.deadline then return true, false end
+  import_wait = nil
+  return false, true
+end
+
 local function update()
   local p = R.EnumProjects(-1, '')
   if not p then return end
   local revision = R.GetProjectStateChangeCount(p)
   local changed_project = p ~= project
   if p ~= project then
-    project, applied_revision, history_index = p, nil, nil
+    project, applied_revision, history_index, import_wait = p, nil, nil, nil
     bindings, display_names, cover_states, last_rows, gesture = {}, {}, {}, nil, nil
     audit_item, audit_track, was_editing = 1, 1, false
   end
   local flags = 0
   if R.GetItemEditingTime2 then local _, _, f = R.GetItemEditingTime2();flags = f or 0 end
-  constrain_input(p, flags, revision)
-  if (R.GetPlayStateEx(p) & 4) ~= 0 then return end
+  if (R.GetPlayStateEx(p) & 4) ~= 0 then constrain_input(p, flags, revision);return end
   local moving, editing = (flags & 4) ~= 0, (flags & 5) ~= 0
   local released = was_editing and not editing;was_editing = editing
   local redo = R.Undo_CanRedo2(p)
@@ -1531,7 +1629,11 @@ local function update()
   local suppress_delete = current_history and history_index and current_history < history_index
     or (not R.Undo_GetCurEntry and undoing)
   if undoing then gesture = nil end
-  local counts_changed = not last_rows or R.CountMediaItems(p) ~= last_rows.item_count
+  local item_count = R.CountMediaItems(p)
+  local counts_changed = not last_rows or item_count ~= last_rows.item_count
+  local waiting, imported = wait_for_import(p, item_count, revision, current_history, editing)
+  if waiting then return end
+  constrain_input(p, flags, revision)
   local silent = false
   if not changed_project and applied_revision == revision and not editing and not gesture and not released and not counts_changed then
     silent = audit_changed(p, R.time_precise());if not silent then return end
@@ -1539,7 +1641,7 @@ local function update()
   if not editing then restore_known_tracks(p) end
   if moving and not gesture and not undoing and next(cover_states) then gesture = begin_gesture() end
   if gesture then restore_known_tracks(p, gesture.drivers);move_gesture_children(p, gesture)
-  elseif not editing and not changed_project and (revision ~= applied_revision or silent or counts_changed) then move_changed_covers(p) end
+  elseif not editing and not imported and not changed_project and (revision ~= applied_revision or silent or counts_changed) then move_changed_covers(p) end
   local rows
   if editing and last_rows and not undoing and not counts_changed then
     rows = refresh_rows(p, last_rows)
@@ -1550,19 +1652,18 @@ local function update()
   end
   rows = rows or snapshot(p)
   if R.EnumProjects(-1, '') ~= p then return end
-  if sync_removed_covers(p, rows, changed_project or suppress_delete) then rows = snapshot(p) end
+  local uncommitted_addition = rows.added_items and (current_history == nil or history_index == nil or current_history == history_index)
+  if sync_removed_covers(p, rows, changed_project or suppress_delete or imported or uncommitted_addition) then rows = snapshot(p) end
   if moving and gesture then freeze_groups(rows, gesture)
   else
     gesture = nil
-    for _, row in ipairs(rows.dirty_rows or rows) do
-      row.groups = groups_from(row.ranges)
-    end
+    build_groups(rows)
   end
   local plan = make_plan(rows)
   if not plan then
     rows = snapshot(p)
     if moving and gesture then freeze_groups(rows, gesture)
-    else for _, row in ipairs(rows) do row.groups = groups_from(row.ranges) end end
+    else build_groups(rows) end
     plan = assert(make_plan(rows), 'Cover ownership changed during the update.')
   end
   rows.rebuild_watch = #plan.create + #plan.remove > 0

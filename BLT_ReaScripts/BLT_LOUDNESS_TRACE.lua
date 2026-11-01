@@ -1,5 +1,5 @@
 -- @description LOUDNESS TRACE
--- @version 0.8.7
+-- @version 0.8.8
 -- @author Balrulu
 -- @provides
 --   . > ../
@@ -352,8 +352,8 @@ function M.new(g,clock,palette)
  end
  function U:finish()
   if self.pressed and not self.hit then self.focus=nil end
-  if self.editor then self.editor:frame() end
   if self.released then self.capture=nil end
+  if self.editor then self.editor:frame() end
  end
  function U:interaction(id,x,y,w,h,enabled)
   enabled=enabled~=false and not self.blocked and not (self.editor and self.editor.edit);local s=self:state(id);local hot=enabled and self:inside(x,y,w,h)
@@ -1440,12 +1440,17 @@ function M.new(api,title,width,height,section)
   end
  end
  function H:close()
-  self:savePosition()
+  local failure
+  local function cleanup(fn,...)
+   local ok,why=pcall(fn,...);if not ok and not failure then failure=why end
+  end
+  if self.windowBegun then cleanup(self.finish,self)end
+  cleanup(self.savePosition,self)
   self.closing=true;self.imageHold=nil;self.resourceHold=nil
-  self:releaseRetiredImages()
-  clearGradients()
-  for _,image in ipairs(gradientImages) do self:releaseImage(image.image) end
+  cleanup(self.releaseRetiredImages,self);cleanup(clearGradients)
+  for _,image in ipairs(gradientImages)do cleanup(self.releaseImage,self,image.image)end
   gradientImages={};gradientPixels=0
+  if failure then error(failure,0)end
  end
  local function invalidateExposed(hwnd,l,t,r,b,nl,nt,nr,nb)
   if not(api.JS_Window_GetParent and api.JS_Window_ScreenToClient and api.JS_Window_InvalidateRect)then return end
@@ -1558,11 +1563,11 @@ function M.new(api,title,width,height,section)
   local focusFlag=self.seenWindow and I.WindowFlags_NoFocusOnAppearing or 0
   local shown,open=I.Begin(ctx,self.title,true,I.WindowFlags_NoScrollbar|I.WindowFlags_NoScrollWithMouse|I.WindowFlags_NoTitleBar|I.WindowFlags_NoMove|focusFlag)
   I.PopStyleColor(ctx);I.PopStyleVar(ctx,3)
+  self.windowBegun=shown
   if gradientFrame%60==1 then self:retainResources() end
   self.shown=shown;self.open=open
   if shown and previouslyShown==false then self.visibilitySettle=4 end
   self.resourceHold=self.imageHold or not shown or (self.visibilitySettle or 0)>0
-  self.windowBegun=shown
   if not shown then return false end
   self.seenWindow=true
   local dpi=I.GetWindowDpiScale(ctx)
@@ -1620,14 +1625,18 @@ function M.new(api,title,width,height,section)
   return true
  end
  function H:finish()
-  if self.resourceHold then self:retainImages() end
+  local ok,why=pcall(function()
+   if self.resourceHold then self:retainImages()end
+   if self.windowBegun then I.SetCursorScreenPos(ctx,self.originX,self.originY);I.Dummy(ctx,G.w,G.h)end
+  end)
   if self.windowBegun then
-   self.windowBegun=false
-   I.SetCursorScreenPos(ctx,self.originX,self.originY);I.Dummy(ctx,G.w,G.h);I.End(ctx)
+   self.windowBegun=false;local ended,err=pcall(I.End,ctx)
+   if not ended and ok then ok,why=false,err end
   end
+  if not ok then error(why,0)end
   if self.shown then
    if (self.visibilitySettle or 0)>0 then self.visibilitySettle=self.visibilitySettle-1 end
-   if not self.imageHold and (self.visibilitySettle or 0)==0 then self:releaseRetiredImages() end
+   if not self.imageHold and (self.visibilitySettle or 0)==0 then self:releaseRetiredImages()end
   end
   return self.open and not self.requestClose
  end
@@ -1660,8 +1669,8 @@ function M.new(host,ui,reference)
  function T:close(cancel,reason)
   local e=self.edit;self.edit=nil
   if e and not cancel then
-   e.done(e.text)
-   if self.onCommit then self.onCommit(e.id,e.text,reason or'blur')end
+   if self.drawing then e.reason=reason or'blur';self.commit=e
+   else e.done(e.text);if self.onCommit then self.onCommit(e.id,e.text,reason or'blur')end end
   end
  end
  function T:open(id,text,done)
@@ -1744,7 +1753,7 @@ function M.new(host,ui,reference)
   local base=host.originX+item.bounds.x
   local px=floor(base+max(0,width-p.width-2)-scroll);e.textX=px
   local ink=item.enabled and self.textColor or self.disabledColor
-  I.DrawList_PushClipRect(host.draw,x,y,base+width,y+height,true)
+  I.DrawList_PushClipRect(host.draw,x,y,base+width,y+height,true);self.inputClip=true
   if e.active and first~=last then
    I.DrawList_AddRectFilled(host.draw,px+min(p.firstWidth,p.lastWidth),y,px+max(p.firstWidth,p.lastWidth),y+height,self.selectionColor)
   end
@@ -1756,7 +1765,7 @@ function M.new(host,ui,reference)
   if e.active and (now-(e.blinkAt or now))%1.2<.8 then
    local cx=px+p.cursorWidth;I.DrawList_AddLine(host.draw,cx,y,cx,y+height,ink,1)
   end
-  I.DrawList_PopClipRect(host.draw)
+  self.inputClip=nil;I.DrawList_PopClipRect(host.draw)
  end
  function T:draw(item)
   local e=self.edit and self.edit.id==item.id and self.edit or nil
@@ -1765,7 +1774,7 @@ function M.new(host,ui,reference)
   local metrics=self:fontMetrics(b)
   local x,y=floor(host.originX+b.x),floor(host.originY+b.y)
   local font=host:fontFor(b.face,b.bold)
-  I.PushFont(ctx,font,metrics and metrics.size or max(8,floor(b.size+.5)))
+  I.PushFont(ctx,font,metrics and metrics.size or max(8,floor(b.size+.5)));self.inputFont=true
   local width=b.w
   local height=I.GetTextLineHeight(ctx);local padY=0
   if metrics then
@@ -1795,12 +1804,13 @@ function M.new(host,ui,reference)
      I.Function_SetValue(callback,'pointer',1);I.Function_SetValue(callback,'hit',e.dragAll and #e.text or hit);I.Function_SetValue(callback,'anchor',e.dragAll and 0 or e.dragAnchor)
     end
    end
-   I.PushStyleColor(ctx,I.Col_InputTextCursor,0);I.PushStyleColor(ctx,I.Col_TextSelectedBg,0)
+   I.PushStyleColor(ctx,I.Col_InputTextCursor,0);self.inputColors=1
+   I.PushStyleColor(ctx,I.Col_TextSelectedBg,0);self.inputColors=2
   end
   I.SetCursorScreenPos(ctx,x,y)
-  I.PushStyleVar(ctx,I.StyleVar_FramePadding,padX,padY)
-  I.PushStyleColor(ctx,I.Col_Text,aligned and 0 or item.enabled and self.textColor or self.disabledColor)
-  I.BeginDisabled(ctx,not item.enabled);I.SetNextItemWidth(ctx,width)
+  I.PushStyleVar(ctx,I.StyleVar_FramePadding,padX,padY);self.inputVar=true
+  I.PushStyleColor(ctx,I.Col_Text,aligned and 0 or item.enabled and self.textColor or self.disabledColor);self.inputColors=(self.inputColors or 0)+1
+  I.BeginDisabled(ctx,not item.enabled);self.inputDisabled=true;I.SetNextItemWidth(ctx,width)
   if e.frames==0 then I.SetKeyboardFocusHere(ctx) end
   local flags=I.InputTextFlags_AutoSelectAll
   if self.onCommit then flags=flags|I.InputTextFlags_EnterReturnsTrue end
@@ -1820,7 +1830,9 @@ function M.new(host,ui,reference)
    outside=mx<left or mx>=left+hit.w or my<top or my>=top+hit.h
   end
   if aligned then self:aligned(e,item,x,y+padY,width,height,font,I.GetFontSize(ctx)) end
-  I.EndDisabled(ctx);I.PopStyleColor(ctx,aligned and 3 or 1);I.PopStyleVar(ctx);I.PopFont(ctx)
+  self.inputDisabled=nil;I.EndDisabled(ctx)
+  self.inputColors=nil;I.PopStyleColor(ctx,aligned and 3 or 1)
+  self.inputVar=nil;I.PopStyleVar(ctx);self.inputFont=nil;I.PopFont(ctx)
   e.frames=e.frames+1
   if cancel then self:close(true)
   elseif self.onCommit and accepted and e.frames>1 then self:close(false,'enter')
@@ -1828,6 +1840,11 @@ function M.new(host,ui,reference)
  end
  function T:frame()
   local list=self.pending
+  if self.edit then
+   local present=false
+   for _,item in ipairs(list)do if item.id==self.edit.id and item.enabled then present=true;break end end
+   if not present then self:close(true,'unavailable')end
+  end
   if #list==0 then return end
   if reference then
    local dpi=host.dpi or I.GetWindowDpiScale(ctx)
@@ -1845,9 +1862,21 @@ function M.new(host,ui,reference)
   I.PushStyleVar(ctx,I.StyleVar_DisabledAlpha,1)
   I.PushStyleColor(ctx,I.Col_FrameBg,0);I.PushStyleColor(ctx,I.Col_FrameBgHovered,0);I.PushStyleColor(ctx,I.Col_FrameBgActive,0)
   I.PushStyleColor(ctx,I.Col_TextSelectedBg,self.selectionColor);I.PushStyleColor(ctx,I.Col_NavCursor,0)
-  for _,item in ipairs(list) do self:draw(item) end
+  self.drawing=true
+  local ok,why=xpcall(function()for _,item in ipairs(list)do self:draw(item)end end,debug.traceback)
+  self.drawing=false
+  if not ok then
+   if self.inputClip then self.inputClip=nil;pcall(I.DrawList_PopClipRect,host.draw)end
+   if self.inputDisabled then self.inputDisabled=nil;pcall(I.EndDisabled,ctx)end
+   if self.inputColors then local n=self.inputColors;self.inputColors=nil;pcall(I.PopStyleColor,ctx,n)end
+   if self.inputVar then self.inputVar=nil;pcall(I.PopStyleVar,ctx)end
+   if self.inputFont then self.inputFont=nil;pcall(I.PopFont,ctx)end
+  end
   I.PopStyleColor(ctx,5);I.PopStyleVar(ctx,3)
   for i=#list,1,-1 do list[i]=nil end
+  local commit=self.commit;self.commit=nil
+  if not ok then self.edit=nil;error(why,0)end
+  if commit then commit.done(commit.text);if self.onCommit then self.onCommit(commit.id,commit.text,commit.reason)end end
  end
  return T
 end
@@ -2777,16 +2806,25 @@ end)()
   I.PushStyleVar(ctx,I.StyleVar_WindowPadding,12,10)
   I.PushStyleColor(ctx,I.Col_PopupBg,host.rgba(C.panel[1],C.panel[2],C.panel[3],1))
   I.PushStyleColor(ctx,I.Col_Text,host.rgba(C.text[1],C.text[2],C.text[3],1))
+  local popupError
   if I.BeginPopup(ctx,'BLT_DEMO_PRESETS') then
-   if options.drawPresets then options.drawPresets(self) else
-   for index,preset in ipairs(options.presets) do
-    if I.Selectable(ctx,self.language=='JP' and preset.name or preset.nameEN,index==self.preset,0,180,24) then self:applyPreset(index) end
-   end
-   end
+   local ok,why=xpcall(function()
+    if options.drawPresets then options.drawPresets(self) else
+     for index,preset in ipairs(options.presets) do
+      if I.Selectable(ctx,self.language=='JP' and preset.name or preset.nameEN,index==self.preset,0,180,24)then
+       self.pendingPresetAction=function()self:applyPreset(index)end
+      end
+     end
+    end
+   end,debug.traceback)
+   if not ok then self.pendingPresetAction=nil;I.CloseCurrentPopup(ctx);popupError=why end
    I.EndPopup(ctx)
   end
   self.popupOpen=I.IsPopupOpen(ctx,'BLT_DEMO_PRESETS')
   I.PopStyleColor(ctx,2);I.PopStyleVar(ctx);I.PopFont(ctx)
+  if popupError then error(popupError,0)end
+  local action=self.pendingPresetAction;self.pendingPresetAction=nil
+  if action then action()end
   end
   local tip=self.hot and tips[self.hot]
   local footerHot=self.footerShown and self.footerShown~='' and self.footerShown~=self.footerMessage and
@@ -2876,7 +2914,7 @@ function UI:draw(owner)
   end
   I.EndDisabled(ctx)
   if clicked then
-   if navigate then UI.presetHoverAt=nil;action() else commit();action() end
+   if navigate then UI.presetHoverAt=nil;action()else I.CloseCurrentPopup(ctx);owner.pendingPresetAction=function()commit();action()end end
   end
   return clicked
  end
@@ -2900,12 +2938,12 @@ function UI:draw(owner)
     local p=Presets.items[index]
     if not p then break end
     if target==index then I.SetKeyboardFocusHere(ctx) end
-    item(p.name,current and current.name==p.name and 'check' or 'cards',function() Presets.apply(p);I.CloseCurrentPopup(ctx) end)
+    item(p.name,current and current.name==p.name and 'check' or 'cards',function() Presets.apply(p) end)
     if I.IsItemFocused(ctx) then UI.presetFocused=index end
     if I.IsItemClicked(ctx,1) then UI.contextPreset=p;I.OpenPopup(ctx,'INTERVAL_DELETE_PRESET') end
     if UI.contextPreset==p and I.BeginPopup(ctx,'INTERVAL_DELETE_PRESET') then
      if I.Selectable(ctx,Language.code=='EN' and 'Delete' or '削除',false,0,120,24) then
-      Presets.remove(p);UI.contextPreset=nil;if #Presets.items==0 then UI.presetPage='main' end
+      owner.pendingPresetAction=function()Presets.remove(p);UI.contextPreset=nil;if #Presets.items==0 then UI.presetPage='main'end end
      end
      I.EndPopup(ctx)
     end

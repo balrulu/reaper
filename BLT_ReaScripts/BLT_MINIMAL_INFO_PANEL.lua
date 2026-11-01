@@ -1,5 +1,5 @@
 -- @description MINIMAL INFO PANEL
--- @version 0.2.28
+-- @version 0.2.30
 -- @author Balrulu
 -- @provides
 --   . > ../
@@ -386,12 +386,17 @@ function M.new(api,title,width,height,section)
   end
  end
  function H:close()
-  self:savePosition()
+  local failure
+  local function cleanup(fn,...)
+   local ok,why=pcall(fn,...);if not ok and not failure then failure=why end
+  end
+  if self.windowBegun then cleanup(self.finish,self)end
+  cleanup(self.savePosition,self)
   self.closing=true;self.imageHold=nil;self.resourceHold=nil
-  self:releaseRetiredImages()
-  clearGradients()
-  for _,image in ipairs(gradientImages) do self:releaseImage(image.image) end
+  cleanup(self.releaseRetiredImages,self);cleanup(clearGradients)
+  for _,image in ipairs(gradientImages)do cleanup(self.releaseImage,self,image.image)end
   gradientImages={};gradientPixels=0
+  if failure then error(failure,0)end
  end
  local function invalidateExposed(hwnd,l,t,r,b,nl,nt,nr,nb)
   if not(api.JS_Window_GetParent and api.JS_Window_ScreenToClient and api.JS_Window_InvalidateRect)then return end
@@ -502,12 +507,12 @@ function M.new(api,title,width,height,section)
   local focusFlag=self.seenWindow and I.WindowFlags_NoFocusOnAppearing or 0
   local shown,open=I.Begin(ctx,self.title,true,I.WindowFlags_NoScrollbar|I.WindowFlags_NoScrollWithMouse|I.WindowFlags_NoTitleBar|I.WindowFlags_NoMove|I.WindowFlags_NoResize|focusFlag)
   I.PopStyleColor(ctx);I.PopStyleVar(ctx,3)
+  self.windowBegun=shown
   if gradientFrame%60==1 then self:retainResources() end
   self.shown=shown;self.open=open
   if self.onWindow then self.onWindow() end
   if shown and previouslyShown==false then self.visibilitySettle=4 end
   self.resourceHold=self.imageHold or not shown or (self.visibilitySettle or 0)>0
-  self.windowBegun=shown
   if not shown then return false end
   self.seenWindow=true
   local dpi=I.GetWindowDpiScale(ctx)
@@ -554,14 +559,18 @@ function M.new(api,title,width,height,section)
   return true
  end
  function H:finish()
-  if self.resourceHold then self:retainImages() end
+  local ok,why=pcall(function()
+   if self.resourceHold then self:retainImages()end
+   if self.windowBegun then I.SetCursorScreenPos(ctx,self.originX,self.originY);I.Dummy(ctx,G.w,G.h)end
+  end)
   if self.windowBegun then
-   self.windowBegun=false
-   I.SetCursorScreenPos(ctx,self.originX,self.originY);I.Dummy(ctx,G.w,G.h);I.End(ctx)
+   self.windowBegun=false;local ended,err=pcall(I.End,ctx)
+   if not ended and ok then ok,why=false,err end
   end
+  if not ok then error(why,0)end
   if self.shown then
    if (self.visibilitySettle or 0)>0 then self.visibilitySettle=self.visibilitySettle-1 end
-   if not self.imageHold and (self.visibilitySettle or 0)==0 then self:releaseRetiredImages() end
+   if not self.imageHold and (self.visibilitySettle or 0)==0 then self:releaseRetiredImages()end
   end
   return self.open and not self.requestClose
  end
@@ -1088,8 +1097,14 @@ function M.new(H,G,api,native,ShellText,ChromeRaster,beginFrame,changed)
  function G.beginDraw()beginFrame();G.abort();fullDraw=true end
  G.release=G.abort
  function D:close()
-  for _,img in pairs(images)do H:releaseImage(img.image)end
-  chrome:close();text:close();front,back,partial,fonts,families,images,gradients,slots={n=0},{n=0},{n=0},{},{},{},{},{}
+  local failure
+  local function cleanup(fn,...)
+   local ok,why=pcall(fn,...);if not ok and not failure then failure=why end
+  end
+  for _,img in pairs(images)do cleanup(H.releaseImage,H,img.image)end
+  cleanup(chrome.close,chrome);cleanup(text.close,text)
+  front,back,partial,fonts,families,images,gradients,slots={n=0},{n=0},{n=0},{},{},{},{},{}
+  if failure then error(failure,0)end
  end
  return D
 end
@@ -1108,7 +1123,7 @@ function M.install(api,native,CanvasHost,options,ShellText,ChromeRaster,CanvasDr
  local dockID,requestedDock,rectRequest=0,nil,nil
  local redraw=true
  local dockWait,dockSettle=0,0
- local beginFrame,special,display,overlay
+ local beginFrame,special,display,overlay,contextMenu,menuError
  local function ensure()
   assert(api.ImGui_GetBuiltinPath,'ReaImGui 0.10以降が必要です。')
   if H then return end
@@ -1141,11 +1156,17 @@ function M.install(api,native,CanvasHost,options,ShellText,ChromeRaster,CanvasDr
    end
   end
  end
+ local function clearContextMenu()
+  local menu=contextMenu;if not menu then return end
+  contextMenu=nil;keys={}
+  local flags=I.GetConfigVar(ctx,I.ConfigVar_Flags)
+  I.SetConfigVar(ctx,I.ConfigVar_Flags,(flags&~I.ConfigFlags_NavEnableKeyboard)|menu.keyboard)
+ end
  function G.setfont(...)ensure();return G.setfont(...)end
  function G.measurestr(...)ensure();return G.measurestr(...)end
  local function input()
   spaceUsed=false
-  if not H.focused then keys={};return end
+  if contextMenu or not H.focused then keys={};return end
   local ctrl,alt=(G.mouse_cap&4)~=0 or H.mac and(G.mouse_cap&32)~=0,(G.mouse_cap&16)~=0
   local idx=0
   while true do local ok,cp=I.GetInputQueueCharacter(ctx,idx);if not ok then break end
@@ -1166,28 +1187,98 @@ function M.install(api,native,CanvasHost,options,ShellText,ChromeRaster,CanvasDr
    for _,key in ipairs({'w','h','mouse_x','mouse_y','mouse_cap','mouse_wheel','ext_retina'})do G[key]=H.g[key]end
    input()
   else
-   H.focused,H.hovered=false,false;G.mouse_x,G.mouse_y,G.mouse_cap,G.mouse_wheel=-10000,-10000,0,0;keys={}
+   clearContextMenu();H.focused,H.hovered=false,false;G.mouse_x,G.mouse_y,G.mouse_cap,G.mouse_wheel=-10000,-10000,0,0;keys={}
   end
  end
  function G.inputContext(face)
   ensure();return I,ctx,H:fontFor(face,false),H.originX or 0,H.originY or 0
  end
  function G.setOverlay(fn)overlay=fn end
+ local function closeMenuScope(scopes)
+  local fn=scopes[#scopes];scopes[#scopes]=nil;fn(ctx)
+ end
+ local function drawContextMenu()
+  local menu=contextMenu;if not menu then return end
+  local scopes=menu.scopes or{};menu.scopes=scopes
+  local choice,open
+  local ok,why=xpcall(function()
+   local id='##BLT_CANVAS_CONTEXT'
+   if menu.pending then
+    I.SetNextWindowPos(ctx,(H.originX or 0)+menu.x,(H.originY or 0)+menu.y,I.Cond_Appearing)
+    I.OpenPopup(ctx,id);menu.pending=nil
+   end
+   I.PushFont(ctx,H:fontFor(H.faces[1],false),13);scopes[#scopes+1]=I.PopFont
+   if I.BeginPopup(ctx,id)then
+    scopes[#scopes+1]=I.EndPopup
+    if I.IsKeyPressed(ctx,I.Key_Escape,false)then I.CloseCurrentPopup(ctx)end
+    local function items(rows)
+     for i,item in ipairs(rows)do
+      I.PushID(ctx,i);scopes[#scopes+1]=I.PopID
+      if item.separator then I.Separator(ctx)
+      elseif item.children then
+       if I.BeginMenu(ctx,item.label,item.enabled~=false)then
+        scopes[#scopes+1]=I.EndMenu;items(item.children);closeMenuScope(scopes)
+       end
+      elseif I.MenuItem(ctx,item.label,nil,item.checked==true,item.enabled~=false)then choice=item.id or i end
+      closeMenuScope(scopes)
+     end
+    end
+    items(menu.items);closeMenuScope(scopes)
+   end
+   closeMenuScope(scopes);open=I.IsPopupOpen(ctx,id,0)
+  end,debug.traceback)
+  while #scopes>0 do pcall(closeMenuScope,scopes)end
+  if not ok or choice or not open then
+   local cleared,err=pcall(clearContextMenu)
+   if not cleared and ok then ok,why=false,err end
+   if ok and choice then ok,why=xpcall(menu.select,debug.traceback,choice)end
+   if not ok then if menuError then menuError(why)else error(why,0)end end
+  end
+ end
+ function G.openContextMenu(items,select)
+  clearContextMenu()
+  local flags=I.GetConfigVar(ctx,I.ConfigVar_Flags)
+  contextMenu={items=items,select=select,x=G.x,y=G.y,pending=true,keyboard=flags&I.ConfigFlags_NavEnableKeyboard}
+  I.SetConfigVar(ctx,I.ConfigVar_Flags,flags|I.ConfigFlags_NavEnableKeyboard);keys={};redraw=true
+ end
+ function G.openMenu(caption,select)
+  local rows,stack,index={},{},0;local current=rows
+  for token in (caption..'|'):gmatch('(.-)|')do
+   local label,close,submenu,checked,enabled=token,0,false,false,true
+   while label:find('^[><!#]')do
+    local flag=label:sub(1,1);label=label:sub(2)
+    if flag=='>'then submenu=true elseif flag=='<'then close=close+1 elseif flag=='!'then checked=true else enabled=false end
+   end
+   if submenu then
+    local children={};current[#current+1]={label=label,children=children,enabled=enabled}
+    stack[#stack+1]=current;current=children
+   elseif label~=''then
+    index=index+1;current[#current+1]={label=label,id=index,enabled=enabled,checked=checked}
+   elseif close==0 then current[#current+1]={separator=true}end
+   for _=1,close do if #stack>0 then current=table.remove(stack)end end
+  end
+  G.openContextMenu(rows,select)
+ end
+ function G.setMenuErrorHandler(fn)menuError=fn end
+ function G.contextMenuOpen()return contextMenu~=nil end
  local function finishFrame()
   if not frame then return end
-  display:commit()
+  local menuWasOpen=contextMenu~=nil
   local previousCallback=insideCallback;insideCallback=true
   local ok,err=pcall(function()
+   display:commit()
    if H.shown and not closed then
     display:draw()
     if overlay then overlay()end
+    if not closed then drawContextMenu()end
    end
   end)
   insideCallback=previousCallback
-  frame=false;local open=H:finish()
+  frame=false;local ended,open=pcall(H.finish,H)
+  if not ended then if ok then ok,err=false,open end;open=false end
   if requestedDock==nil and H.shown and dockSettle>0 then dockSettle=dockSettle-1 end
   if requestedDock==nil and H.shown and dockSettle==0 then H.imageHold=nil end
-  redraw=requestedDock~=nil or rectRequest~=nil or dockSettle>0
+  redraw=requestedDock~=nil or rectRequest~=nil or dockSettle>0 or menuWasOpen or contextMenu~=nil
   if not open then H.requestClose=true end
   if not ok then error(err,0)end
  end
@@ -1195,7 +1286,7 @@ function M.install(api,native,CanvasHost,options,ShellText,ChromeRaster,CanvasDr
   if frame and not insideCallback then finishFrame()end
   return api.defer(function()
    if closed then return end
-   local idle=H and H.shown and not redraw and H:idle(api.time_precise())
+   local idle=H and H.shown and not redraw and not contextMenu and H:idle(api.time_precise())
    if not idle then beginFrame()end
    insideCallback=true
    local ok,err=xpcall(fn,debug.traceback);insideCallback=false
@@ -1217,7 +1308,7 @@ function M.install(api,native,CanvasHost,options,ShellText,ChromeRaster,CanvasDr
   return table.remove(keys,1)or 0
  end
  function G.spacePressed()
-  if spaceUsed then return false end
+  if spaceUsed or contextMenu then return false end
   spaceUsed=true
   return H and H.focused and I.IsKeyPressed(ctx,I.Key_Space,false)
  end
@@ -1259,17 +1350,19 @@ function M.install(api,native,CanvasHost,options,ShellText,ChromeRaster,CanvasDr
   return V
  end
  function G.clienttoscreen(x,y)ensure();if not frame then beginFrame()end;return I.PointConvertNative(ctx,(H.originX or 0)+x,(H.originY or 0)+y,true)end
- function G.showmenu(menu)
-  local x,y=G.clienttoscreen(G.x,G.y);native.x,native.y=x,y
-  return native.showmenu(menu)
- end
  function G.quit()
   if closed then return end;closed=true;overlay=nil
-  if frame then frame=false;H:finish()end
-  if H then
-   H.imageHold=nil;H:releaseRetiredImages()
-   display:close();keys={};H:close()
+  local failure
+  local function cleanup(fn,...)
+   local ok,why=pcall(fn,...);if not ok and not failure then failure=why end
   end
+  cleanup(clearContextMenu)
+  if frame then frame=false;cleanup(H.finish,H)end
+  if H then
+   H.imageHold=nil;cleanup(H.releaseRetiredImages,H)
+   cleanup(display.close,display);keys={};cleanup(H.close,H)
+  end
+  if failure then error(failure,0)end
  end
  return P,G
 end
@@ -1441,7 +1534,12 @@ local BLTNativeDialogs=(function()
    local function finish()
     if active then local session=active;active=nil;local failed=restore(session);if #failed>0 then warn() end end
     if pending then pending.windows=restore(pending);if #pending.windows>0 then warn() end end
-    if exitHandler then exitHandler() end
+    local ok,why=true,nil
+    if exitHandler then ok,why=xpcall(exitHandler,debug.traceback)end
+    if view and type(view.inputContext)=='function'and type(view.quit)=='function'then
+     local closed,err=pcall(view.quit);if not closed and ok then ok,why=false,err end
+    end
+    if not ok then error(why,0)end
    end
    P.atexit=function(fn) exitHandler=fn;return api.atexit(finish) end
    api.atexit(finish)
@@ -2057,7 +2155,9 @@ end
 function Presets.context(p,x,y)
  if not p or Presets.isFactory(p) or PresetDelete.busy() then return end
  gfx.x=x;gfx.y=y
- if gfx.showmenu(PresetDelete.english() and 'Delete' or '削除')==1 then Presets.remove(p) end
+ gfx.openMenu(PresetDelete.english() and 'Delete' or '削除',function(choice)
+  if choice==1 then Presets.remove(p)end
+ end)
  Presets.pressed=nil;Presets.hoverSince=nil
  Presets.down=((gfx.mouse_cap or 0)&1)~=0
  Presets.rightDown=((gfx.mouse_cap or 0)&2)~=0
@@ -2195,8 +2295,9 @@ function Presets.nativeMenu(x,y)
  add(Language.message('現在値をエクスポート'),function() Presets.export(false) end,Presets.isFactory(Presets.current))
  add(Language.message('プリセット一覧をエクスポート'),function() Presets.export(true) end,#Presets.items==0)
  gfx.x=x;gfx.y=y
- local choice=gfx.showmenu(table.concat(labels,'|'))
- local action=actions[choice];if action then action() end
+ gfx.openMenu(table.concat(labels,'|'),function(choice)
+  local action=actions[choice];if action then action()end
+ end)
  Presets.swallow=true;wake_visuals()
 end
 function Presets.menu(x,y)
@@ -2272,6 +2373,9 @@ end
 function Presets.update(active)
   if Presets.swallow and ((gfx.mouse_cap or 0)&3)==0 then Presets.swallow=false end
   if not Presets.open then return end
+  if host.modal()then
+   Presets.down=((gfx.mouse_cap or 0)&1)~=0;Presets.rightDown=((gfx.mouse_cap or 0)&2)~=0;Presets.hoverSince=nil;return
+  end
   if not active then Presets.dismiss();return end
   local x,y,w,h,rows=Presets.layout()
   local mx,my=gfx.mouse_x,gfx.mouse_y;local down=(gfx.mouse_cap&1)~=0
@@ -2486,6 +2590,9 @@ function B.toggleLanguage()
  end
 end
 function B.attach(h)
+ local modal=h.modal
+ h.modal=function()return gfx.contextMenuOpen()or modal and modal()or false end
+ gfx.setMenuErrorHandler(function(why)B.recoverInput(h.menuState or {},why)end)
  host=h;R=h.R;C=h.C;Chrome=h.Chrome;Chameleon=h.Chameleon
  B.language=Language;B.presets=Presets;B.ui=UI;B.host=h
  Presets.factory={name='ファクトリーデフォルト',factory=true,values=B.copy(h.defaults)}
@@ -2496,7 +2603,7 @@ function B.attach(h)
  end;table.sort(Presets.items,function(a,b)return a.name<b.name end)
 end
 function B.blocked()
- return Presets.open or Presets.swallow or UI.barHit(gfx.mouse_x,gfx.mouse_y)
+ return gfx.contextMenuOpen()or Presets.open or Presets.swallow or UI.barHit(gfx.mouse_x,gfx.mouse_y)
 end
 -- Shared project Undo shortcut. Embedded; no runtime file dependency.
 local function create_project_undo(api,context)
@@ -3662,10 +3769,13 @@ function PeakZoom.menu()
  end
  if #commands==0 then return end
  gfx.x=gfx.mouse_x;gfx.y=gfx.mouse_y
- local command=commands[gfx.showmenu(table.concat(names,'|'))]
- if command and project==R.EnumProjects(-1,'') and R.GetToggleCommandStateEx(0,command)~=1 then
-  R.Main_OnCommand(command,0);R.UpdateArrange()
- end
+ gfx.openMenu(table.concat(names,'|'),function(choice)
+  local command=commands[choice]
+  if command and project==R.EnumProjects(-1,'') and R.GetToggleCommandStateEx(0,command)~=1 then
+   R.Main_OnCommand(command,0);R.UpdateArrange()
+  end
+  PeakZoom.poll(true);wake_visuals()
+ end)
  PeakZoom.poll(true);wake_visuals()
 end
 function PeakZoom.supported()
@@ -4077,6 +4187,7 @@ end
 local function interact()
  WheelUndo.poll(R.time_precise())
  local cap=gfx.mouse_cap or 0;local down=(cap&1)~=0;local right=(cap&2)~=0
+ if gfx.contextMenuOpen()then downLast=down;A.rightLast=right;gfx.mouse_wheel=0;return end
  if PeakZoom.capture(cap,down) then downLast=down;A.rightLast=right;gfx.mouse_wheel=0;return end
  if not BLT.blocked() and not Chrome.mouseActive and bar_input(down) then A.rightLast=right;return end
  if E then downLast=down;A.rightLast=right;gfx.mouse_wheel=0;return end
@@ -4092,18 +4203,19 @@ local function interact()
     (Rename.numbered and'!'or'')..Language.text('複数選択状態でリネームした場合、連番を付与'),
     (Rename.tracks and'!'or'')..Language.text('リネーム時、トラック名を同時に変更')}
    gfx.x,gfx.y=gfx.mouse_x,gfx.mouse_y
-   local choice=gfx.showmenu(table.concat(names,'|'))
-   if choice==1 then Rename.numbered=not Rename.numbered
-   elseif choice==2 then Rename.tracks=not Rename.tracks end
-   if choice==1 or choice==2 then save_settings();wake_visuals()end
+   gfx.openMenu(table.concat(names,'|'),function(choice)
+    if choice==1 then Rename.numbered=not Rename.numbered
+    elseif choice==2 then Rename.tracks=not Rename.tracks end
+    if choice==1 or choice==2 then save_settings();wake_visuals()end
+   end)
    gfx.mouse_wheel=0;A.rightLast=true;downLast=false;return
   elseif f.key=='length' then
    local modes={3,0,4,5,6,2,-1};local names=Language.code=='JP' and {'秒','分秒','サンプル','時:分:秒:フレーム','フレーム','小節.拍','ルーラーと連動'} or {'Seconds','Time','Samples','Timecode (h:m:s:f)','Frames','Measures.beats','Follow ruler'}
    for i,m in ipairs(modes) do if m==lengthMode then names[i]='!'..names[i] end end
    gfx.x=gfx.mouse_x;gfx.y=gfx.mouse_y
-   local choice=gfx.showmenu(table.concat(names,'|'))
-   if modes[choice] then lengthMode=modes[choice];save_settings();poll(true)
-   end
+   gfx.openMenu(table.concat(names,'|'),function(choice)
+    if modes[choice]then lengthMode=modes[choice];save_settings();poll(true)end
+   end)
    gfx.mouse_wheel=0;A.rightLast=true;downLast=false;return
   end
  end
@@ -4367,7 +4479,7 @@ local function tooltip(x,y)
   or ('Type / Wheel / Drag · Shift: 1/10 · Ctrl (Cmd): absolute · Ctrl (Cmd)+click: reset')
 end
 Media.state=A;Media.onchange=function() wake_visuals() end
-BLT.attach({R=R,C=C,Chrome=Chrome,Chameleon=Chameleon,section=SECTION,faces=fonts,font=font,
+BLT.attach({menuState=A,R=R,C=C,Chrome=Chrome,Chameleon=Chameleon,section=SECTION,faces=fonts,font=font,
  docked=docked,fold=function() Chrome.requestDock=true end,transition=function()return Dock.target~=nil end,geometry=function() return 1,0,0 end,active=function() local f=gfx.getchar(65536);return (f&1)==0 or (f&2)~=0 end,
  wake=function() wake_visuals();A.content_dirty=true end,defaults=Core.defaults,capture=function() return S end,
  valid=Core.valid_settings,apply=function(v) S=BLT.copy(v);lengthMode=S.lengthMode;save_settings();poll(true);wake_visuals() end,
