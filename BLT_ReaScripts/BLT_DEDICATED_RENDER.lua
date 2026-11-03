@@ -1,5 +1,5 @@
 -- @description BLT DEDICATED RENDER
--- @version 0.14.19
+-- @version 0.14.20
 -- @author Balrulu
 -- @provides
 --   . > ../
@@ -1575,7 +1575,13 @@ local BLTNativeDialogs=(function()
   end
   for _,name in ipairs({'GetUserInputs','MB','ShowMessageBox','GetUserFileName','GetUserFileNameForRead','JS_Dialog_BrowseForSaveFile','JS_Dialog_BrowseForOpenFiles','JS_Dialog_BrowseForFolder','GR_SelectColor','Main_OnCommand','Main_OnCommandEx','CF_SendActionShortcut','MIDIEditor_LastFocused_OnCommand'}) do
    local fn=api[name]
-   if type(fn)=='function' then P[name]=function(...) return call(fn,...) end end
+   if type(fn)=='function' then
+    local transport=name=='Main_OnCommand' or name=='Main_OnCommandEx'
+    P[name]=function(...)
+     if transport and select(1,...)==40044 then return fn(...) end
+     return call(fn,...)
+    end
+   end
   end
   if type(api.GetSetProjectInfo_String)=='function' then
    local fn=api.GetSetProjectInfo_String
@@ -2193,7 +2199,7 @@ function Embed.write_aiff(path,plan,source)
  if not ok then if exists(temp)then os.remove(temp)end;error(err,0)end
 end
 
-local Model={VERSION='0.14.19',SOURCE_MASK=1|2|8|32|64|128|4096}
+local Model={VERSION='0.14.20',SOURCE_MASK=1|2|8|32|64|128|4096}
 Model.numbers={'RENDER_SETTINGS','RENDER_BOUNDSFLAG','RENDER_CHANNELS','RENDER_SRATE','RENDER_STARTPOS','RENDER_ENDPOS','RENDER_TAILFLAG','RENDER_TAILMS','RENDER_ADDTOPROJ','RENDER_DITHER','RENDER_NORMALIZE','RENDER_NORMALIZE_TARGET','RENDER_BRICKWALL','RENDER_FADEIN','RENDER_FADEOUT','RENDER_FADEINSHAPE','RENDER_FADEOUTSHAPE','RENDER_FADELPF','RENDER_PADSTART','RENDER_PADEND','RENDER_TRIMSTART','RENDER_TRIMEND','RENDER_DELAY'}
 Model.strings={'RENDER_FILE','RENDER_PATTERN','RENDER_EXTRAFILEDIR','RENDER_FORMAT2','RENDER_FORMAT'}
 Model.configs={'projrenderlimit','projrenderspeedcap','projrenderresample','projrenderrateinternal','renderclosewhendone','renderpeaks','projrenderqdelay','renderbsnew'}
@@ -7279,6 +7285,7 @@ function M.install(api,view,options)
    return pcall(api.Main_OnCommand,40044,0)
   end
   if options.beforeGlobal then options.beforeGlobal(k) end
+  if space and found.section==0 and tonumber(found.command)==40044 then return pcall(api.Main_OnCommand,40044,0) end
   if (found.flags&1)~=0 and type(api.CF_SendActionShortcut)=='function' then
    local ok,result=pcall(api.CF_SendActionShortcut,api.GetMainHwnd(),found.section*100,found.key,mods)
    if ok and (result==true or result==1) then return true end

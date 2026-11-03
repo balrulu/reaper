@@ -1,5 +1,5 @@
 -- @description VARIANT FORGE
--- @version 0.6.10
+-- @version 0.6.11
 -- @author Balrulu
 -- @provides
 --   . > ../
@@ -1372,7 +1372,7 @@ end)()
 if type(reaper.ImGui_GetBuiltinPath)~='function'then reaper.MB('ReaImGui 0.10以降が必要です。 / ReaImGui 0.10 or later is required.','BLT Variant Forge',0);return end
 local reaper,gfx=AppCanvas.install(reaper,gfx,AppCanvasHost,{section='BLT_VARIANT_FORGE',title='BLT Variant Forge',width=900,height=910,minWidth=780,minHeight=800},AppShellText,AppChromeRaster,AppCanvasDraw)
 do
--- BEGIN BLT NATIVE DIALOGS 1.2.1 (generated from _shared/BLT_NativeDialogs.lua)
+-- BEGIN BLT NATIVE DIALOGS 1.2.2 (generated from _shared/BLT_NativeDialogs.lua)
 local BLTNativeDialogs=(function()
  local M={}
  function M.install(api,view)
@@ -1569,7 +1569,13 @@ local BLTNativeDialogs=(function()
   end
   for _,name in ipairs({'GetUserInputs','MB','ShowMessageBox','GetUserFileName','GetUserFileNameForRead','JS_Dialog_BrowseForSaveFile','JS_Dialog_BrowseForOpenFiles','JS_Dialog_BrowseForFolder','GR_SelectColor','Main_OnCommand','Main_OnCommandEx','CF_SendActionShortcut','MIDIEditor_LastFocused_OnCommand'}) do
    local fn=api[name]
-   if type(fn)=='function' then P[name]=function(...) return call(fn,...) end end
+   if type(fn)=='function' then
+    local transport=name=='Main_OnCommand' or name=='Main_OnCommandEx'
+    P[name]=function(...)
+     if transport and select(1,...)==40044 then return fn(...) end
+     return call(fn,...)
+    end
+   end
   end
   if type(api.GetSetProjectInfo_String)=='function' then
    local fn=api.GetSetProjectInfo_String
@@ -4159,7 +4165,7 @@ end
 return B
 end)()
 
-local Core={VERSION='0.6.10',SOURCE_SR=48000,SOURCE_HOP=48,SOURCE_BLOCK=12000,SOURCE_PREVIEW_BINS=1400,SOURCE_MAX_REGIONS=16384,
+local Core={VERSION='0.6.11',SOURCE_SR=48000,SOURCE_HOP=48,SOURCE_BLOCK=12000,SOURCE_PREVIEW_BINS=1400,SOURCE_MAX_REGIONS=16384,
  GENERATED_TAG='P_EXT:BLT_VARIANT_FORGE',TEMP_TAG='P_EXT:BLT_VARIANT_FORGE_TEMP',SECTION='BLT_VARIANT_FORGE',EQ_FIXED_CACHE={}}
 Core.STALE_TEMP_PROJECTS={};Core.RUN_ID='';Core.TEMP_HEARTBEAT_TTL=8;Core.TEMP_HEARTBEAT_KEY='temp_live_registry_v1';Core.temp_heartbeat_at=0
 local abs,min,max,floor,ceil=math.abs,math.min,math.max,math.floor,math.ceil
@@ -8909,7 +8915,7 @@ BLT.attach({menuState=A,
  cursor=UI.set_resize_cursor,beginResize=UI.begin_window_resize,resize=UI.update_window_resize,
 
 })
--- BEGIN BLT SHORTCUTS 1.0.3 (generated from _shared/BLT_Shortcuts.lua)
+-- BEGIN BLT SHORTCUTS 1.0.4 (generated from _shared/BLT_Shortcuts.lua)
 local BLTShortcuts=(function()
 local M={}
 local special={[8]=8,[9]=9,[13]=13,[27]=27,[32]=32,
@@ -9005,6 +9011,7 @@ function M.install(api,view,options)
    return pcall(api.Main_OnCommand,40044,0)
   end
   if options.beforeGlobal then options.beforeGlobal(k) end
+  if space and found.section==0 and tonumber(found.command)==40044 then return pcall(api.Main_OnCommand,40044,0) end
   if (found.flags&1)~=0 and type(api.CF_SendActionShortcut)=='function' then
    local ok,result=pcall(api.CF_SendActionShortcut,api.GetMainHwnd(),found.section*100,found.key,mods)
    if ok and (result==true or result==1) then return true end

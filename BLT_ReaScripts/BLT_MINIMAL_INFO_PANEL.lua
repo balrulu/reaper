@@ -1,5 +1,5 @@
 -- @description MINIMAL INFO PANEL
--- @version 0.2.32
+-- @version 0.2.33
 -- @author Balrulu
 -- @provides
 --   . > ../
@@ -1374,7 +1374,7 @@ if type(reaper.ImGui_GetBuiltinPath)~='function'then reaper.MB('ReaImGui 0.10以
 local reaper,gfx=AppCanvas.install(reaper,gfx,AppCanvasHost,
  {section='BLT_MINIMAL_INFO_PANEL',title='BLT MINIMAL INFO PANEL',width=1070,height=100,minWidth=1070,minHeight=70},AppShellText,AppChromeRaster,AppCanvasDraw)
 do
--- BEGIN BLT NATIVE DIALOGS 1.2.1 (generated from _shared/BLT_NativeDialogs.lua)
+-- BEGIN BLT NATIVE DIALOGS 1.2.2 (generated from _shared/BLT_NativeDialogs.lua)
 local BLTNativeDialogs=(function()
  local M={}
  function M.install(api,view)
@@ -1571,7 +1571,13 @@ local BLTNativeDialogs=(function()
   end
   for _,name in ipairs({'GetUserInputs','MB','ShowMessageBox','GetUserFileName','GetUserFileNameForRead','JS_Dialog_BrowseForSaveFile','JS_Dialog_BrowseForOpenFiles','JS_Dialog_BrowseForFolder','GR_SelectColor','Main_OnCommand','Main_OnCommandEx','CF_SendActionShortcut','MIDIEditor_LastFocused_OnCommand'}) do
    local fn=api[name]
-   if type(fn)=='function' then P[name]=function(...) return call(fn,...) end end
+   if type(fn)=='function' then
+    local transport=name=='Main_OnCommand' or name=='Main_OnCommandEx'
+    P[name]=function(...)
+     if transport and select(1,...)==40044 then return fn(...) end
+     return call(fn,...)
+    end
+   end
   end
   if type(api.GetSetProjectInfo_String)=='function' then
    local fn=api.GetSetProjectInfo_String
@@ -4563,7 +4569,7 @@ end
 Dock.left=clamp(extnum('dock_row_left',0),0,1);Dock.right=clamp(extnum('dock_row_right',1),0,1)
 if Dock.right<=Dock.left then Dock.left,Dock.right=0,1 end
 
--- BEGIN BLT SHORTCUTS 1.0.3 (generated from _shared/BLT_Shortcuts.lua)
+-- BEGIN BLT SHORTCUTS 1.0.4 (generated from _shared/BLT_Shortcuts.lua)
 local BLTShortcuts=(function()
 local M={}
 local special={[8]=8,[9]=9,[13]=13,[27]=27,[32]=32,
@@ -4659,6 +4665,7 @@ function M.install(api,view,options)
    return pcall(api.Main_OnCommand,40044,0)
   end
   if options.beforeGlobal then options.beforeGlobal(k) end
+  if space and found.section==0 and tonumber(found.command)==40044 then return pcall(api.Main_OnCommand,40044,0) end
   if (found.flags&1)~=0 and type(api.CF_SendActionShortcut)=='function' then
    local ok,result=pcall(api.CF_SendActionShortcut,api.GetMainHwnd(),found.section*100,found.key,mods)
    if ok and (result==true or result==1) then return true end

@@ -1,5 +1,5 @@
 -- @description SIMPLE NORMALIZER
--- @version 0.6.6
+-- @version 0.6.7
 -- @author Balrulu
 -- @provides
 --   . > ../
@@ -10,7 +10,7 @@
 
 local reaper=reaper
 do
--- BEGIN BLT NATIVE DIALOGS 1.2.1 (generated from _shared/BLT_NativeDialogs.lua)
+-- BEGIN BLT NATIVE DIALOGS 1.2.2 (generated from _shared/BLT_NativeDialogs.lua)
 local BLTNativeDialogs=(function()
  local M={}
  function M.install(api,view)
@@ -202,7 +202,13 @@ local BLTNativeDialogs=(function()
   end
   for _,name in ipairs({'GetUserInputs','MB','ShowMessageBox','GetUserFileName','GetUserFileNameForRead','JS_Dialog_BrowseForSaveFile','JS_Dialog_BrowseForOpenFiles','JS_Dialog_BrowseForFolder','GR_SelectColor','Main_OnCommand','Main_OnCommandEx','CF_SendActionShortcut','MIDIEditor_LastFocused_OnCommand'}) do
    local fn=api[name]
-   if type(fn)=='function' then P[name]=function(...) return call(fn,...) end end
+   if type(fn)=='function' then
+    local transport=name=='Main_OnCommand' or name=='Main_OnCommandEx'
+    P[name]=function(...)
+     if transport and select(1,...)==40044 then return fn(...) end
+     return call(fn,...)
+    end
+   end
   end
   if type(api.GetSetProjectInfo_String)=='function' then
    local fn=api.GetSetProjectInfo_String
@@ -4921,7 +4927,7 @@ local function set_target_mode(i)
   S.targetMode=i; save_settings(); A.dirty=true; replan(A.job~=nil)
 end
 
--- BEGIN BLT SHORTCUTS 1.0.3 (generated from _shared/BLT_Shortcuts.lua)
+-- BEGIN BLT SHORTCUTS 1.0.4 (generated from _shared/BLT_Shortcuts.lua)
 local BLTShortcuts=(function()
 local M={}
 local special={[8]=8,[9]=9,[13]=13,[27]=27,[32]=32,
@@ -5017,6 +5023,7 @@ function M.install(api,view,options)
    return pcall(api.Main_OnCommand,40044,0)
   end
   if options.beforeGlobal then options.beforeGlobal(k) end
+  if space and found.section==0 and tonumber(found.command)==40044 then return pcall(api.Main_OnCommand,40044,0) end
   if (found.flags&1)~=0 and type(api.CF_SendActionShortcut)=='function' then
    local ok,result=pcall(api.CF_SendActionShortcut,api.GetMainHwnd(),found.section*100,found.key,mods)
    if ok and (result==true or result==1) then return true end

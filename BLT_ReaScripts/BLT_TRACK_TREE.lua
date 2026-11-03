@@ -1,5 +1,5 @@
 -- @description TRACK TREE
--- @version 0.3.18
+-- @version 0.3.19
 -- @author Balrulu
 -- @provides
 --   . > ../
@@ -1378,7 +1378,7 @@ if type(reaper.ImGui_GetBuiltinPath)~='function'then reaper.MB('ReaImGui 0.10以
 local reaper,gfx=AppCanvas.install(reaper,gfx,AppCanvasHost,
  {section='BLT_TRACK_TREE',title='BLT TRACK TREE',width=648,height=700,minWidth=360,minHeight=300},AppShellText,AppChromeRaster,AppCanvasDraw)
 do
--- BEGIN BLT NATIVE DIALOGS 1.2.1 (generated from _shared/BLT_NativeDialogs.lua)
+-- BEGIN BLT NATIVE DIALOGS 1.2.2 (generated from _shared/BLT_NativeDialogs.lua)
 local BLTNativeDialogs=(function()
  local M={}
  function M.install(api,view)
@@ -1575,7 +1575,13 @@ local BLTNativeDialogs=(function()
   end
   for _,name in ipairs({'GetUserInputs','MB','ShowMessageBox','GetUserFileName','GetUserFileNameForRead','JS_Dialog_BrowseForSaveFile','JS_Dialog_BrowseForOpenFiles','JS_Dialog_BrowseForFolder','GR_SelectColor','Main_OnCommand','Main_OnCommandEx','CF_SendActionShortcut','MIDIEditor_LastFocused_OnCommand'}) do
    local fn=api[name]
-   if type(fn)=='function' then P[name]=function(...) return call(fn,...) end end
+   if type(fn)=='function' then
+    local transport=name=='Main_OnCommand' or name=='Main_OnCommandEx'
+    P[name]=function(...)
+     if transport and select(1,...)==40044 then return fn(...) end
+     return call(fn,...)
+    end
+   end
   end
   if type(api.GetSetProjectInfo_String)=='function' then
    local fn=api.GetSetProjectInfo_String
@@ -4365,7 +4371,7 @@ local function draw()
  local message=A.message~=''and A.message or string.format(Language.text('%dトラック / 選択 %d'),#A.rows,count)
  gfx.textRoute(true)
  label(message,12,gfx.h-19,gfx.w-72,18,8,A.bad and C.red or C.muted)
- label('v0.3.18',gfx.w-56,gfx.h-19,44,18,8,C.faint,false,2,3,true)
+ label('v0.3.19',gfx.w-56,gfx.h-19,44,18,8,C.faint,false,2,3,true)
  gfx.textRoute(false)
  TreeUI:finish();tree_animation();BLT.bar();gfx.update()
 end
@@ -4637,7 +4643,7 @@ local function loop()
  if A.closing then close()else R.defer(loop)end
 end
 
--- BEGIN BLT SHORTCUTS 1.0.3 (generated from _shared/BLT_Shortcuts.lua)
+-- BEGIN BLT SHORTCUTS 1.0.4 (generated from _shared/BLT_Shortcuts.lua)
 local BLTShortcuts=(function()
 local M={}
 local special={[8]=8,[9]=9,[13]=13,[27]=27,[32]=32,
@@ -4733,6 +4739,7 @@ function M.install(api,view,options)
    return pcall(api.Main_OnCommand,40044,0)
   end
   if options.beforeGlobal then options.beforeGlobal(k) end
+  if space and found.section==0 and tonumber(found.command)==40044 then return pcall(api.Main_OnCommand,40044,0) end
   if (found.flags&1)~=0 and type(api.CF_SendActionShortcut)=='function' then
    local ok,result=pcall(api.CF_SendActionShortcut,api.GetMainHwnd(),found.section*100,found.key,mods)
    if ok and (result==true or result==1) then return true end

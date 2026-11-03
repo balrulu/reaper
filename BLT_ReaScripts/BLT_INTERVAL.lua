@@ -1,5 +1,5 @@
 -- @description INTERVAL
--- @version 0.6.28
+-- @version 0.6.29
 -- @author Balrulu
 -- @provides
 --   . > ../
@@ -10,7 +10,7 @@
 
 local reaper=reaper
 do
--- BEGIN BLT NATIVE DIALOGS 1.2.1 (generated from _shared/BLT_NativeDialogs.lua)
+-- BEGIN BLT NATIVE DIALOGS 1.2.2 (generated from _shared/BLT_NativeDialogs.lua)
 local BLTNativeDialogs=(function()
  local M={}
  function M.install(api,view)
@@ -202,7 +202,13 @@ local BLTNativeDialogs=(function()
   end
   for _,name in ipairs({'GetUserInputs','MB','ShowMessageBox','GetUserFileName','GetUserFileNameForRead','JS_Dialog_BrowseForSaveFile','JS_Dialog_BrowseForOpenFiles','JS_Dialog_BrowseForFolder','GR_SelectColor','Main_OnCommand','Main_OnCommandEx','CF_SendActionShortcut','MIDIEditor_LastFocused_OnCommand'}) do
    local fn=api[name]
-   if type(fn)=='function' then P[name]=function(...) return call(fn,...) end end
+   if type(fn)=='function' then
+    local transport=name=='Main_OnCommand' or name=='Main_OnCommandEx'
+    P[name]=function(...)
+     if transport and select(1,...)==40044 then return fn(...) end
+     return call(fn,...)
+    end
+   end
   end
   if type(api.GetSetProjectInfo_String)=='function' then
    local fn=api.GetSetProjectInfo_String
@@ -2985,7 +2991,7 @@ local function public_error(value,fallback)
   return text
 end
 local App={
-  version="0.6.28",section="BLT_INTERVAL",windowTitle="BLT Interval",
+  version="0.6.29",section="BLT_INTERVAL",windowTitle="BLT Interval",
   chromeTitle="I N T E R V A L",title="INTERVAL",
   subtitle="ITEM SPACING  アイテム間隔を整列",
 }
@@ -3851,7 +3857,7 @@ local function get_cached_ui_state(project,state_count)
   return ui_cache.items or {},ui_cache.plan,ui_cache.reason
 end
 
--- BEGIN BLT SHORTCUTS 1.0.3 (generated from _shared/BLT_Shortcuts.lua)
+-- BEGIN BLT SHORTCUTS 1.0.4 (generated from _shared/BLT_Shortcuts.lua)
 local BLTShortcuts=(function()
 local M={}
 local special={[8]=8,[9]=9,[13]=13,[27]=27,[32]=32,
@@ -3947,6 +3953,7 @@ function M.install(api,view,options)
    return pcall(api.Main_OnCommand,40044,0)
   end
   if options.beforeGlobal then options.beforeGlobal(k) end
+  if space and found.section==0 and tonumber(found.command)==40044 then return pcall(api.Main_OnCommand,40044,0) end
   if (found.flags&1)~=0 and type(api.CF_SendActionShortcut)=='function' then
    local ok,result=pcall(api.CF_SendActionShortcut,api.GetMainHwnd(),found.section*100,found.key,mods)
    if ok and (result==true or result==1) then return true end
