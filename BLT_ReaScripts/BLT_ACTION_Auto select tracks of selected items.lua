@@ -1,5 +1,5 @@
 -- @description ACTION - Auto select tracks of selected items (toggle)
--- @version 1.1.3
+-- @version 1.1.4
 -- @author Balrulu
 -- @provides
 --   . > ../
@@ -9,6 +9,220 @@
 --   BLT SERIES Beta TEST UPLOAD
 
 -- BEGIN BLT TOGGLE RESTORE EMBEDDED 1.1.0
+local reaper=reaper
+do
+-- BEGIN BLT NATIVE DIALOGS 1.2.1 (generated from _shared/BLT_NativeDialogs.lua)
+local BLTNativeDialogs=(function()
+ local M={}
+ function M.install(api,view)
+  local P=setmetatable({}, {__index=api})
+  local title,depth=nil,0
+  local active,pending,scheduled,rounds,exitHandler=nil,nil,false,0,nil
+  local host=api
+  for _=1,8 do
+   local mt=getmetatable(host)
+   if type(mt)~='table' or type(mt.__index)~='table' then break end
+   host=mt.__index
+  end
+  local windowsOS=api.GetOS and (api.GetOS() or ''):match('Win')~=nil
+  if view and view.init then
+   local init=view.init
+   view.init=function(name,...)
+    title=name;return init(name,...)
+   end
+  end
+  local function valid(hwnd)
+   if not hwnd or hwnd==0 then return false end
+   local value=api.JS_Window_IsWindow(hwnd);return value==true or value==1
+  end
+  local function owned(hwnd,main)
+   if not main then return false end
+   local seen={}
+   for _=1,32 do
+    if hwnd==main then return true end
+    if not hwnd or seen[hwnd] then return false end;seen[hwnd]=true
+    local parent=api.JS_Window_GetParent and api.JS_Window_GetParent(hwnd)
+    if parent==0 or parent==hwnd then parent=nil end
+    hwnd=parent or (api.JS_Window_GetRelated and api.JS_Window_GetRelated(hwnd,'OWNER'))
+   end
+   return false
+  end
+  local function suspend(session)
+   if not api.JS_Window_Find or not api.JS_Window_IsWindow then return end
+   local own=title and api.JS_Window_Find(title,true)
+   local main=api.GetMainHwnd and api.GetMainHwnd()
+   local candidates,seen={},{}
+   local function add(hwnd)
+    if hwnd~=main and valid(hwnd) and not seen[hwnd] then candidates[#candidates+1]=hwnd;seen[hwnd]=true end
+   end
+   add(own)
+   if api.JS_Window_ListAllTop and api.JS_Window_HandleFromAddress and api.JS_Window_GetTitle then
+    local _,list=api.JS_Window_ListAllTop()
+    for address in (list or ''):gmatch('[^,]+') do
+     local n=tonumber(address) or tonumber(address,16)
+     local hwnd=n and api.JS_Window_HandleFromAddress(n)
+     if valid(hwnd) then
+      local caption=api.JS_Window_GetTitle(hwnd) or ''
+      if (caption:match('^BLT[%s_:]') or caption=='LOUDNESS TRACE') and owned(hwnd,main) then add(hwnd) end
+     end
+    end
+   end
+   if #candidates==0 then return end
+   assert(api.JS_Window_Enable and api.JS_Window_GetLong,'Native dialogs require JS_Window_Enable and JS_Window_GetLong (js_ReaScriptAPI).')
+   session.foreground=api.JS_Window_GetForeground and api.JS_Window_GetForeground()
+   session.focus=api.JS_Window_GetFocus and api.JS_Window_GetFocus()
+   session.main=main
+   for _,hwnd in ipairs(candidates) do
+    local style=api.JS_Window_GetLong(hwnd,'STYLE')
+    assert(type(style)=='number','Cannot read BLT window input state.')
+    local topmost=windowsOS and (math.floor(api.JS_Window_GetLong(hwnd,'EXSTYLE'))&8)~=0
+    local enabled=(math.floor(style)&0x08000000)==0
+    if enabled or topmost then
+     local entry={hwnd=hwnd,enabled=enabled,topmost=topmost};session.windows[#session.windows+1]=entry
+     if topmost then
+      assert(api.JS_Window_SetZOrder,'Native dialogs require JS_Window_SetZOrder (js_ReaScriptAPI).')
+      assert(api.JS_Window_SetZOrder(hwnd,'NOTOPMOST'),'Cannot suspend BLT always-on-top state.')
+     end
+     if enabled then
+      api.JS_Window_Enable(hwnd,false)
+      assert((math.floor(api.JS_Window_GetLong(hwnd,'STYLE'))&0x08000000)~=0,'Cannot suspend BLT window input.')
+     end
+    end
+   end
+  end
+  local function has_flag(hwnd,name,mask,on)
+   local ok,value=pcall(api.JS_Window_GetLong,hwnd,name)
+   return ok and type(value)=='number' and value==value and math.abs(value)<math.huge
+    and ((math.floor(value)&mask)~=0)==on
+  end
+  local function restore(session)
+   local failed,seen={},{}
+   local function retain(entry)
+    if not seen[entry] then failed[#failed+1]=entry;seen[entry]=true end
+   end
+   for i=#session.windows,1,-1 do
+    local entry=session.windows[i]
+    local checked,exists=pcall(valid,entry.hwnd)
+    if not checked or exists then
+     local enabled,topmost=not entry.enabled,not entry.topmost
+     for _=1,3 do
+      if not enabled then
+       enabled=has_flag(entry.hwnd,'STYLE',0x08000000,false)
+       if not enabled then
+        pcall(api.JS_Window_Enable,entry.hwnd,true)
+        enabled=has_flag(entry.hwnd,'STYLE',0x08000000,false)
+       end
+      end
+      if not topmost then
+       topmost=has_flag(entry.hwnd,'EXSTYLE',8,true)
+       if not topmost then
+        pcall(api.JS_Window_SetZOrder,entry.hwnd,'TOPMOST')
+        topmost=has_flag(entry.hwnd,'EXSTYLE',8,true)
+       end
+      end
+      if enabled and topmost then break end
+     end
+     entry.inputRestored=enabled
+     if not enabled or not topmost then retain(entry) end
+    end
+   end
+   -- Do not take focus back if the user switched to another application.
+   pcall(function()
+    local current=api.JS_Window_GetForeground and api.JS_Window_GetForeground()
+    if session.foreground and valid(session.foreground) and
+     (current==session.foreground or current==session.main or owned(current,session.foreground)) then
+     for _,entry in ipairs(session.windows) do
+      local foreground=session.foreground==entry.hwnd or owned(session.foreground,entry.hwnd)
+      local focus=session.focus and valid(session.focus) and (session.focus==entry.hwnd or owned(session.focus,entry.hwnd))
+      if entry.enabled and entry.inputRestored and (foreground or focus) then
+       if foreground and current~=entry.hwnd and api.JS_Window_SetForeground then api.JS_Window_SetForeground(entry.hwnd) end
+       if focus and api.JS_Window_SetFocus and api.JS_Window_GetFocus then
+        local ok,actual=pcall(api.JS_Window_GetFocus)
+        if not ok or actual~=session.focus then
+         pcall(api.JS_Window_SetFocus,session.focus)
+         ok,actual=pcall(api.JS_Window_GetFocus)
+         if not ok or actual~=session.focus then retain(entry) end
+        end
+       end
+       break
+      end
+     end
+    end
+   end)
+   return failed
+  end
+  local function warn()
+   if host.ShowConsoleMsg then
+    pcall(host.ShowConsoleMsg,'BLT: ウィンドウの操作状態／最前面状態／キー入力先を復元できませんでした。操作できないBLTはアクションリストから終了・再実行してください。\nBLT window recovery failed after retries. Stop and restart the affected BLT action.\n')
+   end
+  end
+  local function retry()
+   scheduled=false
+   if not pending then return end
+   if depth>0 then
+    if host.defer then scheduled=true;host.defer(retry) end
+    return
+   end
+   pending.windows=restore(pending)
+   if #pending.windows==0 then pending=nil;return end
+   rounds=rounds+1
+   if rounds<8 and host.defer then scheduled=true;host.defer(retry) else warn() end
+  end
+  local function recover(session,failed)
+   if #failed==0 then return end
+   if not pending then pending={windows={},main=session.main,foreground=session.foreground,focus=session.focus};rounds=0 end
+   for _,entry in ipairs(failed) do
+    local duplicate=false
+    for _,old in ipairs(pending.windows) do
+     if old.hwnd==entry.hwnd then
+      old.enabled,old.topmost=old.enabled or entry.enabled,old.topmost or entry.topmost;duplicate=true;break
+     end
+    end
+    if not duplicate then pending.windows[#pending.windows+1]=entry end
+   end
+   if not scheduled then
+    if host.defer then scheduled=true;host.defer(retry) else retry() end
+   end
+  end
+  if type(api.atexit)=='function' then
+   local function finish()
+    if active then local session=active;active=nil;local failed=restore(session);if #failed>0 then warn() end end
+    if pending then pending.windows=restore(pending);if #pending.windows>0 then warn() end end
+    if exitHandler then exitHandler() end
+   end
+   P.atexit=function(fn) exitHandler=fn;return api.atexit(finish) end
+   api.atexit(finish)
+  end
+  local function call(fn,...)
+   if depth>0 then return fn(...) end
+   local args=table.pack(...);local session={windows={}};depth=depth+1;active=session
+   local result=table.pack(xpcall(function() suspend(session);return fn(table.unpack(args,1,args.n)) end,debug.traceback))
+   local failed=restore(session);active=nil;depth=depth-1;recover(session,failed)
+   if not result[1] then error(result[2],0) end
+   return table.unpack(result,2,result.n)
+  end
+  for _,name in ipairs({'GetUserInputs','MB','ShowMessageBox','GetUserFileName','GetUserFileNameForRead','JS_Dialog_BrowseForSaveFile','JS_Dialog_BrowseForOpenFiles','JS_Dialog_BrowseForFolder','GR_SelectColor','Main_OnCommand','Main_OnCommandEx','CF_SendActionShortcut','MIDIEditor_LastFocused_OnCommand'}) do
+   local fn=api[name]
+   if type(fn)=='function' then P[name]=function(...) return call(fn,...) end end
+  end
+  if type(api.GetSetProjectInfo_String)=='function' then
+   local fn=api.GetSetProjectInfo_String
+   P.GetSetProjectInfo_String=function(project,key,value,...)
+    local stats=key=='RENDER_STATS' or key=='RENDER_STATS_SUMMARY'
+    if stats and value and value~='' and tonumber(value)~=0 then return call(fn,project,key,value,...) end
+    return fn(project,key,value,...)
+   end
+  end
+  -- Native actions may also display modal progress or error windows.
+  P.BLT_WithNativeDialog=call
+  return P
+ end
+ return M
+end)()
+-- END BLT NATIVE DIALOGS
+reaper=BLTNativeDialogs.install(reaper,gfx)
+end
+
 do
 local BLTToggleRestoreSource = [====[
 -- BLT toggle persistence 1.1.0. Embedded in each supported action.

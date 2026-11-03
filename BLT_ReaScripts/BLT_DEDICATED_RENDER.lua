@@ -1,5 +1,5 @@
 -- @description BLT DEDICATED RENDER
--- @version 0.14.17
+-- @version 0.14.19
 -- @author Balrulu
 -- @provides
 --   . > ../
@@ -1123,7 +1123,7 @@ function M.install(api,native,CanvasHost,options,ShellText,ChromeRaster,CanvasDr
   mouse_x=-10000,mouse_y=-10000,mouse_cap=0,mouse_wheel=0,ext_retina=1}
  local H,I,ctx,frame,insideCallback,closed
  local keys={}
- local spaceUsed=false
+ local spaceUsed,spacePending=false,false
  local dockID,requestedDock,rectRequest=0,nil,nil
  local redraw=true
  local dockWait,dockSettle=0,0
@@ -1169,13 +1169,15 @@ function M.install(api,native,CanvasHost,options,ShellText,ChromeRaster,CanvasDr
  function G.setfont(...)ensure();return G.setfont(...)end
  function G.measurestr(...)ensure();return G.measurestr(...)end
  local function input()
-  spaceUsed=false
+  spaceUsed,spacePending=false,false
   if contextMenu or not H.focused then keys={};return end
+  spacePending=I.IsKeyPressed(ctx,I.Key_Space,false)
+  if spacePending then keys[#keys+1]=32 end
   local ctrl,alt=(G.mouse_cap&4)~=0 or H.mac and(G.mouse_cap&32)~=0,(G.mouse_cap&16)~=0
   local idx=0
   while true do local ok,cp=I.GetInputQueueCharacter(ctx,idx);if not ok then break end
    local modified=(ctrl or alt)and(cp>=65 and cp<=90 or cp>=97 and cp<=122)
-   if cp>=32 and not modified then keys[#keys+1]=cp<256 and cp or (117<<24)|cp end;idx=idx+1
+   if cp>32 and not modified then keys[#keys+1]=cp<256 and cp or (117<<24)|cp end;idx=idx+1
   end
   for _,p in ipairs(special)do if I.IsKeyPressed(ctx,I['Key_'..p[1]],true)then keys[#keys+1]=p[2]end end
   if ctrl or alt then for cp=65,90 do if I.IsKeyPressed(ctx,I['Key_'..string.char(cp)],true)then keys[#keys+1]=ctrl and(alt and cp+192 or cp-64)or cp+256 end end end
@@ -1312,9 +1314,9 @@ function M.install(api,native,CanvasHost,options,ShellText,ChromeRaster,CanvasDr
   return table.remove(keys,1)or 0
  end
  function G.spacePressed()
-  if spaceUsed or contextMenu then return false end
+  if spaceUsed or not spacePending or contextMenu then return false end
   spaceUsed=true
-  return H and H.focused and I.IsKeyPressed(ctx,I.Key_Space,false)
+  return H and H.focused
  end
  function G.setCursor(kind)
   if not frame then return end
@@ -1436,6 +1438,7 @@ local BLTNativeDialogs=(function()
    if #candidates==0 then return end
    assert(api.JS_Window_Enable and api.JS_Window_GetLong,'Native dialogs require JS_Window_Enable and JS_Window_GetLong (js_ReaScriptAPI).')
    session.foreground=api.JS_Window_GetForeground and api.JS_Window_GetForeground()
+   session.focus=api.JS_Window_GetFocus and api.JS_Window_GetFocus()
    session.main=main
    for _,hwnd in ipairs(candidates) do
     local style=api.JS_Window_GetLong(hwnd,'STYLE')
@@ -1461,7 +1464,10 @@ local BLTNativeDialogs=(function()
     and ((math.floor(value)&mask)~=0)==on
   end
   local function restore(session)
-   local failed={}
+   local failed,seen={},{}
+   local function retain(entry)
+    if not seen[entry] then failed[#failed+1]=entry;seen[entry]=true end
+   end
    for i=#session.windows,1,-1 do
     local entry=session.windows[i]
     local checked,exists=pcall(valid,entry.hwnd)
@@ -1485,15 +1491,26 @@ local BLTNativeDialogs=(function()
       if enabled and topmost then break end
      end
      entry.inputRestored=enabled
-     if not enabled or not topmost then failed[#failed+1]=entry end
+     if not enabled or not topmost then retain(entry) end
     end
    end
    pcall(function()
     local current=api.JS_Window_GetForeground and api.JS_Window_GetForeground()
-    if session.foreground and valid(session.foreground) and (current==session.main or owned(current,session.main)) then
+    if session.foreground and valid(session.foreground) and
+     (current==session.foreground or current==session.main or owned(current,session.foreground)) then
      for _,entry in ipairs(session.windows) do
-      if entry.enabled and entry.inputRestored and (session.foreground==entry.hwnd or owned(session.foreground,entry.hwnd)) then
-       if api.JS_Window_SetForeground then api.JS_Window_SetForeground(entry.hwnd) end
+      local foreground=session.foreground==entry.hwnd or owned(session.foreground,entry.hwnd)
+      local focus=session.focus and valid(session.focus) and (session.focus==entry.hwnd or owned(session.focus,entry.hwnd))
+      if entry.enabled and entry.inputRestored and (foreground or focus) then
+       if foreground and current~=entry.hwnd and api.JS_Window_SetForeground then api.JS_Window_SetForeground(entry.hwnd) end
+       if focus and api.JS_Window_SetFocus and api.JS_Window_GetFocus then
+        local ok,actual=pcall(api.JS_Window_GetFocus)
+        if not ok or actual~=session.focus then
+         pcall(api.JS_Window_SetFocus,session.focus)
+         ok,actual=pcall(api.JS_Window_GetFocus)
+         if not ok or actual~=session.focus then retain(entry) end
+        end
+       end
        break
       end
      end
@@ -1503,7 +1520,7 @@ local BLTNativeDialogs=(function()
   end
   local function warn()
    if host.ShowConsoleMsg then
-    pcall(host.ShowConsoleMsg,'BLT: ウィンドウの操作状態／最前面状態を復元できませんでした。操作できないBLTはアクションリストから終了・再実行してください。\nBLT window recovery failed after retries. Stop and restart the affected BLT action.\n')
+    pcall(host.ShowConsoleMsg,'BLT: ウィンドウの操作状態／最前面状態／キー入力先を復元できませんでした。操作できないBLTはアクションリストから終了・再実行してください。\nBLT window recovery failed after retries. Stop and restart the affected BLT action.\n')
    end
   end
   local function retry()
@@ -1520,7 +1537,7 @@ local BLTNativeDialogs=(function()
   end
   local function recover(session,failed)
    if #failed==0 then return end
-   if not pending then pending={windows={},main=session.main,foreground=session.foreground};rounds=0 end
+   if not pending then pending={windows={},main=session.main,foreground=session.foreground,focus=session.focus};rounds=0 end
    for _,entry in ipairs(failed) do
     local duplicate=false
     for _,old in ipairs(pending.windows) do
@@ -2176,7 +2193,7 @@ function Embed.write_aiff(path,plan,source)
  if not ok then if exists(temp)then os.remove(temp)end;error(err,0)end
 end
 
-local Model={VERSION='0.14.17',SOURCE_MASK=1|2|8|32|64|128|4096}
+local Model={VERSION='0.14.19',SOURCE_MASK=1|2|8|32|64|128|4096}
 Model.numbers={'RENDER_SETTINGS','RENDER_BOUNDSFLAG','RENDER_CHANNELS','RENDER_SRATE','RENDER_STARTPOS','RENDER_ENDPOS','RENDER_TAILFLAG','RENDER_TAILMS','RENDER_ADDTOPROJ','RENDER_DITHER','RENDER_NORMALIZE','RENDER_NORMALIZE_TARGET','RENDER_BRICKWALL','RENDER_FADEIN','RENDER_FADEOUT','RENDER_FADEINSHAPE','RENDER_FADEOUTSHAPE','RENDER_FADELPF','RENDER_PADSTART','RENDER_PADEND','RENDER_TRIMSTART','RENDER_TRIMEND','RENDER_DELAY'}
 Model.strings={'RENDER_FILE','RENDER_PATTERN','RENDER_EXTRAFILEDIR','RENDER_FORMAT2','RENDER_FORMAT'}
 Model.configs={'projrenderlimit','projrenderspeedcap','projrenderresample','projrenderrateinternal','renderclosewhendone','renderpeaks','projrenderqdelay','renderbsnew'}

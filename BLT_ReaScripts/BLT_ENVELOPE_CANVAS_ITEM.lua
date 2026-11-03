@@ -1,5 +1,5 @@
 -- @description ENVELOPE CANVAS ITEM
--- @version 0.7.10
+-- @version 0.7.11
 -- @author Balrulu
 -- @provides
 --   . > ../
@@ -10,7 +10,7 @@
 
 local reaper=reaper
 do
--- BEGIN BLT NATIVE DIALOGS 1.2.0 (generated from _shared/BLT_NativeDialogs.lua)
+-- BEGIN BLT NATIVE DIALOGS 1.2.1 (generated from _shared/BLT_NativeDialogs.lua)
 local BLTNativeDialogs=(function()
  local M={}
  function M.install(api,view)
@@ -69,6 +69,7 @@ local BLTNativeDialogs=(function()
    if #candidates==0 then return end
    assert(api.JS_Window_Enable and api.JS_Window_GetLong,'Native dialogs require JS_Window_Enable and JS_Window_GetLong (js_ReaScriptAPI).')
    session.foreground=api.JS_Window_GetForeground and api.JS_Window_GetForeground()
+   session.focus=api.JS_Window_GetFocus and api.JS_Window_GetFocus()
    session.main=main
    for _,hwnd in ipairs(candidates) do
     local style=api.JS_Window_GetLong(hwnd,'STYLE')
@@ -94,7 +95,10 @@ local BLTNativeDialogs=(function()
     and ((math.floor(value)&mask)~=0)==on
   end
   local function restore(session)
-   local failed={}
+   local failed,seen={},{}
+   local function retain(entry)
+    if not seen[entry] then failed[#failed+1]=entry;seen[entry]=true end
+   end
    for i=#session.windows,1,-1 do
     local entry=session.windows[i]
     local checked,exists=pcall(valid,entry.hwnd)
@@ -118,16 +122,27 @@ local BLTNativeDialogs=(function()
       if enabled and topmost then break end
      end
      entry.inputRestored=enabled
-     if not enabled or not topmost then failed[#failed+1]=entry end
+     if not enabled or not topmost then retain(entry) end
     end
    end
    -- Do not take focus back if the user switched to another application.
    pcall(function()
     local current=api.JS_Window_GetForeground and api.JS_Window_GetForeground()
-    if session.foreground and valid(session.foreground) and (current==session.main or owned(current,session.main)) then
+    if session.foreground and valid(session.foreground) and
+     (current==session.foreground or current==session.main or owned(current,session.foreground)) then
      for _,entry in ipairs(session.windows) do
-      if entry.enabled and entry.inputRestored and (session.foreground==entry.hwnd or owned(session.foreground,entry.hwnd)) then
-       if api.JS_Window_SetForeground then api.JS_Window_SetForeground(entry.hwnd) end
+      local foreground=session.foreground==entry.hwnd or owned(session.foreground,entry.hwnd)
+      local focus=session.focus and valid(session.focus) and (session.focus==entry.hwnd or owned(session.focus,entry.hwnd))
+      if entry.enabled and entry.inputRestored and (foreground or focus) then
+       if foreground and current~=entry.hwnd and api.JS_Window_SetForeground then api.JS_Window_SetForeground(entry.hwnd) end
+       if focus and api.JS_Window_SetFocus and api.JS_Window_GetFocus then
+        local ok,actual=pcall(api.JS_Window_GetFocus)
+        if not ok or actual~=session.focus then
+         pcall(api.JS_Window_SetFocus,session.focus)
+         ok,actual=pcall(api.JS_Window_GetFocus)
+         if not ok or actual~=session.focus then retain(entry) end
+        end
+       end
        break
       end
      end
@@ -137,7 +152,7 @@ local BLTNativeDialogs=(function()
   end
   local function warn()
    if host.ShowConsoleMsg then
-    pcall(host.ShowConsoleMsg,'BLT: ウィンドウの操作状態／最前面状態を復元できませんでした。操作できないBLTはアクションリストから終了・再実行してください。\nBLT window recovery failed after retries. Stop and restart the affected BLT action.\n')
+    pcall(host.ShowConsoleMsg,'BLT: ウィンドウの操作状態／最前面状態／キー入力先を復元できませんでした。操作できないBLTはアクションリストから終了・再実行してください。\nBLT window recovery failed after retries. Stop and restart the affected BLT action.\n')
    end
   end
   local function retry()
@@ -154,7 +169,7 @@ local BLTNativeDialogs=(function()
   end
   local function recover(session,failed)
    if #failed==0 then return end
-   if not pending then pending={windows={},main=session.main,foreground=session.foreground};rounds=0 end
+   if not pending then pending={windows={},main=session.main,foreground=session.foreground,focus=session.focus};rounds=0 end
    for _,entry in ipairs(failed) do
     local duplicate=false
     for _,old in ipairs(pending.windows) do
@@ -4487,7 +4502,7 @@ function B.cleanup(fn,...)
  return ok,result
 end
 end
-local Core={VERSION='0.7.10',SECTION='BLT_ENVELOPE_CANVAS_ITEM',MAX_POINTS=1024}
+local Core={VERSION='0.7.11',SECTION='BLT_ENVELOPE_CANVAS_ITEM',MAX_POINTS=1024}
 local min,max,abs,floor,ceil=math.min,math.max,math.abs,math.floor,math.ceil
 local function clamp(v,a,b) return max(a,min(b,v)) end
 local function finite(v) return type(v)=='number' and v==v and abs(v)<math.huge end
