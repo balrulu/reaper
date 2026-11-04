@@ -1,5 +1,5 @@
 -- @description VARIANT FORGE
--- @version 0.6.11
+-- @version 0.6.13
 -- @author Balrulu
 -- @provides
 --   . > ../
@@ -812,14 +812,88 @@ function M.new(host,api,text)
 end
 return M
 end)()
+local AppPresetNotice=(function()
+local M={}
+local min,max,floor=math.min,math.max,math.floor
+local function smooth(t)return t*t*(3-2*t)end
+local function fitText(g,text,width)
+ if g.measurestr(text)<=width then return text end
+ if g.measurestr('…')>width then return ''end
+ local low,high=0,utf8.len(text)
+ while low<high do
+  local mid=floor((low+high+1)/2);local stop=utf8.offset(text,mid+1)or(#text+1)
+  if g.measurestr(text:sub(1,stop-1)..'…')<=width then low=mid else high=mid-1 end
+ end
+ return text:sub(1,(utf8.offset(text,low+1)or(#text+1))-1)..'…'
+end
+function M.new(host,api,options)
+ options=options or {}
+ local N={duration=options.duration or 1,fadeIn=options.fadeIn or .12,fadeOut=options.fadeOut or .38,
+  maxWidth=options.maxWidth or 360,gap=options.gap or 8}
+ function N:show(name)
+  if type(name)~='string'then return false end
+  name=name:gsub('[%z\1-\31\127]',' ')
+  if not utf8.len(name)then name=name:gsub('[\128-\255]','?')end
+  if not name:find('%S')then return false end
+  self.name,self.at,self.layout=name,api.time_precise(),nil;return true
+ end
+ function N:clear()self.name,self.at,self.painted,self.layout=nil,nil,nil,nil end
+ function N:animating(now)
+  if not self.name then return false end
+  if(now or api.time_precise())-self.at<self.duration then return true end
+  local painted=self.painted;self:clear();return painted==true
+ end
+ function N:draw(g,C,fit,barHeight)
+  if not self.name then return false end
+  local age=max(0,api.time_precise()-self.at)
+  if age>=self.duration then self:clear();return false end
+  local alpha=1
+  if age<self.fadeIn then alpha=smooth(age/self.fadeIn)
+  elseif age>self.duration-self.fadeOut then alpha=smooth((self.duration-age)/self.fadeOut)end
+  local textW,textH=g.measurestr(self.name)
+  local w=min(self.maxWidth,g.w-32,max(112,textW+32));local h=max(30,textH+14)
+  local y=(barHeight or 26)+self.gap
+  if w<48 or y+h>g.h then return false end
+  local layout=self.layout
+  if not layout or layout.w~=w or layout.textW~=textW or layout.textH~=textH or layout.dpi~=host.dpi then
+   local available=max(0,w-32)
+   local text=fit and fit(self.name,available)or fitText(g,self.name,available)
+   local tw,th=g.measurestr(text)
+   layout={w=w,textW=textW,textH=textH,dpi=host.dpi,text=text,tw=tw,th=th};self.layout=layout
+  end
+  local text,tw,th=layout.text,layout.tw,layout.th
+  local x=(g.w-w)*.5;local dpi=host.dpi or 1
+  local ox,oy=host.originX,host.originY
+  local l,t=floor((ox+x)*dpi+.5)/dpi,floor((oy+y)*dpi+.5)/dpi
+  local r,b=l+w,t+h;local I,draw=host.I,host.draw
+  local accent=C.accent2 or C.ice;local field=C.field or C.bg
+  I.DrawList_AddRectFilled(draw,l-2,t-2,r+2,b+2,host.rgba(accent[1],accent[2],accent[3],alpha*.045),4)
+  I.DrawList_AddRectFilled(draw,l,t,r,b,host.rgba(field[1],field[2],field[3],alpha*.96),3)
+  I.DrawList_AddRect(draw,l+.5,t+.5,r-.5,b-.5,host.rgba(accent[1],accent[2],accent[3],alpha*.22),3)
+  g.set(C.text[1],C.text[2],C.text[3],alpha)
+  g.x,g.y=l-ox+(w-tw)*.5,t-oy+(h-th)*.5;g.drawstr(text)
+  self.painted=alpha>0;return true
+ end
+ return N
+end
+return M
+end)()
 local AppCanvasDraw=(function()
 local M={}
 local floor,ceil,min,max=math.floor,math.ceil,math.min,math.max
-function M.new(H,G,api,native,ShellText,ChromeRaster,beginFrame,changed)
+function M.new(H,G,api,native,ShellText,ChromeRaster,beginFrame,changed,PresetNotice)
  local I,ctx,g=H.I,H.ctx,H.g
  local text=ShellText.new(H,api,native)
  local chrome=ChromeRaster.new(H,api,text)
  local D={}
+ local notice=PresetNotice and PresetNotice.new(H,api)
+ local noticeG=notice and text:canvas(g)
+ local noticeColors
+ function D:showPresetName(name)
+  if not notice or not notice:show(name)then return false end
+  changed();return true
+ end
+ function D:presetNoticeAnimating(now)return notice and notice:animating(now)or false end
  local front,back,partial={n=0},{n=0},{n=0}
  local backChrome,partialChrome=false,false
  local wheelFront,wheelBack,fullDraw={n=0},{n=0},false
@@ -913,6 +987,7 @@ function M.new(H,G,api,native,ShellText,ChromeRaster,beginFrame,changed)
  local chromeState={}
  local function paintChrome(c)
   local p=c.painter;local b=p.b
+  noticeColors=p.C
   local state={b.inline or false,b.compact or false,b.titleEnd or 0,p.collapsed or false,p.docked or false,p.dockButton or false,p.compactLanguage or false,p.chrome.titleText or ''}
   for j,value in ipairs(state)do if chromeState[j]~=value then chromeState[j]=value;chrome.signature={}end end
   local output=chrome:begin(p);if chrome.dirty then c.draw(output,p)end
@@ -1087,6 +1162,9 @@ function M.new(H,G,api,native,ShellText,ChromeRaster,beginFrame,changed)
    for i=1,front.n do local c=front[i];if c.paint~=paintChrome then c.paint(c)end end
   else replay(front)end
   replay(partial)
+  if notice and notice.name and noticeColors then
+   text:setfont(1,H.faces[1],13,98);notice:draw(noticeG,noticeColors,nil,26)
+  end
  end
  function G.update()D:commit()end
  function G.abort()
@@ -1096,6 +1174,7 @@ function M.new(H,G,api,native,ShellText,ChromeRaster,beginFrame,changed)
  function G.beginDraw()beginFrame();G.abort();fullDraw=true end
  G.release=G.abort
  function D:close()
+  if notice then notice:clear()end
   local failure
   local function cleanup(fn,...)
    local ok,why=pcall(fn,...);if not ok and not failure then failure=why end
@@ -1112,7 +1191,7 @@ end)()
 local AppCanvas=(function()
 local M={}
 local cursorNames={we='ResizeEW',ns='ResizeNS',nwse='ResizeNWSE',nesw='ResizeNESW'}
-function M.install(api,native,CanvasHost,options,ShellText,ChromeRaster,CanvasDraw)
+function M.install(api,native,CanvasHost,options,ShellText,ChromeRaster,CanvasDraw,PresetNotice)
  local P=setmetatable({},{__index=api})
  local G={x=0,y=0,w=options.width,h=options.height,a=1,r=1,g=1,b=1,
   mouse_x=-10000,mouse_y=-10000,mouse_cap=0,mouse_wheel=0,ext_retina=1}
@@ -1127,7 +1206,7 @@ function M.install(api,native,CanvasHost,options,ShellText,ChromeRaster,CanvasDr
   assert(api.ImGui_GetBuiltinPath,'ReaImGui 0.10以降が必要です。')
   if H then return end
   H=CanvasHost.new(api,options.title,options.width,options.height,options.section);I,ctx=H.I,H.ctx
-  display=CanvasDraw.new(H,G,api,native,ShellText,ChromeRaster,function()beginFrame()end,function()redraw=true end)
+  display=CanvasDraw.new(H,G,api,native,ShellText,ChromeRaster,function()beginFrame()end,function()redraw=true end,PresetNotice)
   I.SetConfigVar(ctx,I.ConfigVar_Flags,I.GetConfigVar(ctx,I.ConfigVar_Flags)|I.ConfigFlags_DockingEnable)
   H.minWidth,H.minHeight,H.persistSize=options.minWidth,options.minHeight,true
   for _,face in ipairs(H.faces)do H:fontFor(face,false);H:fontFor(face,true)end
@@ -1195,6 +1274,7 @@ function M.install(api,native,CanvasHost,options,ShellText,ChromeRaster,CanvasDr
   ensure();return I,ctx,H:fontFor(face,false),H.originX or 0,H.originY or 0
  end
  function G.setOverlay(fn)overlay=fn end
+ function G.showPresetName(name)ensure();return display:showPresetName(name)end
  local function closeMenuScope(scopes)
   local fn=scopes[#scopes];scopes[#scopes]=nil;fn(ctx)
  end
@@ -1209,6 +1289,8 @@ function M.install(api,native,CanvasHost,options,ShellText,ChromeRaster,CanvasDr
     I.OpenPopup(ctx,id);menu.pending=nil
    end
    I.PushFont(ctx,H:fontFor(H.faces[1],false),13);scopes[#scopes+1]=I.PopFont
+   local prefix=options.menuChecksLeft and '    ' or ''
+   local gutter=prefix~='' and I.CalcTextSize(ctx,prefix) or 0
    if I.BeginPopup(ctx,id)then
     scopes[#scopes+1]=I.EndPopup
     if I.IsKeyPressed(ctx,I.Key_Escape,false)then I.CloseCurrentPopup(ctx)end
@@ -1217,10 +1299,22 @@ function M.install(api,native,CanvasHost,options,ShellText,ChromeRaster,CanvasDr
       I.PushID(ctx,i);scopes[#scopes+1]=I.PopID
       if item.separator then I.Separator(ctx)
       elseif item.children then
-       if I.BeginMenu(ctx,item.label,item.enabled~=false)then
+       if I.BeginMenu(ctx,prefix..item.label,item.enabled~=false)then
         scopes[#scopes+1]=I.EndMenu;items(item.children);closeMenuScope(scopes)
        end
-      elseif I.MenuItem(ctx,item.label,nil,item.checked==true,item.enabled~=false)then choice=item.id or i end
+      else
+       local mark=options.menuChecksLeft and item.checked
+       local x=mark and I.GetCursorScreenPos(ctx)
+       if I.MenuItem(ctx,prefix..item.label,nil,item.checked==true and not options.menuChecksLeft,item.enabled~=false)then choice=item.id or i end
+       if mark then
+        local _,top=I.GetItemRectMin(ctx);local _,bottom=I.GetItemRectMax(ctx)
+        local size=I.GetFontSize(ctx)*.65;local y=(top+bottom)*.5;x=x+gutter*.5
+        local color=I.GetColor(ctx,item.enabled~=false and I.Col_Text or I.Col_TextDisabled)
+        local draw=I.GetWindowDrawList(ctx);local width=math.max(1,size*.14)
+        I.DrawList_AddLine(draw,x-size*.4,y,x-size*.12,y+size*.28,color,width)
+        I.DrawList_AddLine(draw,x-size*.12,y+size*.28,x+size*.44,y-size*.38,color,width)
+       end
+      end
       closeMenuScope(scopes)
      end
     end
@@ -1287,7 +1381,8 @@ function M.install(api,native,CanvasHost,options,ShellText,ChromeRaster,CanvasDr
   if frame and not insideCallback then finishFrame()end
   return api.defer(function()
    if closed then return end
-   local idle=H and H.shown and not redraw and not contextMenu and H:idle(api.time_precise())
+   local notifying=display and display:presetNoticeAnimating(api.time_precise())
+   local idle=H and H.shown and not redraw and not contextMenu and not notifying and H:idle(api.time_precise())
    if not idle then beginFrame()end
    insideCallback=true
    local ok,err=xpcall(fn,debug.traceback);insideCallback=false
@@ -1370,7 +1465,7 @@ end
 return M
 end)()
 if type(reaper.ImGui_GetBuiltinPath)~='function'then reaper.MB('ReaImGui 0.10以降が必要です。 / ReaImGui 0.10 or later is required.','BLT Variant Forge',0);return end
-local reaper,gfx=AppCanvas.install(reaper,gfx,AppCanvasHost,{section='BLT_VARIANT_FORGE',title='BLT Variant Forge',width=900,height=910,minWidth=780,minHeight=800},AppShellText,AppChromeRaster,AppCanvasDraw)
+local reaper,gfx=AppCanvas.install(reaper,gfx,AppCanvasHost,{section='BLT_VARIANT_FORGE',title='BLT Variant Forge',width=900,height=910,minWidth=780,minHeight=800},AppShellText,AppChromeRaster,AppCanvasDraw,AppPresetNotice)
 do
 -- BEGIN BLT NATIVE DIALOGS 1.2.2 (generated from _shared/BLT_NativeDialogs.lua)
 local BLTNativeDialogs=(function()
@@ -3620,6 +3715,7 @@ function Presets.apply(p)
  if host.busy() or not host.commit() then return end
  if Presets.dirty() and Language.mb('未保存の変更を破棄して読み込みますか？','PRESET',4)~=6 then return end
  host.cancelEdit();host.apply(B.copy(p.values));B.presetRevision=(B.presetRevision or 0)+1;B.presetMotionSeen={};Presets.current=p;wake_visuals();notice('プリセットを読み込みました: '..p.name,true)
+ gfx.showPresetName(Presets.isFactory(p)and Language.text(p.name)or p.name)
 end
 function Presets.step(d)
  local n=1
@@ -4006,7 +4102,7 @@ local function create_project_undo(api,context)
   local entry=api.Undo_CanUndo2(project)
   if not entry or entry=='' then message('元に戻せる操作がありません。','Nothing to undo.',true);return true end
   if context.before then context.before() end
-  local result=api.Undo_DoUndo2(project)
+  local result=(context.undo or api.Undo_DoUndo2)(project)
   if result==nil or result==false or result==0 then message('Undoを実行できませんでした。','Undo failed.',false);return true end
   api.UpdateArrange()
   if context.after then context.after(project) end
@@ -4018,6 +4114,7 @@ local project_undo=create_project_undo(R,{
  language=function() return Language.code end,notice=notice,
  editing=function() return host.editing() or host.modal() end,
  busy=function() return host.busy() end,
+ undo=function(project)if host.undo then return host.undo(project)end;return R.Undo_DoUndo2(project)end,
  before=function() if host.undoBefore then host.undoBefore() end end,
  after=function(project) if host.undoRefresh then host.undoRefresh(project) end;wake_visuals() end,
 })
@@ -4165,7 +4262,7 @@ end
 return B
 end)()
 
-local Core={VERSION='0.6.11',SOURCE_SR=48000,SOURCE_HOP=48,SOURCE_BLOCK=12000,SOURCE_PREVIEW_BINS=1400,SOURCE_MAX_REGIONS=16384,
+local Core={VERSION='0.6.13',SOURCE_SR=48000,SOURCE_HOP=48,SOURCE_BLOCK=12000,SOURCE_PREVIEW_BINS=1400,SOURCE_MAX_REGIONS=16384,
  GENERATED_TAG='P_EXT:BLT_VARIANT_FORGE',TEMP_TAG='P_EXT:BLT_VARIANT_FORGE_TEMP',SECTION='BLT_VARIANT_FORGE',EQ_FIXED_CACHE={}}
 Core.STALE_TEMP_PROJECTS={};Core.RUN_ID='';Core.TEMP_HEARTBEAT_TTL=8;Core.TEMP_HEARTBEAT_KEY='temp_live_registry_v1';Core.temp_heartbeat_at=0
 local abs,min,max,floor,ceil=math.abs,math.min,math.max,math.floor,math.ceil
@@ -5928,6 +6025,47 @@ function Core.generation_targets_valid(snapshot)
  end
  return true
 end
+function Core.folder_state(project,previous)
+ local revision=R.GetProjectStateChangeCount(project)
+ if previous then
+  local valid=true
+  for _,entry in ipairs(previous.entries)do
+   local track=entry.track
+   if not R.ValidatePtr2(project,track,'MediaTrack*')or previous.revision~=revision and R.GetTrackGUID(track)~=entry.guid then valid=false;break end
+   entry.compact=R.GetMediaTrackInfo_Value(track,'I_FOLDERCOMPACT')
+  end
+  if valid then previous.revision=revision;return previous end
+ end
+ local state={project=project,revision=revision,entries={}}
+ for i=0,R.CountTracks(project)-1 do
+  local track=R.GetTrack(project,i)
+  if R.GetMediaTrackInfo_Value(track,'I_FOLDERDEPTH')>0 then
+   state.entries[#state.entries+1]={track=track,guid=R.GetTrackGUID(track),compact=R.GetMediaTrackInfo_Value(track,'I_FOLDERCOMPACT')}
+  end
+ end
+ return state
+end
+function Core.restore_folders(state)
+ if not state or R.EnumProjects(-1,'')~=state.project then return end
+ local by_guid,changed
+ for _,entry in ipairs(state.entries)do
+  local track=entry.track
+  if not R.ValidatePtr2(state.project,track,'MediaTrack*')or R.GetTrackGUID(track)~=entry.guid then
+   if not by_guid then
+    by_guid={}
+    for i=0,R.CountTracks(state.project)-1 do local t=R.GetTrack(state.project,i);by_guid[R.GetTrackGUID(t)]=t end
+   end
+   track=by_guid[entry.guid]
+  end
+  if track and R.GetMediaTrackInfo_Value(track,'I_FOLDERDEPTH')>0 then
+   entry.track=track
+   if R.GetMediaTrackInfo_Value(track,'I_FOLDERCOMPACT')~=entry.compact then
+    if R.SetMediaTrackInfo_Value(track,'I_FOLDERCOMPACT',entry.compact)then changed=true end
+   end
+  end
+ end
+ if changed then R.TrackList_AdjustWindows(false);R.UpdateArrange()end
+end
 function Core.apply(snapshot,groups,s,checkpoint,restore_selection)
  local project=snapshot.project
  if not Core.generation_targets_valid(snapshot) then return nil,'生成対象が変更されたため中止しました。' end
@@ -5954,7 +6092,7 @@ function Core.apply(snapshot,groups,s,checkpoint,restore_selection)
  end
  local ok,err=xpcall(function()
   pause()
-  for track in pairs(free_tracks) do
+  for track in pairs(free_before) do
    if not R.SetMediaTrackInfo_Value(track,'I_FREEMODE',1) then error('自由配置モードを有効化できません。',0) end
   end
   for _,row in ipairs(groups._voice_originals or {}) do
@@ -6047,7 +6185,7 @@ function Core.apply(snapshot,groups,s,checkpoint,restore_selection)
   for track,mode in pairs(free_before) do local called,result=pcall(R.SetMediaTrackInfo_Value,track,'I_FREEMODE',mode);if not called or not result then restored=false end end
  end
  R.SelectAllMediaItems(project,false);for _,it in ipairs(originalSelection) do if R.ValidatePtr2(project,it,'MediaItem*') then R.SetMediaItemSelected(it,true) end end
- R.PreventUIRefresh(-1);if next(free_tracks) then R.UpdateTimeline() end;R.UpdateArrange();R.Undo_EndBlock2(project,ok and ('BLT Variant Forge: '..#groups..' variations') or 'BLT Variant Forge: failed (copies removed)',next(free_tracks) and (1|4) or 4)
+ R.PreventUIRefresh(-1);if next(free_before) then R.UpdateTimeline() end;R.UpdateArrange();R.Undo_EndBlock2(project,ok and ('BLT Variant Forge: '..#groups..' variations') or 'BLT Variant Forge: failed (copies removed)',next(free_before) and (1|4) or 4)
  if not ok then R.ShowConsoleMsg('BLT Variant Forge:\n'..BLT.publicError(err)..'\n');return nil,restored and ('作成を中止し、今回のコピーを削除しました。\n'..BLT.publicError(err)) or '処理を中止しました。コピーの削除に失敗したためUndoで戻してください。',nil,nil,cleanup_failed,restored end
  return #created,created,free_before,original_before
  end)
@@ -7630,6 +7768,7 @@ function UI.finish_generation(j)
  j.committing=nil
  if not count then UI.queue_bake_deletes(cleanup_failed,j.snapshot.project);A.job=nil;A.progress=0;UI.refresh();UI.notice(j.cancelled and rollback_ok and '生成を中止し、今回のコピーを削除しました。' or created_or_err,not (j.cancelled and rollback_ok));return nil end
  A.job=nil;A.progress=0;local refs={};for _,v in ipairs(j.snapshot.items) do refs[#refs+1]=v.item end;A.last_created={project=j.snapshot.project,items=created_or_err or {},count=count,seed=j.settings.seed,source_refs=refs,free_before=free_before or {},original_before=original_before or {},undo_desc='BLT Variant Forge: '..#groups..' variations'}
+ UI.watch_folder_undo(j.snapshot.project)
  UI.target_lock_rebase()
  UI.restore_item_selection(j.snapshot.project,j.restore_selection or refs,false)
  local src_on=0;for _,v in ipairs(j.snapshot.items) do if UI.source_requested(j.apply,v) then src_on=src_on+1 end end
@@ -7760,6 +7899,49 @@ function A.bake_last_texture_fx()
  UI.notice(string.format('TEXTURE FXを%dアイテムへ焼き込みました。再生成は引き続き使用できます。',#targets))
  end)
 end
+function UI.own_generation_undo(desc)
+ return type(desc)=='string'and desc:match('^BLT Variant Forge:')~=nil
+end
+function UI.watch_folder_undo(project,folders)
+ A.folder_undo={project=project,folders=folders or Core.folder_state(project),
+  entry=type(R.Undo_GetCurEntry)=='function'and R.Undo_GetCurEntry(project)or nil,
+  undo=R.Undo_CanUndo2(project),redo=R.Undo_CanRedo2(project)}
+end
+function UI.undo_with_folders(project)
+ if not UI.own_generation_undo(R.Undo_CanUndo2(project))then return R.Undo_DoUndo2(project)end
+ local folders=Core.folder_state(project)
+ local result=R.Undo_DoUndo2(project)
+ if result and result~=0 then Core.restore_folders(folders);UI.watch_folder_undo(project,folders)end
+ return result
+end
+function UI.poll_folder_undo()
+ local watch=A.folder_undo;if not watch or A.job then return end
+ local project=R.EnumProjects(-1,'')
+ if project~=watch.project then A.folder_undo=nil;return end
+ local entry=type(R.Undo_GetCurEntry)=='function'and R.Undo_GetCurEntry(project)or nil
+ local undo,redo=R.Undo_CanUndo2(project),R.Undo_CanRedo2(project)
+ if entry~=watch.entry or undo~=watch.undo or redo~=watch.redo then
+  local own=false
+  if entry and watch.entry and entry~=watch.entry then
+   local distance=math.abs(entry-watch.entry)
+   if distance==1 then
+    own=entry<watch.entry and UI.own_generation_undo(watch.undo)and redo==watch.undo
+     or entry>watch.entry and UI.own_generation_undo(watch.redo)and undo==watch.redo
+   elseif distance<=64 and type(R.Undo_GetEntryDesc)=='function'then
+    own=true
+    for i=math.min(entry,watch.entry)+1,math.max(entry,watch.entry)do
+     if not UI.own_generation_undo(R.Undo_GetEntryDesc(project,i))then own=false;break end
+    end
+   end
+  elseif not entry or not watch.entry then
+   own=UI.own_generation_undo(watch.undo)and redo==watch.undo and redo~=watch.redo
+    or UI.own_generation_undo(watch.redo)and undo==watch.redo and undo~=watch.undo
+  end
+  if own then Core.restore_folders(watch.folders)end
+  watch.folders=(UI.own_generation_undo(undo)or UI.own_generation_undo(redo))and Core.folder_state(project)or nil
+  watch.entry,watch.undo,watch.redo=entry,undo,redo
+ elseif watch.folders then watch.folders=Core.folder_state(project,watch.folders)end
+end
 function UI.regeneration_ready()
  if A.job or A.source_job or UI.last_created_count()<=0 then return false end
  if A.target_lock and not UI.target_lock_valid(A.project) then return false end
@@ -7791,7 +7973,7 @@ function UI.regenerate()
   R.UpdateArrange();if do_refresh then UI.refresh() end
  end
  A.last_created=nil
- local undone=R.Undo_DoUndo2(rec.project)
+ local undone=UI.undo_with_folders(rec.project)
  if not undone or undone==0 then A.last_created=rec;UI.notice('再生成のUndoを統合できません。生成後に別のUndo操作があります。',true);return end
  UI.target_lock_rebase()
  if not A.target_lock then R.SelectAllMediaItems(rec.project,false);for _,it in ipairs(refs) do if R.ValidatePtr2(rec.project,it,'MediaItem*') then R.SetMediaItemSelected(it,true) end end;R.UpdateArrange() end
@@ -8907,7 +9089,7 @@ BLT.attach({menuState=A,
  wake=function() A.content_dirty=true;redraw_dirty=true;next_draw_time=0;wake_visuals() end,
  defaults=BLT.variantDefaults,capture=function() return BLT.captureVariant() end,
  valid=function(v) return Core.validate(v.settings)~=nil and BLT.decodeTexture(v.texture)~=nil end,apply=function(v) for k,x in pairs(v.settings) do S[k]=x end;A.apply.lock=v.locks;BLT.restoreTexture(v.texture);UI.changed();UI.persist_now() end,
- undoRefresh=function() UI.refresh() end,
+ undo=UI.undo_with_folders,undoRefresh=function() UI.refresh() end,
  busy=function() return A.job~=nil or A.source_job~=nil end,commit=function() return UI.commit_edit() end,
  cancelEdit=function() edit=nil;A.field_drag=nil;A.curve_drag=nil end,editing=function() return edit~=nil end,
  modal=function() return false end,
@@ -9063,7 +9245,7 @@ gfx.ext_retina=1;if finite(wx) and finite(wy) then gfx.init(Chrome.title,ww,wh,0
 end
 function UI.loop()
  local ok,err=xpcall(function()
- local now=R.time_precise();BLT.tick(now)
+ local now=R.time_precise();UI.poll_folder_undo();BLT.tick(now)
 
  if A.closing then A.closing=true;return end
  local k=BLT.key(gfx.getchar());if k<0 then A.closing=true;return end

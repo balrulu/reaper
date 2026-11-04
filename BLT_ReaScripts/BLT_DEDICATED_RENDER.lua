@@ -1,5 +1,5 @@
 -- @description BLT DEDICATED RENDER
--- @version 0.14.20
+-- @version 0.14.22
 -- @author Balrulu
 -- @provides
 --   . > ../
@@ -817,14 +817,88 @@ function M.new(host,api,text)
 end
 return M
 end)()
+local AppPresetNotice=(function()
+local M={}
+local min,max,floor=math.min,math.max,math.floor
+local function smooth(t)return t*t*(3-2*t)end
+local function fitText(g,text,width)
+ if g.measurestr(text)<=width then return text end
+ if g.measurestr('…')>width then return ''end
+ local low,high=0,utf8.len(text)
+ while low<high do
+  local mid=floor((low+high+1)/2);local stop=utf8.offset(text,mid+1)or(#text+1)
+  if g.measurestr(text:sub(1,stop-1)..'…')<=width then low=mid else high=mid-1 end
+ end
+ return text:sub(1,(utf8.offset(text,low+1)or(#text+1))-1)..'…'
+end
+function M.new(host,api,options)
+ options=options or {}
+ local N={duration=options.duration or 1,fadeIn=options.fadeIn or .12,fadeOut=options.fadeOut or .38,
+  maxWidth=options.maxWidth or 360,gap=options.gap or 8}
+ function N:show(name)
+  if type(name)~='string'then return false end
+  name=name:gsub('[%z\1-\31\127]',' ')
+  if not utf8.len(name)then name=name:gsub('[\128-\255]','?')end
+  if not name:find('%S')then return false end
+  self.name,self.at,self.layout=name,api.time_precise(),nil;return true
+ end
+ function N:clear()self.name,self.at,self.painted,self.layout=nil,nil,nil,nil end
+ function N:animating(now)
+  if not self.name then return false end
+  if(now or api.time_precise())-self.at<self.duration then return true end
+  local painted=self.painted;self:clear();return painted==true
+ end
+ function N:draw(g,C,fit,barHeight)
+  if not self.name then return false end
+  local age=max(0,api.time_precise()-self.at)
+  if age>=self.duration then self:clear();return false end
+  local alpha=1
+  if age<self.fadeIn then alpha=smooth(age/self.fadeIn)
+  elseif age>self.duration-self.fadeOut then alpha=smooth((self.duration-age)/self.fadeOut)end
+  local textW,textH=g.measurestr(self.name)
+  local w=min(self.maxWidth,g.w-32,max(112,textW+32));local h=max(30,textH+14)
+  local y=(barHeight or 26)+self.gap
+  if w<48 or y+h>g.h then return false end
+  local layout=self.layout
+  if not layout or layout.w~=w or layout.textW~=textW or layout.textH~=textH or layout.dpi~=host.dpi then
+   local available=max(0,w-32)
+   local text=fit and fit(self.name,available)or fitText(g,self.name,available)
+   local tw,th=g.measurestr(text)
+   layout={w=w,textW=textW,textH=textH,dpi=host.dpi,text=text,tw=tw,th=th};self.layout=layout
+  end
+  local text,tw,th=layout.text,layout.tw,layout.th
+  local x=(g.w-w)*.5;local dpi=host.dpi or 1
+  local ox,oy=host.originX,host.originY
+  local l,t=floor((ox+x)*dpi+.5)/dpi,floor((oy+y)*dpi+.5)/dpi
+  local r,b=l+w,t+h;local I,draw=host.I,host.draw
+  local accent=C.accent2 or C.ice;local field=C.field or C.bg
+  I.DrawList_AddRectFilled(draw,l-2,t-2,r+2,b+2,host.rgba(accent[1],accent[2],accent[3],alpha*.045),4)
+  I.DrawList_AddRectFilled(draw,l,t,r,b,host.rgba(field[1],field[2],field[3],alpha*.96),3)
+  I.DrawList_AddRect(draw,l+.5,t+.5,r-.5,b-.5,host.rgba(accent[1],accent[2],accent[3],alpha*.22),3)
+  g.set(C.text[1],C.text[2],C.text[3],alpha)
+  g.x,g.y=l-ox+(w-tw)*.5,t-oy+(h-th)*.5;g.drawstr(text)
+  self.painted=alpha>0;return true
+ end
+ return N
+end
+return M
+end)()
 local AppCanvasDraw=(function()
 local M={}
 local floor,ceil,min,max=math.floor,math.ceil,math.min,math.max
-function M.new(H,G,api,native,ShellText,ChromeRaster,beginFrame,changed)
+function M.new(H,G,api,native,ShellText,ChromeRaster,beginFrame,changed,PresetNotice)
  local I,ctx,g=H.I,H.ctx,H.g
  local text=ShellText.new(H,api,native)
  local chrome=ChromeRaster.new(H,api,text)
  local D={}
+ local notice=PresetNotice and PresetNotice.new(H,api)
+ local noticeG=notice and text:canvas(g)
+ local noticeColors
+ function D:showPresetName(name)
+  if not notice or not notice:show(name)then return false end
+  changed();return true
+ end
+ function D:presetNoticeAnimating(now)return notice and notice:animating(now)or false end
  local front,back,partial={n=0},{n=0},{n=0}
  local backChrome,partialChrome=false,false
  local wheelFront,wheelBack,fullDraw={n=0},{n=0},false
@@ -918,6 +992,7 @@ function M.new(H,G,api,native,ShellText,ChromeRaster,beginFrame,changed)
  local chromeState={}
  local function paintChrome(c)
   local p=c.painter;local b=p.b
+  noticeColors=p.C
   local state={b.inline or false,b.compact or false,b.titleEnd or 0,p.collapsed or false,p.docked or false,p.dockButton or false,p.compactLanguage or false,p.chrome.titleText or ''}
   for j,value in ipairs(state)do if chromeState[j]~=value then chromeState[j]=value;chrome.signature={}end end
   local output=chrome:begin(p);if chrome.dirty then c.draw(output,p)end
@@ -1092,6 +1167,9 @@ function M.new(H,G,api,native,ShellText,ChromeRaster,beginFrame,changed)
    for i=1,front.n do local c=front[i];if c.paint~=paintChrome then c.paint(c)end end
   else replay(front)end
   replay(partial)
+  if notice and notice.name and noticeColors then
+   text:setfont(1,H.faces[1],13,98);notice:draw(noticeG,noticeColors,nil,26)
+  end
  end
  function G.update()D:commit()end
  function G.abort()
@@ -1101,6 +1179,7 @@ function M.new(H,G,api,native,ShellText,ChromeRaster,beginFrame,changed)
  function G.beginDraw()beginFrame();G.abort();fullDraw=true end
  G.release=G.abort
  function D:close()
+  if notice then notice:clear()end
   local failure
   local function cleanup(fn,...)
    local ok,why=pcall(fn,...);if not ok and not failure then failure=why end
@@ -1117,7 +1196,7 @@ end)()
 local AppCanvas=(function()
 local M={}
 local cursorNames={we='ResizeEW',ns='ResizeNS',nwse='ResizeNWSE',nesw='ResizeNESW'}
-function M.install(api,native,CanvasHost,options,ShellText,ChromeRaster,CanvasDraw)
+function M.install(api,native,CanvasHost,options,ShellText,ChromeRaster,CanvasDraw,PresetNotice)
  local P=setmetatable({},{__index=api})
  local G={x=0,y=0,w=options.width,h=options.height,a=1,r=1,g=1,b=1,
   mouse_x=-10000,mouse_y=-10000,mouse_cap=0,mouse_wheel=0,ext_retina=1}
@@ -1132,7 +1211,7 @@ function M.install(api,native,CanvasHost,options,ShellText,ChromeRaster,CanvasDr
   assert(api.ImGui_GetBuiltinPath,'ReaImGui 0.10以降が必要です。')
   if H then return end
   H=CanvasHost.new(api,options.title,options.width,options.height,options.section);I,ctx=H.I,H.ctx
-  display=CanvasDraw.new(H,G,api,native,ShellText,ChromeRaster,function()beginFrame()end,function()redraw=true end)
+  display=CanvasDraw.new(H,G,api,native,ShellText,ChromeRaster,function()beginFrame()end,function()redraw=true end,PresetNotice)
   I.SetConfigVar(ctx,I.ConfigVar_Flags,I.GetConfigVar(ctx,I.ConfigVar_Flags)|I.ConfigFlags_DockingEnable)
   H.minWidth,H.minHeight,H.persistSize=options.minWidth,options.minHeight,true
   for _,face in ipairs(H.faces)do H:fontFor(face,false);H:fontFor(face,true)end
@@ -1200,6 +1279,7 @@ function M.install(api,native,CanvasHost,options,ShellText,ChromeRaster,CanvasDr
   ensure();return I,ctx,H:fontFor(face,false),H.originX or 0,H.originY or 0
  end
  function G.setOverlay(fn)overlay=fn end
+ function G.showPresetName(name)ensure();return display:showPresetName(name)end
  local function closeMenuScope(scopes)
   local fn=scopes[#scopes];scopes[#scopes]=nil;fn(ctx)
  end
@@ -1214,6 +1294,8 @@ function M.install(api,native,CanvasHost,options,ShellText,ChromeRaster,CanvasDr
     I.OpenPopup(ctx,id);menu.pending=nil
    end
    I.PushFont(ctx,H:fontFor(H.faces[1],false),13);scopes[#scopes+1]=I.PopFont
+   local prefix=options.menuChecksLeft and '    ' or ''
+   local gutter=prefix~='' and I.CalcTextSize(ctx,prefix) or 0
    if I.BeginPopup(ctx,id)then
     scopes[#scopes+1]=I.EndPopup
     if I.IsKeyPressed(ctx,I.Key_Escape,false)then I.CloseCurrentPopup(ctx)end
@@ -1222,10 +1304,22 @@ function M.install(api,native,CanvasHost,options,ShellText,ChromeRaster,CanvasDr
       I.PushID(ctx,i);scopes[#scopes+1]=I.PopID
       if item.separator then I.Separator(ctx)
       elseif item.children then
-       if I.BeginMenu(ctx,item.label,item.enabled~=false)then
+       if I.BeginMenu(ctx,prefix..item.label,item.enabled~=false)then
         scopes[#scopes+1]=I.EndMenu;items(item.children);closeMenuScope(scopes)
        end
-      elseif I.MenuItem(ctx,item.label,nil,item.checked==true,item.enabled~=false)then choice=item.id or i end
+      else
+       local mark=options.menuChecksLeft and item.checked
+       local x=mark and I.GetCursorScreenPos(ctx)
+       if I.MenuItem(ctx,prefix..item.label,nil,item.checked==true and not options.menuChecksLeft,item.enabled~=false)then choice=item.id or i end
+       if mark then
+        local _,top=I.GetItemRectMin(ctx);local _,bottom=I.GetItemRectMax(ctx)
+        local size=I.GetFontSize(ctx)*.65;local y=(top+bottom)*.5;x=x+gutter*.5
+        local color=I.GetColor(ctx,item.enabled~=false and I.Col_Text or I.Col_TextDisabled)
+        local draw=I.GetWindowDrawList(ctx);local width=math.max(1,size*.14)
+        I.DrawList_AddLine(draw,x-size*.4,y,x-size*.12,y+size*.28,color,width)
+        I.DrawList_AddLine(draw,x-size*.12,y+size*.28,x+size*.44,y-size*.38,color,width)
+       end
+      end
       closeMenuScope(scopes)
      end
     end
@@ -1292,7 +1386,8 @@ function M.install(api,native,CanvasHost,options,ShellText,ChromeRaster,CanvasDr
   if frame and not insideCallback then finishFrame()end
   return api.defer(function()
    if closed then return end
-   local idle=H and H.shown and not redraw and not contextMenu and H:idle(api.time_precise())
+   local notifying=display and display:presetNoticeAnimating(api.time_precise())
+   local idle=H and H.shown and not redraw and not contextMenu and not notifying and H:idle(api.time_precise())
    if not idle then beginFrame()end
    insideCallback=true
    local ok,err=xpcall(fn,debug.traceback);insideCallback=false
@@ -1377,7 +1472,7 @@ end)()
 if type(reaper.ImGui_GetBuiltinPath)~='function'then reaper.MB('ReaImGui 0.10以降が必要です。ReaPackから導入・更新してください。','BLT | エラー',0);return end
 local ItemLabelNative=reaper
 local reaper,gfx=AppCanvas.install(reaper,gfx,AppCanvasHost,
- {section='BLT_DEDICATED_RENDER',title='BLT DEDICATED RENDER',width=648,height=720,minWidth=648,minHeight=681},AppShellText,AppChromeRaster,AppCanvasDraw)
+ {section='BLT_DEDICATED_RENDER',title='BLT DEDICATED RENDER',width=648,height=720,minWidth=648,minHeight=681},AppShellText,AppChromeRaster,AppCanvasDraw,AppPresetNotice)
 do
 
 local BLTNativeDialogs=(function()
@@ -2199,7 +2294,7 @@ function Embed.write_aiff(path,plan,source)
  if not ok then if exists(temp)then os.remove(temp)end;error(err,0)end
 end
 
-local Model={VERSION='0.14.20',SOURCE_MASK=1|2|8|32|64|128|4096}
+local Model={VERSION='0.14.22',SOURCE_MASK=1|2|8|32|64|128|4096}
 Model.numbers={'RENDER_SETTINGS','RENDER_BOUNDSFLAG','RENDER_CHANNELS','RENDER_SRATE','RENDER_STARTPOS','RENDER_ENDPOS','RENDER_TAILFLAG','RENDER_TAILMS','RENDER_ADDTOPROJ','RENDER_DITHER','RENDER_NORMALIZE','RENDER_NORMALIZE_TARGET','RENDER_BRICKWALL','RENDER_FADEIN','RENDER_FADEOUT','RENDER_FADEINSHAPE','RENDER_FADEOUTSHAPE','RENDER_FADELPF','RENDER_PADSTART','RENDER_PADEND','RENDER_TRIMSTART','RENDER_TRIMEND','RENDER_DELAY'}
 Model.strings={'RENDER_FILE','RENDER_PATTERN','RENDER_EXTRAFILEDIR','RENDER_FORMAT2','RENDER_FORMAT'}
 Model.configs={'projrenderlimit','projrenderspeedcap','projrenderresample','projrenderrateinternal','renderclosewhendone','renderpeaks','projrenderqdelay','renderbsnew'}
@@ -4621,11 +4716,17 @@ function Presets.capture(name)
  if not host.valid(values) then return nil end
  return {name=name,values=B.copy(values)}
 end
+function Presets.setCurrent(p,values)
+ Presets.current=p;Presets.baselinePreset=p
+ Presets.baseline=p and B.copy(values or host.capture()) or nil
+ Presets.dirtyCurrent,Presets.dirtyState,Presets.dirtyRevision,Presets.dirtyCache=nil,nil,nil,nil
+end
 function Presets.dirty()
  local current=Presets.current;if not current then return false end
  local state=host.capture()
  if Presets.dirtyCurrent~=current or Presets.dirtyState~=state or Presets.dirtyRevision~=B.stateRevision then
-  Presets.dirtyCache=not B.same(state,current.values)
+  local baseline=Presets.baselinePreset==current and Presets.baseline or current.values
+  Presets.dirtyCache=not B.same(state,baseline)
   Presets.dirtyCurrent,Presets.dirtyState,Presets.dirtyRevision=current,state,B.stateRevision
  end
  return Presets.dirtyCache
@@ -4658,7 +4759,7 @@ function Presets.remove(p)
  if PresetDelete.confirm(prompt)~=6 then return false end
  local oldCount=#Presets.items
  table.remove(Presets.items,index)
- if Presets.current and Presets.current.name==p.name then Presets.current=nil;Presets.dirtyCache=nil end
+ if Presets.current and Presets.current.name==p.name then Presets.setCurrent(nil) end
  PresetDelete.persist(oldCount,p)
  Presets.offset=math.min(Presets.offset or 0,math.max(0,#Presets.items-PresetDelete.visible()))
  Presets.selected=nil;Presets.pressed=nil;Presets.hoverSince=nil
@@ -4698,12 +4799,13 @@ function Presets.save(asNew)
   name=Presets.name(value);if not name then notice('有効なプリセット名を入力してください。',false);return end
  end
  local p=Presets.capture(name);if not p then notice('設定値を確認してください。',false);return end
- if Presets.put(p) then Presets.current=p;notice('プリセットを保存しました: '..name,true) end
+ if Presets.put(p) then Presets.setCurrent(p,p.values);notice('プリセットを保存しました: '..name,true) end
 end
 function Presets.apply(p)
  if host.busy() or not host.commit() then return end
  if Presets.dirty() and Language.mb('未保存の変更を破棄して読み込みますか？','PRESET',4)~=6 then return end
- host.cancelEdit();host.apply(B.copy(p.values));Presets.current=p;wake_visuals();notice('プリセットを読み込みました: '..p.name,true)
+ host.cancelEdit();host.apply(B.copy(p.values));Presets.setCurrent(p);wake_visuals();notice('プリセットを読み込みました: '..p.name,true)
+ gfx.showPresetName(Presets.isFactory(p)and Language.text(p.name)or p.name)
 end
 function Presets.step(d)
  local n=1

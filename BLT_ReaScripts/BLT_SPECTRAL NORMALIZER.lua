@@ -1,5 +1,5 @@
 -- @description SPECTRAL NORMALIZER
--- @version 0.6.11
+-- @version 0.6.12
 -- @author Balrulu
 -- @provides
 --   . > ../
@@ -2364,6 +2364,72 @@ end
 return M
 end)()
 
+BLT.PresetNotice=(function()
+local M={}
+local min,max,floor=math.min,math.max,math.floor
+local function smooth(t)return t*t*(3-2*t)end
+local function fitText(g,text,width)
+ if g.measurestr(text)<=width then return text end
+ if g.measurestr('…')>width then return ''end
+ local low,high=0,utf8.len(text)
+ while low<high do
+  local mid=floor((low+high+1)/2);local stop=utf8.offset(text,mid+1)or(#text+1)
+  if g.measurestr(text:sub(1,stop-1)..'…')<=width then low=mid else high=mid-1 end
+ end
+ return text:sub(1,(utf8.offset(text,low+1)or(#text+1))-1)..'…'
+end
+function M.new(host,api,options)
+ options=options or {}
+ local N={duration=options.duration or 1,fadeIn=options.fadeIn or .12,fadeOut=options.fadeOut or .38,
+  maxWidth=options.maxWidth or 360,gap=options.gap or 8}
+ function N:show(name)
+  if type(name)~='string'then return false end
+  name=name:gsub('[%z\1-\31\127]',' ')
+  if not utf8.len(name)then name=name:gsub('[\128-\255]','?')end
+  if not name:find('%S')then return false end
+  self.name,self.at,self.layout=name,api.time_precise(),nil;return true
+ end
+ function N:clear()self.name,self.at,self.painted,self.layout=nil,nil,nil,nil end
+ function N:animating(now)
+  if not self.name then return false end
+  if(now or api.time_precise())-self.at<self.duration then return true end
+  local painted=self.painted;self:clear();return painted==true
+ end
+ function N:draw(g,C,fit,barHeight)
+  if not self.name then return false end
+  local age=max(0,api.time_precise()-self.at)
+  if age>=self.duration then self:clear();return false end
+  local alpha=1
+  if age<self.fadeIn then alpha=smooth(age/self.fadeIn)
+  elseif age>self.duration-self.fadeOut then alpha=smooth((self.duration-age)/self.fadeOut)end
+  local textW,textH=g.measurestr(self.name)
+  local w=min(self.maxWidth,g.w-32,max(112,textW+32));local h=max(30,textH+14)
+  local y=(barHeight or 26)+self.gap
+  if w<48 or y+h>g.h then return false end
+  local layout=self.layout
+  if not layout or layout.w~=w or layout.textW~=textW or layout.textH~=textH or layout.dpi~=host.dpi then
+   local available=max(0,w-32)
+   local text=fit and fit(self.name,available)or fitText(g,self.name,available)
+   local tw,th=g.measurestr(text)
+   layout={w=w,textW=textW,textH=textH,dpi=host.dpi,text=text,tw=tw,th=th};self.layout=layout
+  end
+  local text,tw,th=layout.text,layout.tw,layout.th
+  local x=(g.w-w)*.5;local dpi=host.dpi or 1
+  local ox,oy=host.originX,host.originY
+  local l,t=floor((ox+x)*dpi+.5)/dpi,floor((oy+y)*dpi+.5)/dpi
+  local r,b=l+w,t+h;local I,draw=host.I,host.draw
+  local accent=C.accent2 or C.ice;local field=C.field or C.bg
+  I.DrawList_AddRectFilled(draw,l-2,t-2,r+2,b+2,host.rgba(accent[1],accent[2],accent[3],alpha*.045),4)
+  I.DrawList_AddRectFilled(draw,l,t,r,b,host.rgba(field[1],field[2],field[3],alpha*.96),3)
+  I.DrawList_AddRect(draw,l+.5,t+.5,r-.5,b-.5,host.rgba(accent[1],accent[2],accent[3],alpha*.22),3)
+  g.set(C.text[1],C.text[2],C.text[3],alpha)
+  g.x,g.y=l-ox+(w-tw)*.5,t-oy+(h-th)*.5;g.drawstr(text)
+  self.painted=alpha>0;return true
+ end
+ return N
+end
+return M
+end)()
 BLT.Shell=(function()
 local M={}
 local ChromeRaster,ShellText=BLT.ChromeRaster,BLT.ShellText
@@ -2774,6 +2840,7 @@ end)()
  S.typography=ShellText.new(host,api)
  S.textG=S.typography:canvas(host.g);gfx=S.textG
  S.raster=ChromeRaster.new(host,api,S.typography)
+ if options.presetNotice~=false then S.presetNotice=BLT.PresetNotice.new(host,api,type(options.presetNotice)=='table'and options.presetNotice or nil)end
  local I,ctx,C=host.I,host.ctx,ui.C
  local spec=M.spec
  if options.layout then
@@ -2883,11 +2950,25 @@ end)()
   else color(bad and C.warn or C.muted);gfx.x,gfx.y=self.footerX,self.footerY;gfx.drawstr(self.footerShown) end
   self:font(spec.versionSize,3,true);color(C.faint);gfx.x,gfx.y=ui.ox+(width-spec.inset)*scale-vw,self.footerY;gfx.drawstr(ver)
  end
+ function S:showPresetName(name)
+  return self.presetNotice and self.presetNotice:show(name) or false
+ end
+ function S:presetNoticeAnimating(now)
+  return self.presetNotice and self.presetNotice:animating(now) or false
+ end
  function S:applyPreset(index)
-  if options.stepPreset then options.stepPreset(index<self.preset and -1 or 1);return end
-  self.preset=(index-1)%#options.presets+1
-  if ui.editor.edit then ui.editor:close(false) end
-  options.apply(options.presets[self.preset])
+  if options.stepPreset then
+   local name=options.stepPreset(index<self.preset and -1 or 1)
+   if type(name)=='string'then self:showPresetName(name)end
+   return
+  end
+  index=(index-1)%#options.presets+1
+  if ui.editor.edit and ui.editor:close(false)==false then return false end
+  local preset=options.presets[index]
+  if options.apply(preset)==false then return false end
+  self.preset=index
+  self:showPresetName(self.language=='EN'and(preset.nameEN or preset.name)or preset.name)
+  return true
  end
  function S:begin()
   self.theme.tick(api.time_precise())
@@ -2975,8 +3056,15 @@ end)()
   elseif footerHot and not self.down and not self.popupOpen and now-(self.hoverSince or now)>=.7 then
    I.PushFont(ctx,host.font,12);I.SetTooltip(ctx,self.footerMessage);I.PopFont(ctx)
   end
+  if self.presetNotice then
+   if self.presetNotice.name then self:font(13,1,true,1)end
+   self.presetNotice:draw(self.textG,C,painter.fit,spec.barHeight)
+  end
  end
- function S:close() self.raster:close();self.typography:close() end
+ function S:close()
+  if self.presetNotice then self.presetNotice:clear()end
+  self.raster:close();self.typography:close()
+ end
  return S
 end
 return M
@@ -4459,6 +4547,7 @@ function Presets.apply(p)
  UI.reset_line_preview(true);A.history={};A.redo={};A.preset_name=p.name;Presets.current=p;A.preset_dirty=false
  App.persist();App.store(SECTION,'current_preset',Presets.isFactory(p) and '__factory__' or p.name,true)
  App.notice('プリセットを読み込みました。',false)
+ shell:showPresetName(Presets.isFactory(p)and L.text(p.name)or p.name)
 end
 function Presets.merge(items)
  local merged,index={},{};local conflicts=false
@@ -5217,7 +5306,7 @@ function App.loop()
   if A.status_until>0 and now>=A.status_until and not A.job then A.status_until=0;A.warning=false;wake() end
   if changed(worldState,A.settings_revision,A.status,A.warning,A.settings,A.settings.curve,A.job,A.modal,A.source_info,A.source_detail,A.source_nyquist,L.code,C.bg,Presets.current,shell.icon.dirty,Host.requestReset) then wake() end
   local interactive=U.editor.edit or shell.popupOpen or Host.drag or shell.hoverID or U.capture or A.drag or A.number_drag or UI.context or A.modal
-  local animating=U:executeAnimating('primary') or shell.icon:animating(now) or now<(A.flash_until or 0) or A.hover_node and now<A.point_flash+.22
+  local animating=U:executeAnimating('primary') or (shell:presetNoticeAnimating(now)or shell.icon:animating(now)) or now<(A.flash_until or 0) or A.hover_node and now<A.point_flash+.22
   if not A.job and not A.dirty and now>=awakeUntil and not interactive and not animating and Host:idle(now) then
    U.now=now;shell.icon.lastTime=now;R.defer(App.loop);return
   end
