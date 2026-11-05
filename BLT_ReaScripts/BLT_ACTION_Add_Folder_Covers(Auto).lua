@@ -1,5 +1,5 @@
 -- @description ACTION - Add Folder Covers (Auto)
--- @version 1.0.9
+-- @version 1.0.13
 -- @author Balrulu
 -- @provides
 --   . > ../
@@ -960,8 +960,115 @@ local function begin_gesture()
   return session
 end
 
+local function move_children_with_envelopes(p, session, journal)
+  local backup = session.move_backup
+  if backup then
+    for _, entry in ipairs(journal) do if not backup.items[entry.item] then backup.items[entry.item] = entry end end
+  end
+  local follow = R.GetToggleCommandStateEx and R.GetToggleCommandStateEx(0, 40070)
+    or R.GetToggleCommandState and R.GetToggleCommandState(40070) or 0
+  local tracks, groups
+  if follow == 1 then
+    tracks = {}
+    for _, entry in ipairs(journal) do
+      local count = tracks[entry.track]
+      if count == nil then count = R.CountTrackEnvelopes(entry.track);tracks[entry.track] = count end
+      if count > 0 then
+        groups = groups or {}
+        local delta, group = entry.target - entry.position
+        for _, candidate in ipairs(groups) do if math.abs(candidate.delta - delta) <= EPS then group = candidate;break end end
+        if not group then group = {delta = delta, items = {}};groups[#groups + 1] = group end
+        group.items[#group.items + 1] = entry;entry.native = true
+      end
+    end
+  end
+  if not groups then
+    for _, entry in ipairs(journal) do assert(R.SetMediaItemInfo_Value(entry.item, 'D_POSITION', entry.target), 'Cannot move cover child.') end
+    return
+  end
+  if not backup then
+    backup = {items = {}, envelopes = {}};session.move_backup = backup
+    for _, entry in ipairs(journal) do backup.items[entry.item] = entry end
+  end
+  -- Keep one recovery baseline per drag, not a complete envelope copy per frame.
+  for track, count in pairs(tracks) do
+    for i = 0, count - 1 do
+      local env = R.GetTrackEnvelope(track, i)
+      if not backup.envelopes[env] then
+        local ok, chunk = R.GetEnvelopeStateChunk(env, '', false)
+        assert(ok, 'Cannot preserve child track envelope.')
+        backup.envelopes[env] = chunk
+      end
+    end
+  end
+  local selected = {}
+  for i = 0, R.CountSelectedMediaItems(p) - 1 do selected[#selected + 1] = R.GetSelectedMediaItem(p, i) end
+  local temporary
+  local function clear_temporary(check)
+    if not temporary then return end
+    for _, entry in ipairs(temporary) do
+      if not check or R.ValidatePtr2(p, entry.item, 'MediaItem*') then R.SetMediaItemSelected(entry.item, false) end
+    end
+  end
+  local visibility, ancestors = {}, {}
+  local function expose(track, key, value, prior)
+    if prior == nil then prior = R.GetMediaTrackInfo_Value(track, key) end
+    if prior ~= value then
+      visibility[#visibility + 1] = {track = track, key = key, value = prior}
+      assert(R.SetMediaTrackInfo_Value(track, key, value), 'Cannot prepare child track visibility.')
+    end
+  end
+  R.PreventUIRefresh(1)
+  local ok, err = xpcall(function()
+    -- Native item editing may exclude hidden tracks and collapsed descendants.
+    -- Restore visibility before releasing the redraw guard; no layout refresh.
+    for track, count in pairs(tracks) do
+      if count > 0 then
+        expose(track, 'B_SHOWINTCP', 1)
+        local parent = R.GetParentTrack(track)
+        while parent and not ancestors[parent] do
+          ancestors[parent] = true
+          local compact = R.GetMediaTrackInfo_Value(parent, 'I_FOLDERCOMPACT')
+          if compact == 2 then expose(parent, 'I_FOLDERCOMPACT', 0, compact) end
+          parent = R.GetParentTrack(parent)
+        end
+      end
+    end
+    for _, entry in ipairs(journal) do
+      if not entry.native then assert(R.SetMediaItemInfo_Value(entry.item, 'D_POSITION', entry.target), 'Cannot move cover child.') end
+    end
+    for _, item in ipairs(selected) do R.SetMediaItemSelected(item, false) end
+    for _, group in ipairs(groups) do
+      clear_temporary(false);temporary = group.items
+      for _, entry in ipairs(temporary) do R.SetMediaItemSelected(entry.item, true) end
+      R.ApplyNudge(p, 0, 0, 1, math.abs(group.delta), group.delta < 0, 0)
+      for _, entry in ipairs(temporary) do
+        assert(R.ValidatePtr2(p, entry.item, 'MediaItem*')
+          and math.abs(R.GetMediaItemInfo_Value(entry.item, 'D_POSITION') - entry.target) <= EPS, 'Child item move did not reach its target.')
+      end
+    end
+  end, debug.traceback)
+  local restored, restore_error = xpcall(function()
+    clear_temporary(not ok)
+    for _, item in ipairs(selected) do if R.ValidatePtr2(p, item, 'MediaItem*') then R.SetMediaItemSelected(item, true) end end
+  end, debug.traceback)
+  for i = #visibility, 1, -1 do
+    local saved = visibility[i]
+    local success, value = pcall(function()
+      return R.ValidatePtr2(p, saved.track, 'MediaTrack*') and R.SetMediaTrackInfo_Value(saved.track, saved.key, saved.value)
+    end)
+    if not success or not value then
+      restored = false
+      restore_error = (restore_error and (restore_error .. '\n') or '') .. 'Cannot restore child track visibility.'
+    end
+  end
+  R.PreventUIRefresh(-1)
+  if not restored then ok = false;err = err and (err .. '\n' .. restore_error) or restore_error end
+  if not ok then error(err, 0) end
+end
+
 local function move_gesture_children(p, session)
-  local targets, journal, changed = {}, {}, false
+  local targets, target_tracks, journal, changed = {}, {}, {}, false
   local checked
   for i = 2, #session.drivers do
     if session.drivers[i].state.track ~= session.drivers[1].state.track then checked = {};break end
@@ -996,7 +1103,7 @@ local function move_gesture_children(p, session)
     end
     if valid then
       for _, child in ipairs(state.children) do
-        if not targets[child.item] then targets[child.item] = child.s + delta end
+        if not targets[child.item] then targets[child.item] = child.s + delta;target_tracks[child.item] = child.track end
       end
     end
   end
@@ -1004,15 +1111,33 @@ local function move_gesture_children(p, session)
     for item, position in pairs(targets) do
       local before = R.GetMediaItemInfo_Value(item, 'D_POSITION')
       if math.abs(position - before) > EPS then
-        journal[#journal + 1] = {item = item, position = before}
-        assert(R.SetMediaItemInfo_Value(item, 'D_POSITION', position), 'Cannot move cover child.')
+        journal[#journal + 1] = {item = item, track = target_tracks[item], position = before, target = position}
         changed = true
       end
     end
+    if changed then move_children_with_envelopes(p, session, journal) end
   end, debug.traceback)
   if not ok then
-    for i = #journal, 1, -1 do pcall(R.SetMediaItemInfo_Value, journal[i].item, 'D_POSITION', journal[i].position) end
-    error(err, 0)
+    local backup, restored = session.move_backup, true
+    R.PreventUIRefresh(1)
+    for _, entry in pairs(backup and backup.items or journal) do
+      local success, value = pcall(function()
+        return R.ValidatePtr2(p, entry.item, 'MediaItem*') and R.GetMediaItemTrack(entry.item) == entry.track
+          and R.SetMediaItemInfo_Value(entry.item, 'D_POSITION', entry.position)
+      end)
+      if not success or not value then restored = false end
+    end
+    if backup then
+      for env, chunk in pairs(backup.envelopes) do
+        local success, value = pcall(function()
+          return R.ValidatePtr2(p, env, 'TrackEnvelope*') and R.SetEnvelopeStateChunk(env, chunk, false)
+        end)
+        if not success or not value then restored = false end
+      end
+    end
+    R.PreventUIRefresh(-1)
+    request_arrange()
+    error(tostring(err) .. (restored and '\nThe automatic moves were restored.' or '\nSome automatic moves could not be restored.'), 0)
   end
   if changed then request_arrange() end
 end

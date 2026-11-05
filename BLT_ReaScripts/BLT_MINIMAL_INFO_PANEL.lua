@@ -1,5 +1,5 @@
 -- @description MINIMAL INFO PANEL
--- @version 0.2.35
+-- @version 0.2.36
 -- @author Balrulu
 -- @provides
 --   . > ../
@@ -2984,12 +2984,27 @@ function Core.display(project,selection)
  end
  return first and {Core.row(project,first)} or {},count,mixed,hasMidi
 end
-function Core.check(s)
- if R.EnumProjects(-1,'')~=s.project or R.GetProjectStateChangeCount(s.project)~=s.revision then return false,'編集中に対象が変更されました。もう一度操作してください。' end
- if R.CountSelectedMediaItems(s.project)~=#s.rows then return false,'選択が変更されました。もう一度操作してください。' end
+function Core.same_selection(s)
+ if R.EnumProjects(-1,'')~=s.project or R.CountSelectedMediaItems(s.project)~=#s.rows then return false end
+ for _,v in ipairs(s.rows)do
+  if not Core.valid(s.project,v.item,'MediaItem*')or not R.IsMediaItemSelected(v.item)then return false end
+ end
+ return true
+end
+function Core.check(s,key)
+ local nameEdit=key=='name'and s.edit_name
+ if R.EnumProjects(-1,'')~=s.project or not nameEdit and R.GetProjectStateChangeCount(s.project)~=s.revision then return false,'編集中に対象が変更されました。もう一度操作してください。' end
+ if not nameEdit and R.CountSelectedMediaItems(s.project)~=#s.rows then return false,'選択が変更されました。もう一度操作してください。' end
  for _,v in ipairs(s.rows) do
-  if not Core.valid(s.project,v.item,'MediaItem*') or not R.IsMediaItemSelected(v.item)
+  if not Core.valid(s.project,v.item,'MediaItem*') or not nameEdit and not R.IsMediaItemSelected(v.item)
    or R.GetActiveTake(v.item)~=v.take or (v.take and not Core.valid(s.project,v.take,'MediaItem_Take*')) then return false,'対象アイテムが変更または削除されました。' end
+  if nameEdit then
+   local _,itemGuid=R.GetSetMediaItemInfo_String(v.item,'GUID','',false)
+   local takeGuid;if v.take then _,takeGuid=R.GetSetMediaItemTakeInfo_String(v.take,'GUID','',false)end
+   if itemGuid~=v.edit_item_guid or takeGuid~=v.edit_take_guid or R.GetMediaItemTrack(v.item)~=v.trackPtr
+    or v.take and (R.GetTakeName(v.take)or'')~=v.name then return false,'対象アイテムが変更または削除されました。'end
+   if (floor(R.GetMediaItemInfo_Value(v.item,'C_LOCK')or 0)&1)~=0 then return false,'ロックされたアイテムがあります。先にロックを解除してください。'end
+  end
  end
  return true
 end
@@ -3143,7 +3158,7 @@ function Core.commit(s,key,changes,defer_undo)
  return #changes
 end
 function Core.apply(s,key,value,absolute,defer_undo,rename)
- local ok,err=Core.check(s);if not ok then return nil,err end
+ local ok,err=Core.check(s,key);if not ok then return nil,err end
  local changes;changes,err=Core.plan(s,key,value,absolute,rename);if not changes then return nil,err end
  return Core.commit(s,key,changes,defer_undo)
 end
@@ -4050,10 +4065,10 @@ local function apply_value(snapshot,key,value,absolute)
  WheelUndo.finish()
  if snapshot.revision==revision then snapshot.revision=R.GetProjectStateChangeCount(snapshot.project) end
  if key=='reverse' and not Media.ready(true) then fail(key,'音声がオンラインになるまでお待ちください。');return false end
- local currentDisplay=key=='name'and A.project==snapshot.project and A.revision==snapshot.revision
-  and A.count==#snapshot.rows and A.items[1]and A.items[1].item==snapshot.rows[1].item
+ local currentDisplay=key=='name'and revision==snapshot.revision and A.project==snapshot.project and A.revision==snapshot.revision
+  and A.count==#snapshot.rows and A.items[1]and A.items[1].item==snapshot.rows[1].item and Core.same_selection(snapshot)
  local n,err=Core.apply(snapshot,key,value,absolute,false,Rename)
- if not n then fail(key,err);return false end
+ if not n then fail(key,err);if key=='name'and not Core.same_selection(snapshot)then poll(true)end;return false end
  -- A name change leaves source/flag/numeric display values intact. Stale
  -- displays still use the normal full refresh instead of reusing old values.
  if currentDisplay then
@@ -4106,7 +4121,10 @@ end
 local function finish_edit(cancel,absolute,confirmed)
  if not E then return true end
  local e=E;E=nil;IME.active=false;IME.ctx=nil;IME.font=nil
- if cancel or(e.key=='name'and not confirmed and e.text==e.snapshot.rows[1].name)then wake_visuals();return true end
+ if cancel or(e.key=='name'and not confirmed and e.text==e.snapshot.rows[1].name)then
+  if e.key=='name'and not Core.same_selection(e.snapshot)then poll(true)end
+  wake_visuals();return true
+ end
  local value,err
  if e.key=='length' then
   if lengthMode==6 then local n=tonumber(e.text);if finite(n) then value=n/frame_rate() end
@@ -4123,6 +4141,16 @@ local function open_edit(f)
  WheelUndo.finish()
  local snapshot=Core.snapshot(f.key);local first=snapshot.rows[1]
  if not first or first[f.key]==nil then fail(f.key,'この項目は選択アイテムでは編集できません。');return end
+ if f.key=='name'then
+  snapshot.edit_name=true
+  for _,v in ipairs(snapshot.rows)do
+   local _,guid=R.GetSetMediaItemInfo_String(v.item,'GUID','',false);v.edit_item_guid=guid
+   if v.take then _,v.edit_take_guid=R.GetSetMediaItemTakeInfo_String(v.take,'GUID','',false)end
+   if type(guid)~='string'or guid==''or v.take and(type(v.edit_take_guid)~='string'or v.edit_take_guid=='')then
+    fail(f.key,'対象アイテムが変更または削除されました。');return
+   end
+  end
+ end
  local value=first[f.key]
  if Core.specs[f.key] then value=Core.control_value(f.key,value) end
  if f.key=='length' then value=length_text(value,first.pos) end
@@ -4160,10 +4188,11 @@ local function ime_frame()
  local confirmed=I.IsKeyPressed(ctx,I.Key_Enter,false)or I.IsKeyPressed(ctx,I.Key_KeypadEnter,false)
  local done=confirmed or I.IsItemDeactivated(ctx)
  local focused=I.IsWindowFocused(ctx)
+ local switched=E.key=='name'and not Core.same_selection(E.snapshot)
  I.PopFont(ctx);I.PopStyleColor(ctx,2);I.PopStyleVar(ctx,3)
  IME.frames=IME.frames+1
  if cancel then finish_edit(true)
- elseif IME.frames>1 and(done or not focused)then local absolute=E.absolute;finish_edit(false,absolute,confirmed)end
+ elseif switched or IME.frames>1 and(done or not focused)then local absolute=E.absolute;finish_edit(false,absolute,confirmed)end
 end
 
 local layoutWidth=nil
