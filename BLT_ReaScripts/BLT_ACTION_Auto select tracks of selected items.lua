@@ -1,5 +1,5 @@
 -- @description ACTION - Auto select tracks of selected items (toggle)
--- @version 1.1.4
+-- @version 1.1.5
 -- @author Balrulu
 -- @provides
 --   . > ../
@@ -8,7 +8,7 @@
 -- @about
 --   BLT SERIES Beta TEST UPLOAD
 
--- BEGIN BLT TOGGLE RESTORE EMBEDDED 1.1.0
+-- BEGIN BLT TOGGLE RESTORE EMBEDDED 1.2.0
 local reaper=reaper
 do
 -- BEGIN BLT NATIVE DIALOGS 1.2.1 (generated from _shared/BLT_NativeDialogs.lua)
@@ -225,7 +225,7 @@ end
 
 do
 local BLTToggleRestoreSource = [====[
--- BLT toggle persistence 1.1.0. Embedded in each supported action.
+-- BLT toggle persistence 1.2.0. Embedded in each supported action.
 -- The public action is a dispatcher; its private worker owns the defer loop.
 -- Only a dispatcher's explicit OFF writes OFF. Worker shutdown never does.
 local M = {}
@@ -310,24 +310,60 @@ local function command_for(api, id)
   return command
 end
 
-local function launch(api, id)
+local function launch(api, id, batch, last)
   local command = command_for(api, id)
+  if batch then
+    batch.dirty = true;batch.path = worker_path(api, id)
+    batch.pending = batch.pending or {};batch.pending[batch.path] = true
+  end
   local ok, err = pcall(api.Main_OnCommand, command, 0)
   -- Unregistering a running ReaScript keeps its defer/atexit callbacks alive.
   -- The temporary command must never remain in the user's action list.
-  local removed, why = pcall(api.AddRemoveReaScript, false, 0, worker_path(api, id), true)
+  local removed, why = pcall(api.AddRemoveReaScript, false, 0, worker_path(api, id), not batch or last)
   assert(removed and type(why) == 'number' and why > 0, why or 'Cannot unregister the BLT background worker.')
+  if batch then
+    batch.pending[batch.path] = nil
+    if last then batch.dirty = next(batch.pending) ~= nil end
+  end
   assert(ok, err)
   assert(api.GetExtState(SECTION, id .. '_running') == '1', 'The BLT background worker did not start: ' .. id)
 end
 
 local function remove_legacy_workers(api)
+  if api.GetExtState(SECTION, 'worker_cleanup') == '1.2.0' then return end
+  local ok, data = pcall(read, api.GetResourcePath() .. '/reaper-kb.ini')
+  data = ok and data and data:gsub('\\', '/') or ''
+  local windows = api.GetOS and (api.GetOS() or ''):match('Win')
+  if windows then data = data:lower() end
+  local pending = {}
   for _, id in ipairs(IDS) do
-    api.AddRemoveReaScript(false, 0, worker_path(api, id), true)
+    local relative = 'BLT ReaScripts/BLT_Toggle_Worker_' .. id .. '.lua'
+    local absolute = worker_path(api, id):gsub('\\', '/')
+    if windows then relative, absolute = relative:lower(), absolute:lower() end
+    if data:find('"' .. relative .. '"', 1, true) or data:find('"' .. absolute .. '"', 1, true)
+        or api.GetExtState(SECTION, id .. '_worker_command') ~= '' then pending[#pending + 1] = id end
     if api.GetExtState(SECTION, id .. '_worker_command') ~= '' then
       api.DeleteExtState(SECTION, id .. '_worker_command', true)
     end
   end
+  for i, id in ipairs(pending) do api.AddRemoveReaScript(false, 0, worker_path(api, id), i == #pending) end
+  save(api, 'worker_cleanup', '1.2.0', false)
+end
+
+local function flush_registry(api, batch)
+  if not batch.dirty then return end
+  if batch.pending and next(batch.pending) then
+    local paths = {};for path in pairs(batch.pending) do paths[#paths + 1] = path end
+    for i, path in ipairs(paths) do
+      assert(api.AddRemoveReaScript(false, 0, path, i == #paths) > 0, 'Cannot remove a pending BLT worker.')
+      batch.pending[path] = nil
+    end
+    batch.dirty = false;return
+  end
+  local command = api.AddRemoveReaScript(true, 0, batch.path, false)
+  assert(command and command > 0, 'Cannot finish the BLT worker registry update.')
+  assert(api.AddRemoveReaScript(false, 0, batch.path, true) > 0, 'Cannot remove the BLT temporary worker.')
+  batch.dirty = false
 end
 
 local function log(api, message)
@@ -338,6 +374,7 @@ function M.install(api, id, module_source)
   assert(valid_id(id) and type(module_source) == 'string', 'Invalid BLT restore installation.')
   api.RecursiveCreateDirectory(root(api), 0)
   write(root(api) .. '/BLT_Toggle_Restore.lua', module_source)
+  save(api, 'module_version', '1.2.0', false)
   write(worker_path(api, id), worker_source(id))
   remove_legacy_workers(api)
   local startup = api.GetResourcePath() .. '/Scripts/__startup.lua'
@@ -361,7 +398,13 @@ function M.install(api, id, module_source)
 end
 
 function M.enter(api, id, module_source)
-  if api.BLT_ToggleRestoreWorker == id then return true end
+  if api.BLT_ToggleRestoreWorker == id then
+    if api.GetExtState(SECTION, 'module_version') ~= '1.2.0' then
+      write(root(api) .. '/BLT_Toggle_Restore.lua', module_source)
+      save(api, 'module_version', '1.2.0', false)
+    end
+    return true
+  end
   local _, path, section, command = api.get_action_context()
   -- Profilers/unregistered loadfile callers have no public action to dispatch.
   if section ~= 0 or not command or command <= 0 then return true end
@@ -460,17 +503,34 @@ end
 function M.restore(api)
   if api.GetExtState(SECTION, 'startup_done') == '1' then return end
   save(api, 'startup_done', '1', false)
+  save(api, 'module_version', '1.2.0', false)
   api.defer(function()
     remove_legacy_workers(api)
+    local pending, batch = {}, {}
     for _, id in ipairs(IDS) do
+      if api.GetExtState(SECTION, id .. '_enabled') == '1' then
+        pending[#pending + 1] = id;save(api, id .. '_start_pending', '1', false)
+      end
+    end
+    local index = 1
+    local function step()
+      local id = pending[index];index = index + 1
+      if not id then
+        local ok, err = pcall(flush_registry, api, batch)
+        if not ok then log(api, err) end
+        return
+      end
+      save(api, id .. '_start_pending', '', false)
       if api.GetExtState(SECTION, id .. '_enabled') == '1' then
         local ok, err = pcall(function()
           if api.GetExtState(SECTION, id .. '_running') == '1' then return end
-          launch(api, id)
+          launch(api, id, batch, index > #pending)
         end)
         if not ok then log(api, err) end
       end
+      api.defer(step)
     end
+    step()
   end)
 end
 

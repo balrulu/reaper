@@ -1,5 +1,5 @@
 -- @description ACTION - Add Folder Covers (Auto)
--- @version 1.0.13
+-- @version 1.0.17
 -- @author Balrulu
 -- @provides
 --   . > ../
@@ -8,7 +8,7 @@
 -- @about
 --   BLT SERIES Beta TEST UPLOAD
 
--- BEGIN BLT TOGGLE RESTORE EMBEDDED 1.1.0
+-- BEGIN BLT TOGGLE RESTORE EMBEDDED 1.2.0
 local reaper=reaper
 do
 -- BEGIN BLT NATIVE DIALOGS 1.2.1 (generated from _shared/BLT_NativeDialogs.lua)
@@ -225,7 +225,7 @@ end
 
 do
 local BLTToggleRestoreSource = [====[
--- BLT toggle persistence 1.1.0. Embedded in each supported action.
+-- BLT toggle persistence 1.2.0. Embedded in each supported action.
 -- The public action is a dispatcher; its private worker owns the defer loop.
 -- Only a dispatcher's explicit OFF writes OFF. Worker shutdown never does.
 local M = {}
@@ -310,24 +310,60 @@ local function command_for(api, id)
   return command
 end
 
-local function launch(api, id)
+local function launch(api, id, batch, last)
   local command = command_for(api, id)
+  if batch then
+    batch.dirty = true;batch.path = worker_path(api, id)
+    batch.pending = batch.pending or {};batch.pending[batch.path] = true
+  end
   local ok, err = pcall(api.Main_OnCommand, command, 0)
   -- Unregistering a running ReaScript keeps its defer/atexit callbacks alive.
   -- The temporary command must never remain in the user's action list.
-  local removed, why = pcall(api.AddRemoveReaScript, false, 0, worker_path(api, id), true)
+  local removed, why = pcall(api.AddRemoveReaScript, false, 0, worker_path(api, id), not batch or last)
   assert(removed and type(why) == 'number' and why > 0, why or 'Cannot unregister the BLT background worker.')
+  if batch then
+    batch.pending[batch.path] = nil
+    if last then batch.dirty = next(batch.pending) ~= nil end
+  end
   assert(ok, err)
   assert(api.GetExtState(SECTION, id .. '_running') == '1', 'The BLT background worker did not start: ' .. id)
 end
 
 local function remove_legacy_workers(api)
+  if api.GetExtState(SECTION, 'worker_cleanup') == '1.2.0' then return end
+  local ok, data = pcall(read, api.GetResourcePath() .. '/reaper-kb.ini')
+  data = ok and data and data:gsub('\\', '/') or ''
+  local windows = api.GetOS and (api.GetOS() or ''):match('Win')
+  if windows then data = data:lower() end
+  local pending = {}
   for _, id in ipairs(IDS) do
-    api.AddRemoveReaScript(false, 0, worker_path(api, id), true)
+    local relative = 'BLT ReaScripts/BLT_Toggle_Worker_' .. id .. '.lua'
+    local absolute = worker_path(api, id):gsub('\\', '/')
+    if windows then relative, absolute = relative:lower(), absolute:lower() end
+    if data:find('"' .. relative .. '"', 1, true) or data:find('"' .. absolute .. '"', 1, true)
+        or api.GetExtState(SECTION, id .. '_worker_command') ~= '' then pending[#pending + 1] = id end
     if api.GetExtState(SECTION, id .. '_worker_command') ~= '' then
       api.DeleteExtState(SECTION, id .. '_worker_command', true)
     end
   end
+  for i, id in ipairs(pending) do api.AddRemoveReaScript(false, 0, worker_path(api, id), i == #pending) end
+  save(api, 'worker_cleanup', '1.2.0', false)
+end
+
+local function flush_registry(api, batch)
+  if not batch.dirty then return end
+  if batch.pending and next(batch.pending) then
+    local paths = {};for path in pairs(batch.pending) do paths[#paths + 1] = path end
+    for i, path in ipairs(paths) do
+      assert(api.AddRemoveReaScript(false, 0, path, i == #paths) > 0, 'Cannot remove a pending BLT worker.')
+      batch.pending[path] = nil
+    end
+    batch.dirty = false;return
+  end
+  local command = api.AddRemoveReaScript(true, 0, batch.path, false)
+  assert(command and command > 0, 'Cannot finish the BLT worker registry update.')
+  assert(api.AddRemoveReaScript(false, 0, batch.path, true) > 0, 'Cannot remove the BLT temporary worker.')
+  batch.dirty = false
 end
 
 local function log(api, message)
@@ -338,6 +374,7 @@ function M.install(api, id, module_source)
   assert(valid_id(id) and type(module_source) == 'string', 'Invalid BLT restore installation.')
   api.RecursiveCreateDirectory(root(api), 0)
   write(root(api) .. '/BLT_Toggle_Restore.lua', module_source)
+  save(api, 'module_version', '1.2.0', false)
   write(worker_path(api, id), worker_source(id))
   remove_legacy_workers(api)
   local startup = api.GetResourcePath() .. '/Scripts/__startup.lua'
@@ -361,7 +398,13 @@ function M.install(api, id, module_source)
 end
 
 function M.enter(api, id, module_source)
-  if api.BLT_ToggleRestoreWorker == id then return true end
+  if api.BLT_ToggleRestoreWorker == id then
+    if api.GetExtState(SECTION, 'module_version') ~= '1.2.0' then
+      write(root(api) .. '/BLT_Toggle_Restore.lua', module_source)
+      save(api, 'module_version', '1.2.0', false)
+    end
+    return true
+  end
   local _, path, section, command = api.get_action_context()
   -- Profilers/unregistered loadfile callers have no public action to dispatch.
   if section ~= 0 or not command or command <= 0 then return true end
@@ -460,17 +503,34 @@ end
 function M.restore(api)
   if api.GetExtState(SECTION, 'startup_done') == '1' then return end
   save(api, 'startup_done', '1', false)
+  save(api, 'module_version', '1.2.0', false)
   api.defer(function()
     remove_legacy_workers(api)
+    local pending, batch = {}, {}
     for _, id in ipairs(IDS) do
+      if api.GetExtState(SECTION, id .. '_enabled') == '1' then
+        pending[#pending + 1] = id;save(api, id .. '_start_pending', '1', false)
+      end
+    end
+    local index = 1
+    local function step()
+      local id = pending[index];index = index + 1
+      if not id then
+        local ok, err = pcall(flush_registry, api, batch)
+        if not ok then log(api, err) end
+        return
+      end
+      save(api, id .. '_start_pending', '', false)
       if api.GetExtState(SECTION, id .. '_enabled') == '1' then
         local ok, err = pcall(function()
           if api.GetExtState(SECTION, id .. '_running') == '1' then return end
-          launch(api, id)
+          launch(api, id, batch, index > #pending)
         end)
         if not ok then log(api, err) end
       end
+      api.defer(step)
     end
+    step()
   end)
 end
 
@@ -482,6 +542,58 @@ if not module.enter(reaper, 'folder_covers', BLTToggleRestoreSource) then return
 end
 -- END BLT TOGGLE RESTORE EMBEDDED
 local R = reaper
+local initialScan=(function()
+-- BLT bounded initial project scan 1.0.0. Read-only collectors yield between items.
+local M = {}
+function M.new(api)
+ local scan={}
+ function scan:blocked()
+  local main=api.GetMainHwnd and api.GetMainHwnd()
+  if main and api.JS_Window_GetLong then
+   local ok,style=pcall(api.JS_Window_GetLong,main,'STYLE')
+   return ok and type(style)=='number'and(math.floor(style)&0x08000000)~=0
+  end
+  return false
+ end
+ function scan:reset()
+  self.project,self.revision,self.count,self.tracks,self.job,self.after=nil,nil,nil,nil,nil,nil
+ end
+ function scan:step(project,revision,count,collect,busy)
+  local now=api.time_precise();local tracks=api.CountTracks(project)
+  if self.project and(project~=self.project or revision~=self.revision or count~=self.count or tracks~=self.tracks)then
+   self.job=nil;self.after=now+.1
+  end
+  self.project,self.revision,self.count,self.tracks=project,revision,count,tracks
+  if busy then self.job=nil;self.after=now+.1;return false end
+  if self.after and now<self.after then return false end
+  local deadline=now+.002
+  if not self.job then
+   self.job=coroutine.create(function()
+    local work=0
+    return collect(function()
+     work=work+1
+     if work%32==0 and(work>=2048 or api.time_precise()>=deadline)then
+      coroutine.yield();work=0;deadline=api.time_precise()+.002
+     end
+    end)
+   end)
+  end
+  local ok,result=coroutine.resume(self.job)
+  if not ok then self:reset();error(result,0)end
+  if coroutine.status(self.job)~='dead'then return false end
+  self:reset();return true,result
+ end
+ return scan
+end
+return M
+end)().new(R)
+local scan_project
+local function initializing(p)
+  if p ~= scan_project then
+    R.SetExtState('BLT_TOGGLE_RESTORE', 'folder_covers_initial_scan', p and tostring(p) or '', false)
+    scan_project = p
+  end
+end
 local TITLE = 'BLT Add Folder Covers (Auto)'
 local TAG, TAG_VALUE = 'P_EXT:BLT_FOLDER_COVER', '1'
 local SOURCE_KEY = 'P_EXT:BLT_FOLDER_COVER_SOURCE'
@@ -494,14 +606,14 @@ local project, applied_revision, last_rows, gesture, history_index, import_wait
 local bindings = {}
 local display_names = {}
 local cover_states = {}
-local deleted_sets = {}
+local deleted_sets, copied_sets = {}, {}
 local stopped = false
 local arrange_pending = false
 local function request_arrange() arrange_pending = true end
 local next_audit, audit_item, audit_track, was_editing = 0, 1, 1, false
 
--- Native item drag action IDs. Only movement assignments are constrained;
--- copy, trim, slip, pitch and custom actions keep their existing behavior.
+-- Native item drag action IDs. Only movement assignments are remapped;
+-- Copy assignments stay native; the temporary vertical lock constrains their track.
 local HORIZONTAL = {
   [1] = 71, [4] = 72, [13] = 73, [9] = 74,
   [14] = 75, [10] = 76, [15] = 77, [16] = 78,
@@ -511,15 +623,94 @@ local HORIZONTAL = {
 }
 local MOUSE_CONTEXTS = {'MM_CTX_ITEM', 'MM_CTX_ITEMLOWER'}
 local INPUT_STATE = 'BLT_FOLDER_COVER_INPUT'
-local input_guard, input_project, mouse_x, mouse_y, mouse_revision
+local input_guard, input_project, input_identity, mouse_x, mouse_y, mouse_revision
 local mouse_window, mouse_check = nil, 0
 
 local function mouse_action_id(action)
   return type(action) == 'string' and tonumber(action:match('^(%d+)%s*m?%s*$')) or nil
 end
 
+local VERTICAL_MODES = {
+  {1,40571}, {2,40574}, {4,40583}, {8,40589}, {16,40586}, {32,40592},
+  {64,40577}, {128,40580}, {256,40595}, {512,40598}, {1024,40627}, {2048,41849}, {4096,41852}
+}
+local function vertical_key(p)
+  return 'vertical:' .. (R.GetProjectGUID and R.GetProjectGUID(p) or tostring(p))
+end
+local function read_vertical()
+  if R.get_config_var_string then
+    local ok, value = R.get_config_var_string('projsellock')
+    if ok and tonumber(value) then return math.floor(tonumber(value)) end
+  end
+  if R.SNM_GetIntConfigVar then
+    local value = R.SNM_GetIntConfigVar('projsellock', -1)
+    if value >= 0 then return math.floor(value) end
+  end
+end
+local function write_vertical(p, value, before)
+  local active = R.EnumProjects(-1, '') == p
+  if active and R.set_config_var_string then
+    assert(R.set_config_var_string('projsellock', tostring(value), 0) == 2, 'Cannot set temporary cover movement lock.')
+  elseif active and R.SNM_SetIntConfigVar then
+    assert(R.SNM_SetIntConfigVar('projsellock', value), 'Cannot set temporary cover movement lock.')
+  else
+    assert(R.Main_OnCommandEx, 'Cannot set project cover movement lock.')
+    if (before & 0x4000) ~= 0 and (value & 0x4000) == 0 then R.Main_OnCommandEx(40570, 0, p) end
+    for _, mode in ipairs(VERTICAL_MODES) do
+      if ((value ~ before) & mode[1]) ~= 0 then R.Main_OnCommandEx(mode[2] + ((value & mode[1]) == 0 and 1 or 0), 0, p) end
+    end
+    if (before & 0x4000) == 0 and (value & 0x4000) ~= 0 then R.Main_OnCommandEx(40569, 0, p) end
+  end
+  if active then assert(read_vertical() == value, 'Cover movement lock did not reach its target.') end
+end
+local function restore_vertical(p)
+  local key = vertical_key(p)
+  local cached = R.GetExtState(INPUT_STATE, key)
+  local record = cached
+  local saved = ''
+  if R.GetProjExtState then local _, value = R.GetProjExtState(p, INPUT_STATE, 'vertical');saved = value or '' end
+  if record == '' then record = saved end
+  local original, forced = record:match('^(%d+)|(%d+)$')
+  if not original then return end
+  original, forced = tonumber(original), tonumber(forced)
+  local current = R.EnumProjects(-1, '') == p and read_vertical() or forced
+  assert(current, 'Cannot read cover movement lock for restoration.')
+  local owned = (original ~ forced) & ~(current ~ forced)
+  local target = (current & ~owned) | (original & owned)
+  if target ~= current then write_vertical(p, target, current) end
+  if saved ~= '' and R.SetProjExtState then
+    assert(R.SetProjExtState(p, INPUT_STATE, 'vertical', '') >= 0, 'Cannot clear saved cover movement lock.')
+  end
+  if cached ~= '' then R.DeleteExtState(INPUT_STATE, key, true) end
+end
+local function restore_vertical_projects()
+  local index = 0
+  while true do
+    local p = R.EnumProjects(index, '')
+    if not p then break end
+    restore_vertical(p);index = index + 1
+  end
+end
+local function arm_vertical(p)
+  restore_vertical(p)
+  local original = read_vertical()
+  if original == nil then return end
+  local forced = (original & 0x4000) ~= 0 and (original | 128) or ((original & ~0x5fff) | 0x4080)
+  if forced ~= original then
+    assert(R.Main_OnCommandEx or R.set_config_var_string or R.SNM_SetIntConfigVar, 'Cannot constrain cover copying to its track.')
+    local record = original .. '|' .. forced
+    R.SetExtState(INPUT_STATE, vertical_key(p), record, true)
+    if R.SetProjExtState then
+      assert(R.SetProjExtState(p, INPUT_STATE, 'vertical', record) >= 0, 'Cannot preserve cover movement lock for project saving.')
+    end
+    write_vertical(p, forced, original)
+  end
+end
+
 local function restore_input()
   local failed = false
+  local locked, why = pcall(restore_vertical_projects)
+  if not locked then failed = true end
   for _, context in ipairs(MOUSE_CONTEXTS) do
     for modifier = 0, 15 do
       local key = context .. ':' .. modifier
@@ -538,8 +729,8 @@ local function restore_input()
       end
     end
   end
-  input_guard, input_project = nil, nil
-  if failed then error('Cannot restore mouse settings. Original settings remain saved for the next script start.', 0) end
+  input_guard, input_project, input_identity = nil, nil, nil
+  if failed then error(why or 'Cannot restore mouse settings. Original settings remain saved for the next script start.', 0) end
 end
 
 local constrain_input
@@ -570,6 +761,13 @@ end
 constrain_input = function(p, flags, revision)
   if input_project and input_project ~= p then restore_input() end
   if (flags & 5) ~= 0 then return end
+  if R.GetProjectGUID and revision ~= mouse_revision then
+    local identity = R.GetProjectGUID(p)
+    if identity ~= input_identity then
+      if input_identity then restore_input() else restore_vertical(p) end
+      input_identity = identity
+    end
+  end
   local x, y = R.GetMousePosition()
   local now = R.time_precise()
   local window = R.JS_Window_FromPoint and R.JS_Window_FromPoint(x, y)
@@ -582,6 +780,7 @@ constrain_input = function(p, flags, revision)
   if target then
     if input_guard then return end
     input_guard = true
+    arm_vertical(p)
     for _, context in ipairs(MOUSE_CONTEXTS) do
       for modifier = 0, 15 do
         local original = R.GetMouseModifier(context, modifier)
@@ -665,7 +864,9 @@ end
 
 local function return_to_track(p, item, track)
   assert(R.ValidatePtr2(p, track, 'MediaTrack*'), 'Original cover track disappeared.')
+  local selected = R.IsMediaItemSelected(item)
   assert(R.MoveMediaItemToTrack(item, track), 'Cannot return cover to its original track.')
+  if selected and not R.IsMediaItemSelected(item) then R.SetMediaItemSelected(item, true) end
   assert(R.GetMediaItemTrack(item) == track, 'Cover did not return to its original track.')
 end
 
@@ -684,7 +885,7 @@ local function restore_known_tracks(p, drivers)
 end
 
 -- A single track/item traversal supplies every ancestor, with no synthetic-item feedback.
-local function snapshot(p)
+local function snapshot(p, pause)
   local tracks, parents, by_guid, order, all_items = {}, {}, {}, 0, {}
   tracks.by_track = {}
   tracks.audit_items, tracks.audit_by_item = {}, {}
@@ -699,12 +900,14 @@ local function snapshot(p)
       local item = assert(R.GetTrackMediaItem(track, ii), 'Item disappeared.')
       local guid = string_info(item, 'GUID')
       all_items[guid] = item
-      local s = R.GetMediaItemInfo_Value(item, 'D_POSITION')
-      local length = R.GetMediaItemInfo_Value(item, 'D_LENGTH')
-      local e = s + length
       order = order + 1
       local tag = string_info(item, TAG)
       local managed = tag == TAG_VALUE and is_blank(item)
+      local s, length, e
+      if managed or #parents > 0 then
+        s = R.GetMediaItemInfo_Value(item, 'D_POSITION')
+        length = R.GetMediaItemInfo_Value(item, 'D_LENGTH');e = s + length
+      end
       if not managed and last_rows and not last_rows.all_items[guid] then tracks.added_items = true end
       local entry = {item = item, guid = guid, track = track, s = s, e = e, managed = managed}
       tracks.audit_items[#tracks.audit_items + 1] = entry;tracks.audit_by_item[item] = entry
@@ -724,18 +927,20 @@ local function snapshot(p)
           home_id = string_info(item, TRACK_KEY),
           locked = (math.floor(R.GetMediaItemInfo_Value(item, 'C_LOCK')) & 1) ~= 0
         }
-      elseif finite(s) and finite(e) and length > 0 and #parents > 0 then
+      elseif #parents > 0 and finite(s) and finite(e) and length > 0 then
         local range = {s = s, e = e, guid = guid, order = order, item = item, track = track}
         for _, parent in ipairs(parents) do
           parent.ranges[#parent.ranges + 1] = range;parent.ranges_by_guid[guid] = range
         end
       end
+      if pause then pause() end
     end
     if depth > 0 then
       parents[#parents + 1] = row
     elseif depth < 0 then
       for _ = 1, -depth do parents[#parents] = nil end
     end
+    if pause then pause() end
   end
   local returned = false
   for _, row in ipairs(tracks) do
@@ -828,17 +1033,18 @@ local function refresh_rows(p, cached)
   return rows
 end
 
-local function sync_removed_covers(p, rows, suppress_delete)
+local function sync_removed_covers(p, rows, suppress_delete, cancel_copy, history)
   local saved, present, changed = deleted_sets[p], rows.all_items, false
 
   -- Native Undo may restore only the deleted parent item. Restore any original
   -- children missing from that undo snapshot, without creating an extra entry.
   if saved then
-    local restored, completed = {}, {}
+    local restored, completed, native = {}, {}, {}
     local ok, err = xpcall(function()
       for guid, children in pairs(saved) do
         local parent = present[guid]
-        if parent and is_blank(parent) and string_info(parent, TAG) == TAG_VALUE then
+        if parent and (not children.copy_anchor or present[children.copy_anchor])
+            and is_blank(parent) and string_info(parent, TAG) == TAG_VALUE then
           local complete = true
           for _, child in ipairs(children) do
             if not present[child.guid] then
@@ -850,17 +1056,171 @@ local function sync_removed_covers(p, rows, suppress_delete)
               else complete = false end
             end
           end
+          if children.copy_native then
+            local delta = R.GetMediaItemInfo_Value(parent, 'D_POSITION') - children.copy_source_s
+            for guid, source in pairs(children.copy_native) do
+              local item = present[guid]
+              if item and R.GetMediaItemTrack(item) == source.track then
+                local before = R.GetMediaItemInfo_Value(item, 'D_POSITION')
+                if math.abs(before - source.s) <= EPS and math.abs(delta) > EPS then
+                  native[#native + 1] = {item = item, position = before}
+                  assert(R.SetMediaItemInfo_Value(item, 'D_POSITION', source.s + delta), 'Cannot redo native folder child copy.')
+                  changed = true
+                end
+              end
+            end
+          end
           if complete then completed[#completed + 1] = guid end
         end
       end
     end, debug.traceback)
     if not ok then
+      for i = #native, 1, -1 do pcall(R.SetMediaItemInfo_Value, native[i].item, 'D_POSITION', native[i].position) end
       for i = #restored, 1, -1 do pcall(R.DeleteTrackMediaItem, restored[i].track, restored[i].item) end
       error(err, 0)
     end
-    for _, guid in ipairs(completed) do saved[guid] = nil end
+    for _, guid in ipairs(completed) do
+      local children = saved[guid]
+      if children.copy then
+        local records = copied_sets[p] or {};copied_sets[p] = records
+        local members = children.copy_members or children
+        for _, child in ipairs(members) do child.item = present[child.guid] end
+        records[guid] = {item = present[guid], children = members, anchor = children.copy_anchor,
+          native_sources = children.copy_native, source_s = children.copy_source_s}
+      elseif children.deleted_copy then
+        local records = copied_sets[p] or {};copied_sets[p] = records
+        local record = children.deleted_copy;record.item = present[guid]
+        for _, child in ipairs(record.children) do child.item = present[child.guid] end
+        records[guid] = record
+      end
+      saved[guid] = nil
+    end
     if not next(saved) then deleted_sets[p] = nil end
     if changed then request_arrange();return true end
+  end
+  if saved and ((not rows.dirty and rows.added_items) or history ~= history_index) then
+    local live, targets, seen, additions = {}, {}, {}, {}
+    for _, state in pairs(cover_states) do
+      local record = copied_sets[p] and copied_sets[p][state.guid]
+      if present[state.guid] and (not record or not record.anchor or present[record.anchor]) then
+        for _, child in ipairs(state.children) do live[child.guid] = true end
+      end
+    end
+    for guid, children in pairs(saved) do
+      if present[guid] and (not children.copy_anchor or present[children.copy_anchor]) then
+        for _, child in ipairs(children) do live[child.guid] = true end
+      end
+    end
+    for guid, children in pairs(saved) do
+      local missing = not present[guid] or children.copy_anchor and not present[children.copy_anchor]
+      if missing and (children.copy or not history or not children.deleted_at or history >= children.deleted_at) then
+        local known = {};for _, child in ipairs(children) do known[child.guid] = true end
+        for _, child in ipairs(children.copy and (children.copy_members or children) or children) do
+          local item = present[child.guid]
+          if item and not live[child.guid] then
+            local entry = seen[child.guid]
+            if not entry then
+              local read, chunk = R.GetItemStateChunk(item, '', false)
+              assert(read, 'Cannot preserve stale deleted child before Undo recovery.')
+              entry = {item = item, guid = child.guid, track = R.GetMediaItemTrack(item), chunk = chunk}
+              targets[#targets + 1] = entry;seen[child.guid] = entry
+            end
+            if not known[child.guid] then additions[#additions + 1] = {children = children, entry = entry};known[child.guid] = true end
+          end
+        end
+      end
+    end
+    local removed = 0
+    local ok, err = xpcall(function()
+      for i, entry in ipairs(targets) do
+        assert(R.DeleteTrackMediaItem(entry.track, entry.item), 'Cannot remove stale deleted cover child after Undo.')
+        removed = i;present[entry.guid] = nil
+      end
+    end, debug.traceback)
+    if not ok then
+      for i = 1, removed do
+        local entry = targets[i]
+        pcall(function()
+          local item = assert(R.AddMediaItemToTrack(entry.track))
+          assert(R.SetItemStateChunk(item, entry.chunk, false))
+        end)
+      end
+      error(err, 0)
+    end
+    for _, addition in ipairs(additions) do addition.children[#addition.children + 1] = addition.entry end
+    if removed > 0 then request_arrange();return true end
+  end
+  local copies = copied_sets[p]
+  if copies then
+    local live, live_native, missing = {}, {}, {}
+    for guid, record in pairs(copies) do
+      if present[guid] and (not record.anchor or present[record.anchor]) then
+        for _, child in ipairs(record.children) do live[child.guid] = true end
+        for guid in pairs(record.native_sources or {}) do live_native[guid] = true end
+      else missing[#missing + 1] = guid end
+    end
+    local targets, batches, seen, native = {}, {}, {}, {}
+    for _, guid in ipairs(missing) do
+      local record = copies[guid]
+      local cancelled = cancel_copy or record.pending and (not history or not record.history or history <= record.history)
+      if cancelled then
+        local children = {copy = true, copy_anchor = record.anchor, copy_members = record.children,
+          copy_native = record.native_sources, copy_source_s = record.source_s}
+        local state = cover_states[record.item]
+        local delta = state and state.s - record.source_s or 0
+        for source_guid, source in pairs(record.native_sources or {}) do
+          local item = present[source_guid]
+          if item and not live_native[source_guid] and R.GetMediaItemTrack(item) == source.track then
+            local before = R.GetMediaItemInfo_Value(item, 'D_POSITION')
+            if math.abs(delta) > EPS and math.abs(before - source.s - delta) <= EPS then
+              native[#native + 1] = {item = item, position = before, target = source.s}
+            end
+          end
+        end
+        for _, child in ipairs(copies[guid].children) do
+          local item = present[child.guid]
+          if item and not live[child.guid] then
+            local backup = seen[child.guid]
+            if not backup then
+              local read, chunk = R.GetItemStateChunk(item, '', false)
+              assert(read, 'Cannot preserve folder copy for Undo.')
+              backup = {guid = child.guid, item = item, track = child.track, chunk = chunk}
+              seen[child.guid] = backup;targets[#targets + 1] = backup
+            end
+            children[#children + 1] = backup
+          end
+        end
+        batches[guid] = children
+      else batches[guid] = {deleted_copy = copies[guid], deleted_at = history} end
+    end
+    local removed = 0
+    local ok, err = xpcall(function()
+      for _, entry in ipairs(native) do
+        assert(R.SetMediaItemInfo_Value(entry.item, 'D_POSITION', entry.target), 'Cannot restore native folder copy source.')
+      end
+      for i, child in ipairs(targets) do
+        assert(R.DeleteTrackMediaItem(child.track, child.item), 'Cannot remove cancelled folder copy.')
+        removed = i;present[child.guid] = nil
+      end
+    end, debug.traceback)
+    if not ok then
+      for i = #native, 1, -1 do pcall(R.SetMediaItemInfo_Value, native[i].item, 'D_POSITION', native[i].position) end
+      for i = 1, removed do
+        local child = targets[i]
+        pcall(function()
+          local item = assert(R.AddMediaItemToTrack(child.track))
+          assert(R.SetItemStateChunk(item, child.chunk, false))
+        end)
+      end
+      error(err, 0)
+    end
+    if next(batches) then
+      saved = deleted_sets[p] or {};deleted_sets[p] = saved
+      for guid, children in pairs(batches) do saved[guid] = children end
+    end
+    for _, guid in ipairs(missing) do copies[guid] = nil end
+    if not next(copies) then copied_sets[p] = nil end
+    if removed > 0 or #native > 0 then request_arrange();return true end
   end
   if suppress_delete then return false end
 
@@ -877,7 +1237,9 @@ local function sync_removed_covers(p, rows, suppress_delete)
 
   local pool, batches, targets = {}, {}, {}
   for _, state in ipairs(missing) do
-    local available, children = rows.by_track[state.track].ranges_by_guid, {}
+    local previous = saved and saved[state.guid]
+    local available, children = rows.by_track[state.track].ranges_by_guid,
+      {deleted_at = history, deleted_copy = previous and previous.deleted_copy}
     for _, child in ipairs(state.children) do
       local range = available[child.guid]
       if range and (math.floor(R.GetMediaItemInfo_Value(range.item, 'C_LOCK')) & 1) == 0 then
@@ -951,7 +1313,9 @@ local function begin_gesture()
     local states = session.by_track[state.track]
     if not states then states = {};session.by_track[state.track] = states end
     states[#states + 1] = state;session.original[state.item] = state
-    if not state.locked and R.IsMediaItemSelected(state.item) then
+    local valid = R.ValidatePtr2(project, state.item, 'MediaItem*')
+    if not valid then session.missing = true end
+    if valid and not state.locked and R.IsMediaItemSelected(state.item) then
       session.drivers[#session.drivers + 1] = {state = state, active = false, last_position = state.s}
     end
   end
@@ -971,7 +1335,7 @@ local function move_children_with_envelopes(p, session, journal)
   if follow == 1 then
     tracks = {}
     for _, entry in ipairs(journal) do
-      local count = tracks[entry.track]
+      local count = entry.copy and 0 or tracks[entry.track]
       if count == nil then count = R.CountTrackEnvelopes(entry.track);tracks[entry.track] = count end
       if count > 0 then
         groups = groups or {}
@@ -1068,7 +1432,7 @@ local function move_children_with_envelopes(p, session, journal)
 end
 
 local function move_gesture_children(p, session)
-  local targets, target_tracks, journal, changed = {}, {}, {}, false
+  local targets, target_tracks, copied, journal, changed = {}, {}, {}, {}, false
   local checked
   for i = 2, #session.drivers do
     if session.drivers[i].state.track ~= session.drivers[1].state.track then checked = {};break end
@@ -1092,7 +1456,7 @@ local function move_gesture_children(p, session)
         elseif rejected and rejected[child.item] == child.track then child_valid = false
         else
           child_valid = R.ValidatePtr2(p, child.item, 'MediaItem*') and R.GetMediaItemTrack(child.item) == child.track
-            and (math.floor(R.GetMediaItemInfo_Value(child.item, 'C_LOCK')) & 1) == 0
+            and (driver.copy or (math.floor(R.GetMediaItemInfo_Value(child.item, 'C_LOCK')) & 1) == 0)
           if checked then
             if child_valid then checked[child.item] = child.track
             else rejected = rejected or {};rejected[child.item] = child.track end
@@ -1103,7 +1467,7 @@ local function move_gesture_children(p, session)
     end
     if valid then
       for _, child in ipairs(state.children) do
-        if not targets[child.item] then targets[child.item] = child.s + delta;target_tracks[child.item] = child.track end
+        if not targets[child.item] then targets[child.item] = child.s + delta;target_tracks[child.item] = child.track;copied[child.item] = driver.copy end
       end
     end
   end
@@ -1111,7 +1475,7 @@ local function move_gesture_children(p, session)
     for item, position in pairs(targets) do
       local before = R.GetMediaItemInfo_Value(item, 'D_POSITION')
       if math.abs(position - before) > EPS then
-        journal[#journal + 1] = {item = item, track = target_tracks[item], position = before, target = position}
+        journal[#journal + 1] = {item = item, track = target_tracks[item], position = before, target = position, copy = copied[item]}
         changed = true
       end
     end
@@ -1140,6 +1504,7 @@ local function move_gesture_children(p, session)
     error(tostring(err) .. (restored and '\nThe automatic moves were restored.' or '\nSome automatic moves could not be restored.'), 0)
   end
   if changed then request_arrange() end
+  return changed
 end
 
 -- Also recognize item-only native Undo/Redo or a position edit outside a mouse
@@ -1381,6 +1746,216 @@ local function clone_chunk(chunk)
     end
     return line
   end)
+end
+
+local function copy_signature(chunk)
+  local depth, extension = 0, nil
+  return chunk:gsub('[^\n]+\n?', function(line)
+    local drop = false
+    if not extension then
+      local key = line:match('^%s*(%u+)%s')
+      drop = key == 'IGUID' or key == 'GUID' or key == 'FXID' or key == 'EGUID'
+        or depth == 1 and (key == 'POSITION' or key == 'SEL' or key == 'IID' or key and key:match('^FADE'))
+    end
+    if line:match('^%s*<') then
+      depth = depth + 1
+      if line:match('^%s*<EXTI?%s*\r?\n?$') then extension = depth end
+    elseif line:match('^%s*>%s*$') then
+      if extension == depth then extension = nil end
+      depth = depth - 1
+    end
+    return drop and '' or line
+  end)
+end
+
+local function copy_covers(p, rows, session, history, pending)
+  local sources, plans = {}, {}
+  for _, row in ipairs(last_rows) do
+    local track = {};sources[row.track] = track
+    for _, old in ipairs(row.owned) do
+      local state = cover_states[old.item]
+      if state and not state.locked and old.source_id ~= '' then track[old.source_id] = state end
+    end
+  end
+  for _, row in ipairs(rows) do
+    for _, old in ipairs(row.owned) do
+      local source = not last_rows.all_items[old.guid] and sources[row.track] and sources[row.track][old.source_id]
+      if source and not old.locked and R.ValidatePtr2(p, source.item, 'MediaItem*')
+          and math.abs(old.e - old.s - source.e + source.s) <= EPS then
+        local position = R.GetMediaItemInfo_Value(source.item, 'D_POSITION')
+        local length = R.GetMediaItemInfo_Value(source.item, 'D_LENGTH')
+        if math.abs(length - source.e + source.s) <= EPS then
+          if math.abs(position - source.s) <= EPS then
+            plans[#plans + 1] = {source = source, item = old.item, base = source.item, delta = old.s - source.s}
+          elseif math.abs(old.s - source.s) <= EPS then
+            plans[#plans + 1] = {source = source, item = source.item, base = old.item, delta = position - source.s, anchor = old.guid}
+          end
+        end
+      end
+    end
+  end
+  if #plans == 0 then return end
+  table.sort(plans, function(a, b) return #a.source.children > #b.source.children end)
+  local chunks, signatures, pool, used, created, links = {}, {}, {}, {}, {}, {}
+  local function chunk(item)
+    if not chunks[item] then
+      local ok, text = R.GetItemStateChunk(item, '', false)
+      assert(ok, 'Cannot read folder copy source.');chunks[item] = text
+    end
+    return chunks[item]
+  end
+  local function signature(item)
+    if not signatures[item] then signatures[item] = copy_signature(chunk(item)) end
+    return signatures[item]
+  end
+  local function bucket(position) return math.floor(position * 10000000 + .5) end
+  for _, entry in ipairs(rows.audit_items) do
+    if not entry.managed and entry.s and not last_rows.all_items[entry.guid] then
+      local track = pool[entry.track] or {};pool[entry.track] = track
+      local key = bucket(entry.s);local list = track[key] or {};track[key] = list;list[#list + 1] = entry
+    end
+  end
+  local function range(item, source, position)
+    return {item = item, guid = string_info(item, 'GUID'), track = source.track, s = position, e = position + source.e - source.s}
+  end
+  local function find(source, position)
+    local track = pool[source.track];if not track then return end
+    local key = bucket(position)
+    for offset = -1, 1 do
+      for _, entry in ipairs(track[key + offset] or {}) do
+        if not used[entry.item] and math.abs(entry.s - position) <= EPS
+            and math.abs(entry.e - entry.s - source.e + source.s) <= EPS
+            and signature(entry.item) == signature(source.item) then
+          used[entry.item] = true;return range(entry.item, source, position)
+        end
+      end
+    end
+  end
+  local function clone(item, track, position)
+    local result = assert(R.AddMediaItemToTrack(track), 'Cannot create folder copy.')
+    created[#created + 1] = {item = result, track = track}
+    assert(R.SetItemStateChunk(result, clone_chunk(chunk(item)), false), 'Cannot copy folder item information.')
+    assert(R.SetMediaItemInfo_Value(result, 'D_POSITION', position), 'Cannot position folder copy.')
+    return result
+  end
+  local resolved = {}
+  local function children(plan)
+    local originals, copies, map = {}, {}, {}
+    for _, source in ipairs(plan.source.children) do
+      assert(R.ValidatePtr2(p, source.item, 'MediaItem*') and R.GetMediaItemTrack(source.item) == source.track,
+        'Folder copy source disappeared.')
+      local cached = resolved[source.guid]
+      if not cached then
+        cached = {copies = {}};resolved[source.guid] = cached
+        local current = R.GetMediaItemInfo_Value(source.item, 'D_POSITION')
+        assert(math.abs(R.GetMediaItemInfo_Value(source.item, 'D_LENGTH') - source.e + source.s) <= EPS,
+          'Folder copy source length changed.')
+        if math.abs(current - source.s) <= EPS then cached.original = range(source.item, source, source.s)
+        else
+          cached.original = assert(find(source, source.s), 'Cannot identify original folder child after native copy.')
+        end
+      end
+      local key = string.format('%.9f', plan.delta)
+      local copied = cached.copies[key]
+      if not copied then
+        local target = source.s + plan.delta
+        local current = R.GetMediaItemInfo_Value(source.item, 'D_POSITION')
+        if source.item ~= cached.original.item and math.abs(current - target) <= EPS then copied = range(source.item, source, target)
+        else copied = find(source, target) end
+        if not copied then copied = range(clone(source.item, source.track, target), source, target) end
+        cached.copies[key] = copied
+      end
+      originals[#originals + 1], copies[#copies + 1], map[source.guid] = cached.original, copied, copied
+    end
+    plan.originals, plan.children, plan.map = originals, copies, map
+  end
+  local function link(item, members, map)
+    local previous = string_info(item, SOURCE_KEY)
+    local representative = map and map[previous] or members[1]
+    local guid = representative.guid
+    if previous ~= guid then
+      links[#links + 1] = {item = item, previous = previous}
+      assert(R.GetSetMediaItemInfo_String(item, SOURCE_KEY, guid, true), 'Cannot link copied folder children.')
+    end
+  end
+  R.PreventUIRefresh(1)
+  local ok, err = xpcall(function()
+    local natives = {}
+    local function mark(plan)
+      local offsets = natives[plan.source.item] or {};natives[plan.source.item] = offsets
+      offsets[string.format('%.9f', plan.delta)] = true
+    end
+    for _, plan in ipairs(plans) do mark(plan) end
+    local n = #plans
+    for i = 1, n do
+      local plan = plans[i];children(plan)
+      for _, state in pairs(cover_states) do
+        if state.item ~= plan.source.item and not (natives[state.item] and natives[state.item][string.format('%.9f', plan.delta)])
+            and #state.children > 0 then
+          local included = true
+          for _, child in ipairs(state.children) do if not plan.map[child.guid] then included = false;break end end
+          if included then
+            local nested = {source = state, base = state.item, delta = plan.delta,
+              anchor = plan.anchor or string_info(plan.item, 'GUID'), owner = plan.item}
+            children(nested);nested.item = clone(state.item, state.track, state.s + plan.delta)
+            plans[#plans + 1] = nested;mark(nested)
+          end
+        end
+      end
+    end
+    for _, plan in ipairs(plans) do
+      link(plan.item, plan.children, plan.map)
+      local base_map = {};for i, child in ipairs(plan.source.children) do base_map[child.guid] = plan.originals[i] end
+      link(plan.base, plan.originals, base_map)
+    end
+  end, debug.traceback)
+  if not ok then
+    for i = #links, 1, -1 do pcall(R.GetSetMediaItemInfo_String, links[i].item, SOURCE_KEY, links[i].previous, true) end
+    for i = #created, 1, -1 do pcall(R.DeleteTrackMediaItem, created[i].track, created[i].item) end
+  end
+  R.PreventUIRefresh(-1)
+  if not ok then request_arrange();error(err, 0) end
+  session = session or begin_gesture()
+  local function register(item, source, members, copied)
+    local track = session.by_track[source.track] or {};session.by_track[source.track] = track
+    for i = #track, 1, -1 do if track[i].item == item then table.remove(track, i) end end
+    for i = #session.drivers, 1, -1 do if session.drivers[i].state.item == item then table.remove(session.drivers, i) end end
+    local s = R.GetMediaItemInfo_Value(item, 'D_POSITION')
+    local state = {item = item, guid = string_info(item, 'GUID'), track = source.track, s = s,
+      e = s + source.e - source.s, locked = false, children = members}
+    track[#track + 1] = state;session.original[item] = state
+    if copied then session.drivers[#session.drivers + 1] = {state = state, active = true, last_position = s, copy = true} end
+    return state
+  end
+  local records, moving = copied_sets[p] or {}, {};copied_sets[p] = records
+  for _, plan in ipairs(plans) do
+    register(plan.base, plan.source, plan.originals, false)
+    local state = register(plan.item, plan.source, plan.children, true)
+    moving[plan.item] = state
+    local entries, seen, native = {}, {}, {}
+    for _, list in ipairs({plan.originals, plan.children}) do
+      for _, entry in ipairs(list) do
+        if not last_rows.all_items[entry.guid] and not seen[entry.guid] then entries[#entries + 1] = entry;seen[entry.guid] = true end
+      end
+    end
+    for i, child in ipairs(plan.children) do
+      if last_rows.all_items[child.guid] then native[child.guid] = plan.source.children[i] end
+    end
+    if not plan.owner then records[state.guid] = {item = state.item, children = entries, anchor = plan.anchor,
+      native_sources = next(native) and native or nil, source_s = plan.source.s, history = history, pending = pending} end
+  end
+  for _, plan in ipairs(plans) do
+    if plan.owner then
+      local state = records[string_info(plan.owner, 'GUID')]
+      local entry = {item = plan.item, guid = string_info(plan.item, 'GUID'), track = plan.source.track,
+        s = plan.source.s + plan.delta, e = plan.source.e + plan.delta}
+      state.children[#state.children + 1] = entry
+      local driver = moving[plan.owner];local members = {}
+      for i, child in ipairs(driver.children) do members[i] = child end
+      members[#members + 1] = entry;driver.children = members
+    end
+  end
+  request_arrange();return session
 end
 
 local function writable_cover(old)
@@ -1661,10 +2236,11 @@ end
 local function cleanup()
   if stopped then return end
   stopped = true
+  initialScan:reset();pcall(initializing, nil)
   bindings = {}
   display_names = {}
   cover_states, last_rows, gesture, import_wait = {}, nil, nil, nil
-  deleted_sets = {}
+  deleted_sets, copied_sets = {}, {}
   pcall(restore_input)
   if R.set_action_options then pcall(R.set_action_options, 9) end
   if has_action then
@@ -1692,9 +2268,11 @@ local function audit_changed(p, now)
       if not R.ValidatePtr2(p, item, 'MediaItem*') or R.GetMediaItemTrack(item) ~= entry.track
           or string_info(item, 'GUID') ~= entry.guid then return true end
       local managed = string_info(item, TAG) == TAG_VALUE and is_blank(item)
-      local s = R.GetMediaItemInfo_Value(item, 'D_POSITION')
-      if managed ~= entry.managed or math.abs(s - entry.s) > EPS
-          or math.abs(s + R.GetMediaItemInfo_Value(item, 'D_LENGTH') - entry.e) > EPS then return true end
+      if managed ~= entry.managed then return true end
+      if entry.s ~= nil then
+        local s = R.GetMediaItemInfo_Value(item, 'D_POSITION')
+        if math.abs(s - entry.s) > EPS or math.abs(s + R.GetMediaItemInfo_Value(item, 'D_LENGTH') - entry.e) > EPS then return true end
+      end
       local old = entry.cover
       if old then
         local take, name = R.GetActiveTake(item), nil
@@ -1751,6 +2329,7 @@ local function update()
   local revision = R.GetProjectStateChangeCount(p)
   local changed_project = p ~= project
   if p ~= project then
+    initialScan:reset();initializing(nil)
     project, applied_revision, history_index, import_wait = p, nil, nil, nil
     bindings, display_names, cover_states, last_rows, gesture = {}, {}, {}, nil, nil
     audit_item, audit_track, was_editing = 1, 1, false
@@ -1759,17 +2338,28 @@ local function update()
   if R.GetItemEditingTime2 then local _, _, f = R.GetItemEditingTime2();flags = f or 0 end
   if (R.GetPlayStateEx(p) & 4) ~= 0 then constrain_input(p, flags, revision);return end
   local moving, editing = (flags & 4) ~= 0, (flags & 5) ~= 0
+  local item_count = R.CountMediaItems(p)
+  local initial_rows
+  if not last_rows then
+    if initialScan.project or item_count > 1024 or R.CountTracks(p) > 256 or initialScan:blocked() then
+      initializing(p)
+      local done
+      done, initial_rows = initialScan:step(p, revision, item_count, function(pause) return snapshot(p, pause) end, editing or import_host_busy())
+      if not done then return end
+      initializing(nil)
+    end
+  end
   local released = was_editing and not editing;was_editing = editing
   local redo = R.Undo_CanRedo2(p)
   -- Available redo history describes an older action, not the current mouse
   -- operation. REAPER may retain it until a new drag is committed on release.
   -- A live move/edge edit must still use its original child set and geometry.
-  local undoing = redo and redo ~= '' and not editing
   local current_history = R.Undo_GetCurEntry and R.Undo_GetCurEntry(p)
-  local suppress_delete = current_history and history_index and current_history < history_index
-    or (not R.Undo_GetCurEntry and undoing)
+  local backward = current_history and history_index and current_history < history_index
+  local forward = current_history and history_index and current_history > history_index
+  local undoing = not editing and (backward or redo and redo ~= '' and not forward)
+  local suppress_delete = backward or (not R.Undo_GetCurEntry and undoing)
   if undoing then gesture = nil end
-  local item_count = R.CountMediaItems(p)
   local counts_changed = not last_rows or item_count ~= last_rows.item_count
   local waiting, imported = wait_for_import(p, item_count, revision, current_history, editing)
   if waiting then return end
@@ -1780,10 +2370,36 @@ local function update()
   end
   if not editing then restore_known_tracks(p) end
   if moving and not gesture and not undoing and next(cover_states) then gesture = begin_gesture() end
-  if gesture then restore_known_tracks(p, gesture.drivers);move_gesture_children(p, gesture)
-  elseif not editing and not imported and not changed_project and (revision ~= applied_revision or silent or counts_changed) then move_changed_covers(p) end
-  local rows
-  if editing and last_rows and not undoing and not counts_changed then
+  local rows, copy_session, restoring_copy = initial_rows
+  local replaced = gesture and gesture.missing
+  if copied_sets[p] and (counts_changed or released or undoing or suppress_delete or replaced) then
+    rows = rows or snapshot(p)
+    for guid, record in pairs(copied_sets[p]) do
+      if not rows.all_items[guid] or record.anchor and not rows.all_items[record.anchor] then
+        sync_removed_covers(p, rows, true, undoing or suppress_delete, current_history)
+        rows = snapshot(p);gesture = nil;break
+      end
+    end
+  end
+  if last_rows and (item_count > last_rows.item_count or replaced) and not undoing then
+    rows = snapshot(p)
+    for guid, children in pairs(deleted_sets[p] or {}) do
+      if children.copy and rows.all_items[guid] and (not children.copy_anchor or rows.all_items[children.copy_anchor]) then
+        restoring_copy = true;break
+      end
+    end
+    if restoring_copy then
+      sync_removed_covers(p, rows, true, false, current_history);rows = snapshot(p);bindings = {}
+    else
+      copy_session = copy_covers(p, rows, gesture, current_history, moving)
+      if copy_session then copy_session.missing = nil;rows = snapshot(p);if moving then gesture = copy_session end end
+    end
+  end
+  if gesture then
+    restore_known_tracks(p, gesture.drivers)
+    if move_gesture_children(p, gesture) and rows then rows = snapshot(p) end
+  elseif not restoring_copy and not editing and not imported and not changed_project and (revision ~= applied_revision or silent or counts_changed) then move_changed_covers(p) end
+  if editing and last_rows and not rows and not undoing and not counts_changed then
     rows = refresh_rows(p, last_rows)
     if rows == false then
       applied_revision = R.GetProjectStateChangeCount(p);history_index = current_history
@@ -1793,8 +2409,8 @@ local function update()
   rows = rows or snapshot(p)
   if R.EnumProjects(-1, '') ~= p then return end
   local uncommitted_addition = rows.added_items and (current_history == nil or history_index == nil or current_history == history_index)
-  if sync_removed_covers(p, rows, changed_project or suppress_delete or imported or uncommitted_addition) then rows = snapshot(p) end
-  if moving and gesture then freeze_groups(rows, gesture)
+  if sync_removed_covers(p, rows, changed_project or suppress_delete or imported or uncommitted_addition, undoing or suppress_delete, current_history) then rows = snapshot(p) end
+  if moving and gesture or copy_session then freeze_groups(rows, gesture or copy_session)
   else
     gesture = nil
     build_groups(rows)
@@ -1808,7 +2424,16 @@ local function update()
   end
   rows.rebuild_watch = #plan.create + #plan.remove > 0
   if #plan.create + #plan.move + #plan.remove + #plan.source_id + #plan.track_id + #plan.display > 0 then apply_plan(p, plan) end
+  if #plan.remove > 0 and copied_sets[p] then
+    local removed = {}
+    for _, entry in ipairs(plan.remove) do removed[rows.audit_by_item[entry.item].guid] = true end
+    for guid, record in pairs(copied_sets[p]) do
+      if removed[guid] or removed[record.anchor] then copied_sets[p][guid] = nil end
+    end
+    if not next(copied_sets[p]) then copied_sets[p] = nil end
+  end
   remember(rows)
+  if released then for _, record in pairs(copied_sets[p] or {}) do record.pending = nil end end
   rows.item_count = R.CountMediaItems(p)
   next_audit, audit_item, audit_track = R.time_precise() + .1, 1, 1
   if gesture then
@@ -1852,7 +2477,6 @@ if has_action then
   R.SetToggleCommandState(section, command, 1)
   R.RefreshToolbar2(section, command)
 end
--- Defer suppresses implicit undo, including startup errors. Scan immediately
--- so the first mouse gesture already has complete cover/child bindings.
+-- Small projects bind immediately; large initial reads yield before any plan is applied.
 R.defer(loop)
 run_update()

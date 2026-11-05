@@ -1,5 +1,5 @@
 -- @description MINIMAL INFO PANEL
--- @version 0.2.36
+-- @version 0.2.37
 -- @author Balrulu
 -- @provides
 --   . > ../
@@ -4488,16 +4488,21 @@ local function toggle_dock()
  sync_dock()
 end
 -- Shared BLT app restoration protocol. Each app owns one registry ID.
-local BLTRestore={section='BLT_APP_RESTORE',id='BLT_MINIMAL_INFO_PANEL'}
-local BLTRestoreLauncher=[=[
+local BLTRestore=(function()
+-- BLT app restoration 1.1.0. Embedded in standalone apps.
+local M = {version = '1.1.0'}
+local SECTION = 'BLT_APP_RESTORE'
+M.launcher = [=[
 local r=reaper
 local section='BLT_APP_RESTORE'
 if r.GetExtState(section,'startup_done')=='1'then return end
 r.SetExtState(section,'startup_done','1',false)
-r.defer(function()
- local count=math.min(128,tonumber(r.GetExtState(section,'count'))or 0)
- for i=1,count do
-  local id=r.GetExtState(section,'app_'..i)
+r.SetExtState(section,'launcher_checked','1.1.0',false)
+local count=math.min(128,tonumber(r.GetExtState(section,'count'))or 0)
+local index=1
+local function step()
+ while index<=count do
+  local id=r.GetExtState(section,'app_'..index);index=index+1
   if id~=''and r.GetExtState(section,id..'_open')=='1'and r.GetExtState(section,id..'_running')~='1'then
    local ok,err=pcall(function()
     local path=r.GetExtState(section,id..'_path')
@@ -4507,80 +4512,97 @@ r.defer(function()
     if command and command>0 then r.Main_OnCommand(command,0)end
    end)
    if not ok then r.ShowConsoleMsg('BLT restore: '..id..': '..tostring(err)..'\n')end
+   r.defer(step);return
   end
  end
-end)
+end
+r.defer(step)
 ]=]
-local function restore_read(path)
+local function read(path)
  local f=io.open(path,'rb');if not f then return nil end
  local data=f:read('*a');f:close();return data
 end
-local function restore_write_bytes(path,data)
+local function bytes(path,data)
  local f,err=io.open(path,'wb');assert(f,err)
- local ok,why=f:write(data);local closed,closeError=f:close()
- assert(ok and closed,why or closeError or'BLT startup write failed')
- assert(restore_read(path)==data,'BLT startup verification failed: '..path)
+ local ok,why=f:write(data);local closed,reason=f:close()
+ assert(ok and closed,why or reason or 'BLT startup write failed')
+ assert(read(path)==data,'BLT startup verification failed: '..path)
 end
-local function restore_write(path,data)
- local previous=restore_read(path)
- if previous==data then return end
+local function write(path,data)
+ local previous=read(path);if previous==data then return end
  if previous then
-  local backup=path..'.blt-backup';local suffix=0
-  while restore_read(backup)and restore_read(backup)~=previous do suffix=suffix+1;backup=path..'.blt-backup-'..suffix end
-  if not restore_read(backup)then restore_write_bytes(backup,previous)end
+  local suffix=0
+  while true do
+   local backup=path..'.blt-backup'..(suffix==0 and '' or '-'..suffix)
+   local saved=read(backup)
+   if not saved then bytes(backup,previous);break end
+   if saved==previous then break end
+   suffix=suffix+1;assert(suffix<=100,'Too many BLT startup backups')
+  end
  end
- local ok,err=pcall(restore_write_bytes,path,data)
+ local ok,err=pcall(bytes,path,data)
  if not ok then
   if previous then
-   local restored,why=pcall(restore_write_bytes,path,previous)
-   if not restored then error(tostring(err)..'\nBLT startup restoration failed: '..tostring(why))end
+   local restored,why=pcall(bytes,path,previous)
+   if not restored then error(tostring(err)..'\nBLT startup restoration failed: '..tostring(why),0)end
   end
-  error(err)
+  error(err,0)
  end
- if os.remove then os.remove(path..'.blt-tmp')end
 end
-function BLTRestore.start(api)
- local section,id=BLTRestore.section,BLTRestore.id
- local _,path,actionSection,command=api.get_action_context()
- if actionSection==-1 and command==-1 and api.BLT_ProfileTarget==path then return end
- assert(actionSection==0 and path~='','BLT restore requires a Main action')
+local function save(api,key,value,persist)
+ if api.GetExtState(SECTION,key)~=value then api.SetExtState(SECTION,key,value,persist)end
+end
+local function install(api)
+ if api.GetExtState(SECTION,'launcher_checked')==M.version then return end
  local root=api.GetResourcePath()..'/Scripts'
  api.RecursiveCreateDirectory(root..'/BLT ReaScripts',0)
- restore_write(root..'/BLT ReaScripts/BLT_Restore_Open_Apps.lua',BLTRestoreLauncher)
- local startup=root..'/__startup.lua';local original=restore_read(startup)or''
+ write(root..'/BLT ReaScripts/BLT_Restore_Open_Apps.lua',M.launcher)
+ local startup=root..'/__startup.lua';local original=read(startup)or''
  local marker='-- BLT_APP_RESTORE_STARTUP'
  if not original:find(marker,1,true)then
+  local bom=original:sub(1,3)=='\239\187\191'and original:sub(1,3)or''
+  local body=bom~=''and original:sub(4)or original
   local block=marker..'\ndo\n local path=reaper.GetResourcePath().."/Scripts/BLT ReaScripts/BLT_Restore_Open_Apps.lua"\n local fn=loadfile(path)\n if fn then local ok,err=pcall(fn);if not ok then reaper.ShowConsoleMsg(tostring(err).."\\n")end end\nend\n'
-  restore_write(startup,block..original:gsub('^\239\187\191',''))
+  write(startup,bom..block..body)
  else
   local old=' local path=reaper.GetResourcePath().."/Scripts/BLT/BLT_Restore_Open_Apps.lua"'
   local at=original:find(old,1,true)
   if at then
    local replacement=' local path=reaper.GetResourcePath().."/Scripts/BLT ReaScripts/BLT_Restore_Open_Apps.lua"'
-   restore_write(startup,original:sub(1,at-1)..replacement..original:sub(at+#old))
+   write(startup,original:sub(1,at-1)..replacement..original:sub(at+#old))
   end
  end
- local legacy=root..'/BLT/BLT_Restore_Open_Apps.lua'
- local savedStartup=restore_read(startup) or ''
- if not savedStartup:find('/Scripts/BLT/BLT_Restore_Open_Apps.lua',1,true) and restore_read(legacy)==BLTRestoreLauncher then
-  os.remove(legacy)
+ save(api,'launcher_checked',M.version,false)
+end
+function M.new(id)
+ assert(type(id)=='string'and id:match('^BLT_[A-Z_]+$'),'Invalid BLT restore ID')
+ local state={section=SECTION,id=id}
+ function state.start(api)
+  local _,path,section,command=api.get_action_context()
+  if section==-1 and command==-1 and api.BLT_ProfileTarget==path then return end
+  assert(section==0 and path~='','BLT restore requires a Main action')
+  install(api)
+  local count=math.min(128,tonumber(api.GetExtState(SECTION,'count'))or 0);local found=false
+  for i=1,count do if api.GetExtState(SECTION,'app_'..i)==id then found=true;break end end
+  if not found then
+   assert(count<128,'BLT restore registry is full')
+   save(api,'app_'..(count+1),id,true);save(api,'count',tostring(count+1),true)
+  end
+  save(api,id..'_path',path,true)
+  local named=api.ReverseNamedCommandLookup(command)or''
+  save(api,id..'_command',named~=''and'_'..named:gsub('^_','')or'',true)
+  save(api,id..'_open','1',true);save(api,id..'_running','1',false)
+  state.started=true
  end
- local count=math.min(128,tonumber(api.GetExtState(section,'count'))or 0);local found=false
- for i=1,count do if api.GetExtState(section,'app_'..i)==id then found=true;break end end
- if not found then assert(count<128,'BLT restore registry is full');api.SetExtState(section,'app_'..(count+1),id,true);api.SetExtState(section,'count',tostring(count+1),true)end
- api.SetExtState(section,id..'_path',path,true)
- local named=api.ReverseNamedCommandLookup(command)or''
- api.SetExtState(section,id..'_command',named~=''and'_'..named:gsub('^_','')or'',true)
- api.SetExtState(section,id..'_open','1',true)
- api.SetExtState(section,id..'_running','1',false)
- BLTRestore.started=true
+ function state.finish(api,manual)
+  if not state.started then return end
+  if manual then save(api,id..'_open','0',true)end
+  save(api,id..'_running','',false);state.started=false
+ end
+ return state
 end
-function BLTRestore.finish(api,manual)
- if not BLTRestore.started then return end
- if manual then api.SetExtState(BLTRestore.section,BLTRestore.id..'_open','0',true)end
- api.SetExtState(BLTRestore.section,BLTRestore.id..'_running','',false)
- BLTRestore.started=false
-end
+return M
+end)().new('BLT_MINIMAL_INFO_PANEL')
 
 local function close()
  BLTRestore.finish(R,A.manualClose or Chrome.requestClose)
