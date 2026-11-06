@@ -1,5 +1,5 @@
 -- @description ACTION - Auto-hide video window under mouse (toggle)
--- @version 1.1.4
+-- @version 1.1.5
 -- @author Balrulu
 -- @provides
 --   . > ../
@@ -469,6 +469,7 @@ local function update(now)
   local hovered = R.JS_Window_FromPoint(x, y)
   local checked = hovered ~= last_hover or refresh
   if checked then video, last_hover = video_at(hovered), hovered end
+  if video and not R.JS_Window_IsWindow(video) then video, last_hover = nil, nil; return end
   if not video or not R.JS_Window_IsVisible(video) then return end
   local ok, left, top, right, bottom = R.JS_Window_GetClientRect(video)
   if not ok then return end

@@ -1,5 +1,5 @@
 -- @description COLOR PALETTE
--- @version 0.6.11
+-- @version 0.6.12
 -- @author Balrulu
 -- @provides
 --   . > ../
@@ -4186,7 +4186,7 @@ function UI.apply(request)
  local kind=request and request.kind or Target.kind
  local picked=request and request.color or S.color
  local reset=request and request.reset
- if request and kind~=Target.kind then notice('対象の選択が変わりました。表示を確認して再実行してください。',true);return end
+ if request and kind~=Target.kind then Target.tick(R.time_precise(),true);wake_visuals();return end
  if not kind or UI.counts()==0 then local text,bad=UI.base_status();notice(text,bad);return end
  A.busy=true
  local ok,why,count=Core.apply(snap,kind,picked,reset)
@@ -4199,7 +4199,7 @@ function UI.apply(request)
    UI.complete()
   end
   if S.close_after then A.closing=true end
- else
+ elseif why~='empty' and why~='project' and why~='selection' then
   local errors={empty='対象の選択がありません。ほかの種類には適用しません。',project='プロジェクトが変わったため中止しました。',
    selection='対象の選択が変わりました。表示を確認して再実行してください。',color='選択した色が不正です。',
    read='対象を確認できません。選択し直してください。',rollback='色の変更に失敗したため、元の色へ戻しました。',

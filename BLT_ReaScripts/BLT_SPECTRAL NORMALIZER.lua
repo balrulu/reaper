@@ -1,5 +1,5 @@
 -- @description SPECTRAL NORMALIZER
--- @version 0.6.12
+-- @version 0.6.14
 -- @author Balrulu
 -- @provides
 --   . > ../
@@ -3948,7 +3948,10 @@ function App.notice(text,warning,seconds)
 end
 function App.safe(fn,...)
  local ok,result=xpcall(fn,debug.traceback,...)
- if not ok then if UI.release_capture then UI.release_capture() end;App.notice(App.public_error(result),true) end
+ if not ok then
+  if UI.release_capture then UI.release_capture() end
+  if result==App.context_changed then A.status='';A.warning=false;A.status_until=0;A.selection_poll=0;A.dirty=true else App.notice(App.public_error(result),true) end
+ end
  return ok,result
 end
 function App.persist()
@@ -3997,14 +4000,15 @@ function App.item_signature(item)
  -- Selection is UI state, not an audio edit. Preserve every other chunk field.
  return ('\n'..chunk:gsub('\r\n','\n')):gsub('\nSEL [^\n]*','')
 end
+App.context_changed={}
 function App.check_job(j,force)
- assert(R.EnumProjects(-1,'')==j.project,'プロジェクトが切り替わったため中止しました。')
+ assert(R.EnumProjects(-1,'')==j.project,App.context_changed)
  local revision=R.GetProjectStateChangeCount(j.project)
  if not force and revision==j.checked_revision then return end
  for _,p in ipairs(j.plans) do
-  assert(R.ValidatePtr2(j.project,p.item,'MediaItem*') and R.ValidatePtr2(j.project,p.track,'MediaTrack*'),'対象アイテムまたはトラックが削除されました。')
-  assert(R.GetActiveTake(p.item)==p.take and R.GetMediaItemTrack(p.item)==p.track,'対象テイクまたはトラックが変更されました。')
-  assert(App.item_signature(p.item)==p.signature,'対象アイテムの内容が変更されたため中止しました。')
+  assert(R.ValidatePtr2(j.project,p.item,'MediaItem*') and R.ValidatePtr2(j.project,p.track,'MediaTrack*'),App.context_changed)
+  assert(R.GetActiveTake(p.item)==p.take and R.GetMediaItemTrack(p.item)==p.track,App.context_changed)
+  assert(App.item_signature(p.item)==p.signature,App.context_changed)
  end
  j.checked_revision=revision
 end
@@ -4109,7 +4113,7 @@ function App.step(j)
  if j.phase=='peaks' then App.build_peaks(j,p);return false end
  if j.phase=='render' then
   if not j.proc then App.start_item(j,p) end
-  assert(not R.AudioAccessorStateChanged(j.aa),'処理中に音声が変更されました。')
+  assert(not R.AudioAccessorStateChanged(j.aa),App.context_changed)
   local proc=j.proc;local first=max(0,proc.at);local ending=min(p.frames,proc.at+proc.n);local count=max(0,ending-first);local samples,offset
   local origin;samples,origin=App.audio_samples(j,p,first,count);offset=(origin-proc.at)*p.ch
   local out,done=Core.frame(proc,samples,offset);local packed=j.packed;for i=#packed,1,-1 do packed[i]=nil end
@@ -4139,13 +4143,17 @@ function App.step(j)
  return false
 end
 function App.begin_processing()
- if not Media.ready() then return end
+ if not Media.ready() or R.CountSelectedMediaItems(R.EnumProjects(-1,''))==0 then return end
  local candidate=App.plan()
  if candidate.total_seconds>=1500 then A.pending_job=candidate;A.modal='long';A.dirty=true
  else A.job=candidate;App.notice('処理中…',false,3600) end
 end
 function App.confirm_processing()
- if A.pending_job then A.job=A.pending_job;A.pending_job=nil;A.modal=nil;App.notice('処理中…',false,3600) end
+ if A.pending_job then
+  local pending=A.pending_job;A.pending_job=nil;A.modal=nil
+  local ok,err=pcall(App.check_job,pending,true)
+  if not ok then App.cleanup(pending);A.selection_poll=0;A.dirty=true;if err~=App.context_changed then error(err,0) end;return end
+  A.job=pending;App.notice('処理中…',false,3600) end
 end
 function App.cancel_pending() A.pending_job=nil;A.modal=nil;A.dirty=true end
 function App.cancel_processing()
@@ -4172,7 +4180,9 @@ function App.begin_analysis()
  if not Media.ready() then return end
  if A.job then return end
  UI.commit_edit()
- local project=R.EnumProjects(-1,'');local plans={};local total=0;local upper=0
+ local project=R.EnumProjects(-1,'')
+ if R.CountSelectedMediaItems(project)==0 then return end
+ local plans={};local total=0;local upper=0
  for i=0,R.CountSelectedMediaItems(project)-1 do
   local item=R.GetSelectedMediaItem(project,i);local take=R.GetActiveTake(item)
   assert(take and not R.TakeIsMIDI(take),'選択には音声アイテムのみを含めてください。')
@@ -4214,7 +4224,7 @@ function App.analysis_step(j)
   j.map=map
   for c=1,p.ch do j.spectra[c]={{},{}} end
  end
- assert(not R.AudioAccessorStateChanged(j.aa),'処理中に音声が変更されました。')
+ assert(not R.AudioAccessorStateChanged(j.aa),App.context_changed)
  local first=max(0,j.at);local ending=min(p.frames,j.at+j.n);local count=max(0,ending-first);local samples
  local origin;samples,origin=App.audio_samples(j,p,first,count)
  local offset=origin-j.at;local norm=0;local window_offset=first-j.at
@@ -4259,7 +4269,10 @@ function App.process(now)
   repeat if (current.kind=='analysis' and App.analysis_step(current) or current.kind~='analysis' and App.step(current)) then return true end until R.time_precise()>=deadline
   return false
  end,debug.traceback)
- if not ok then App.cleanup(current);A.job=nil;App.notice(L.text('処理に失敗しました。')..' '..L.text(App.public_error(done)),true,12)
+ if not ok then
+  App.cleanup(current);A.job=nil
+  if done==App.context_changed then A.status='';A.warning=false;A.status_until=0;A.selection_poll=0;App.poll_selection(now)
+  else App.notice(L.text('処理に失敗しました。')..' '..L.text(App.public_error(done)),true,12) end
  elseif done and current.kind=='analysis' then
   local success,err=xpcall(App.finish_analysis,debug.traceback,current);App.cleanup(current);A.job=nil
   if not success then App.notice(App.public_error(err),true,12) end
@@ -4619,8 +4632,16 @@ for _,frequency in ipairs(UI.max_frequencies) do local value=frequency;UI.action
 for index=1,#Core.PRESETS do local value=index;UI.actions['intensity_'..value]=function()UI.apply_intensity(value)end end
 function App.poll_selection(now)
  if not Media.ready() then return end
- if A.job or now<A.selection_poll then return end;A.selection_poll=now+.5
- local project=R.EnumProjects(-1,'');local revision=R.GetProjectStateChangeCount(project);local count=R.CountSelectedMediaItems(project);local item=count>0 and R.GetSelectedMediaItem(project,0) or nil;local take=item and R.GetActiveTake(item) or nil
+ local project=R.EnumProjects(-1,'')
+ if A.job or now<A.selection_poll and project==A.selection_project then return end;A.selection_poll=now+.5
+ if A.pending_job then
+  local ok,err=pcall(App.check_job,A.pending_job)
+  if not ok then
+   App.cleanup(A.pending_job);A.pending_job=nil;A.modal=nil;A.dirty=true
+   if err~=App.context_changed then error(err,0) end
+  end
+ end
+ local revision=R.GetProjectStateChangeCount(project);local count=R.CountSelectedMediaItems(project);local item=count>0 and R.GetSelectedMediaItem(project,0) or nil;local take=item and R.GetActiveTake(item) or nil
  if project==A.selection_project and revision==A.selection_revision and count==A.selection_count and item==A.selection_item and take==A.selection_take then return end
  A.selection_project,A.selection_revision,A.selection_count,A.selection_item,A.selection_take=project,revision,count,item,take
  local info='音声アイテム未選択';local detail='';local nyquist=nil

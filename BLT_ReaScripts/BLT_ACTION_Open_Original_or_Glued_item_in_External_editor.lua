@@ -1,5 +1,5 @@
 -- @description ACTION - Open selected item in external editor (original or glued range)
--- @version 1.0.4
+-- @version 1.0.5
 -- @author Balrulu
 -- @provides
 --   . > ../
@@ -360,22 +360,21 @@ end
 
 local function selection()
   if R.GetPlayState() & 4 ~= 0 then stop(tr("録音を停止してから実行してください。", "Stop recording before running this action.")) end
-  if R.CountSelectedMediaItems(0) ~= 1 then stop(tr("音声アイテムを1つだけ選択してください。", "Select exactly one audio item.")) end
+  if R.CountSelectedMediaItems(0) ~= 1 then return end
   local item = R.GetSelectedMediaItem(0, 0)
+  if not item or not R.ValidatePtr2(0,item,'MediaItem*') then return end
   local take = R.GetActiveTake(item)
-  if not take or R.TakeIsMIDI(take) then stop(tr("アクティブな音声テイクが必要です。", "An active audio take is required.")) end
+  if not take or R.TakeIsMIDI(take) then return end
   return item, take
 end
 
 local function execute(mode, expected)
   if mode ~= "original" and mode ~= "glue" then stop(tr("編集方法を選択できませんでした。", "Cannot identify the selected editing mode.")) end
   if expected and R.EnumProjects(-1, "") ~= expected.project then
-    stop(tr("ダイアログを開いた後にプロジェクトが切り替わりました。再実行してください。", "The project changed while the dialog was open. Run the action again."))
+    return
   end
   local item, take = selection()
-  if expected and (item ~= expected.item or take ~= expected.take) then
-    stop(tr("ダイアログを開いた後にアイテムまたはテイクの選択が変わりました。再実行してください。", "The selected item or take changed while the dialog was open. Run the action again."))
-  end
+  if not item or expected and (item ~= expected.item or take ~= expected.take) then return end
   if mode == "original" then
     R.Main_OnCommand(OPEN_ACTION, 0)
     return
@@ -446,7 +445,7 @@ local function dialog_position(width, height)
          math.floor(math.max(top + 32, math.min(y + 12, bottom - height - 48)))
 end
 
-local function choose_mode(on_choice)
+local function choose_mode(on_choice,expected)
   local closed, pressed = false, nil
   local function close()
     if not closed then
@@ -467,6 +466,11 @@ local function choose_mode(on_choice)
   local previous_left = (gfx.mouse_cap & 1) ~= 0
   local function poll()
     if closed then return end
+    if expected and (R.EnumProjects(-1, '')~=expected.project
+        or not R.ValidatePtr2(expected.project,expected.item,'MediaItem*')
+        or R.GetActiveTake(expected.item)~=expected.take
+        or R.CountSelectedMediaItems(expected.project)~=1
+        or R.GetSelectedMediaItem(expected.project,0)~=expected.item) then close();return end
     local key = gfx.getchar()
     if key < 0 or key == 27 then
       close()
@@ -519,12 +523,13 @@ end
 
 local function main()
   local item, take = selection()
+  if not item then return end
   local expected = {project = R.EnumProjects(-1, ""), item = item, take = take}
   if uses_entire_source(item, take) then
     execute("original", expected)
     return
   end
-  choose_mode(function(mode) execute(mode, expected) end)
+  choose_mode(function(mode) execute(mode, expected) end,expected)
 end
 
 local ok, message = xpcall(main, error_message)

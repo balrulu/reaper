@@ -1,5 +1,5 @@
 -- @description SIMPLE NORMALIZER
--- @version 0.6.8
+-- @version 0.6.10
 -- @author Balrulu
 -- @provides
 --   . > ../
@@ -4723,18 +4723,16 @@ local function unit() return Core.modes[S.mode].unit end
 local function eligible_count()
   local n=0; for _,v in ipairs(A.items) do if not v.reason then n=n+1 end end; return n
 end
-local function invalidate_snapshot(err)
-  local project=R.EnumProjects(-1,"")
-  local changed=project~=A.project or Core.selection_signature(project)~=A.selectionSig
-  A.changeCount=0;A.dirty=false;A.needsAnalyze=changed
-  if changed then A.selectionSig=nil end
-  status(err,true)
+local function invalidate_snapshot()
+  A.changeCount=0;A.dirty=false;A.needsAnalyze=true
+  A.selectionSig=nil;A.analysisSig=nil
+  status("",false)
 end
 local function replan(partial)
   if #A.items==0 then A.changeCount=0; return end
   if not partial and not A.job then
-    local ok,err=Core.check(A.project,A.items,A.executionLocked)
-    if not ok then invalidate_snapshot(err); return end
+    local ok=Core.check(A.project,A.items,A.executionLocked)
+    if not ok then invalidate_snapshot(); return end
   end
   local n,e=Core.plan(A.items,S.mode,S.targetMode,target_value(),A.selected,S.applyMode,S.monoComp)
   if not n then
@@ -4792,6 +4790,7 @@ local function advance()
   if R.EnumProjects(-1,"")~=A.project then
     cancel_auto("プロジェクトが切り替わりました。自動更新します。"); A.selectionSig=nil; return
   end
+  local revision=R.GetProjectStateChangeCount(A.project)
   local currentSig=job.lastSig or A.analysisSig
   local now=R.time_precise()
   if not A.executionLocked and now>=(job.validateAt or 0) then
@@ -4818,6 +4817,11 @@ local function advance()
       replan(false)
       if A.applyWhenReady and apply_ready then A.applyWhenReady=false; apply_ready() end
       return
+    end
+    if revision~=job.checked_revision or v~=job.checked_item then
+      local current=job.check_items or {};job.check_items=current;current[1]=v
+      if not Core.check(A.project,current,true) then cancel_auto();A.selectionSig=nil;return end
+      job.checked_revision=revision;job.checked_item=v
     end
     if v.reason or (v.metrics and v.metrics.allComplete) then
       job.index=job.index+1;job.done=job.done+v.len; A.analyzedCount=A.analyzedCount+1; update_plan()
@@ -4853,10 +4857,10 @@ apply_ready=function()
     return
   end
   if A.needsAnalyze or A.dirty then replan(false) end
-  local ok,err=Core.check(A.project,A.items,A.executionLocked)
+  local ok=Core.check(A.project,A.items,A.executionLocked)
   if not ok then
     A.applyWhenReady=false; A.executionLocked=false; A.forceFinish=false
-    invalidate_snapshot(err); return
+    invalidate_snapshot(); return
   end
   local n,appliedOrErr=Core.apply(A.project,A.items,A.executionLocked)
   if not n then

@@ -1,5 +1,5 @@
 -- @description INTERVAL
--- @version 0.6.30
+-- @version 0.6.31
 -- @author Balrulu
 -- @provides
 --   . > ../
@@ -3079,7 +3079,7 @@ local function public_error(value,fallback)
   return text
 end
 local App={
-  version="0.6.30",section="BLT_INTERVAL",windowTitle="BLT Interval",
+  version="0.6.31",section="BLT_INTERVAL",windowTitle="BLT Interval",
   chromeTitle="I N T E R V A L",title="INTERVAL",
   subtitle="ITEM SPACING  アイテム間隔を整列",
 }
@@ -3581,6 +3581,7 @@ end
 function Core.apply(project, interval, mode, unit, scope, include_ruler)
   local items,collect_error = Core.collect(project,include_ruler)
   if not items then return false,collect_error end
+  if #items<2 then return false,nil,true end
   local changes, err = Core.plan(project, items, interval, mode, unit, scope)
   if not changes then return false, err end
   if #changes == 0 then return true, "すでに指定した間隔で整列しています。" end
@@ -3657,8 +3658,8 @@ if rawget(_G,"BLT_INTERVAL_INVOCATION")=="process_last" then
   local interval=Core.parse(process_value,process_unit)
   local saved_ruler=R.GetExtState(SECTION,"process_include_ruler")
   local process_ruler=saved_ruler=="1" or saved_ruler=="" and include_ruler
-  local ok,message=Core.apply(R.EnumProjects(-1,""),interval,process_mode,process_unit,process_scope,process_ruler)
-  if not ok then Language.mb(message or "処理できませんでした。","BLT: Interval - 前回設定で処理",0) end
+  local ok,message,stale=Core.apply(R.EnumProjects(-1,""),interval,process_mode,process_unit,process_scope,process_ruler)
+  if not ok and not stale then Language.mb(message or "処理できませんでした。","BLT: Interval - 前回設定で処理",0) end
   return
 end
 
@@ -4291,7 +4292,8 @@ end
 local function process()
  commit()
  local n=Core.parse(value,unit) or 0
- local success,message=Core.apply(R.EnumProjects(-1,''),n,mode,unit,scope,include_ruler)
+ local success,message,stale=Core.apply(R.EnumProjects(-1,''),n,mode,unit,scope,include_ruler)
+ if stale then return end
  notice(message,success)
  if success then
   stash_current_value();State.set(unit=='grid' and 'grid_value' or 'seconds',value,true)

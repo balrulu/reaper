@@ -1,5 +1,5 @@
 -- @description BATCH RENAME
--- @version 0.6.14
+-- @version 0.6.15
 -- @author Balrulu
 -- @provides
 --   . > ../
@@ -4151,7 +4151,7 @@ local function sync_selection()
 end
 local function perform_execute()
   local valid=Core.preflight(A.project,A.items)
-  if not valid then refresh(); notice("選択の変更を自動反映しました。対応関係を確認して実行してください。",true); return end
+  if not valid then refresh(); return end
   local n,err=Core.apply(A.project,A.items,A.rows)
   if not n then notice(err,true); return end
   A.revision=R.GetProjectStateChangeCount(A.project); A.applied=true; A.live=Core.collect(A.project)
@@ -4170,7 +4170,7 @@ local function execute()
   if not commit_edit() then return end
   if A.parser or A.applied or A.invalid then return end
   local valid=Core.preflight(A.project,A.items)
-  if not valid then refresh(); notice("選択の変更を自動反映しました。対応関係を確認して実行してください。",true); return end
+  if not valid then refresh(); return end
   if (A.stats.duplicate_groups or 0)>0 then
     A.duplicate_modal=true
     A.pressed=nil

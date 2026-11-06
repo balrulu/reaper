@@ -1,5 +1,5 @@
 -- @description MARKER REGION DESK
--- @version 0.6.16
+-- @version 0.6.18
 -- @author Balrulu
 -- @provides
 --   . > ../
@@ -3951,9 +3951,9 @@ function Core.preflight(project,items)
 end
 function Core.apply(project,items,rows,field)
   local color=field=="color"
-  local ok,err,current=Core.preflight(project,items); if not ok then return nil,err end
+  local ok,err,current=Core.preflight(project,items); if not ok then return nil,err,true end
   if color then for i,v in ipairs(items) do
-    if v.selected~=current[i].selected then return nil,"対象が変更されました。選択を確認してください。" end
+    if v.selected~=current[i].selected then return nil,"対象が変更されました。選択を確認してください。",true end
   end end
   local changes={}; for _,row in ipairs(rows) do if row.change then changes[#changes+1]=row end end
   if #changes==0 then return nil,"変更予定がありません。" end
@@ -4203,7 +4203,7 @@ local function paste_names(selected_only)
     local selected_now={}
     for _,v in ipairs(Core.collect(project)) do if v.selected then selected_now[v.guid]=true end end
     for _,v in ipairs(items) do
-      if v.selected~=(selected_now[v.guid]==true) then report_error("選択が変わりました。対象を確認して貼り付け直してください。");return end
+      if v.selected~=(selected_now[v.guid]==true) then refresh();return end
     end
   end
   local n,err=0,nil
@@ -4511,8 +4511,8 @@ local function applyRename(value)
  end
  local rows,changes=Core.rename_rows(target.items,{[target.guid]=value})
  if changes>0 then
-  local n,err=Core.apply(target.project,target.items,rows)
-  if not n then report_error(err);sync_selection();return false end
+  local n,err,stale=Core.apply(target.project,target.items,rows)
+  if not n then sync_selection();if stale then return true end;report_error(err);return false end
  end
  local offset=A.offset;sync_selection();A.offset=clamp(offset,0,max_offset());wake()
  return true
@@ -4614,8 +4614,8 @@ local function applyColor(request,native)
  local rows=Core.color_rows(request.items,native)
  local changed=false;for _,row in ipairs(rows) do if row.change then changed=true;break end end
  if changed then
-  local n,err=Core.apply(request.project,request.items,rows,'color')
-  if not n then report_error(err) end
+  local n,err,stale=Core.apply(request.project,request.items,rows,'color')
+  if not n and not stale then report_error(err) end
  end
  local offset=A.offset;sync_selection();A.offset=clamp(offset,0,max_offset());wake()
 end
@@ -4637,8 +4637,7 @@ end
 local function chooseColor()
  local request=pendingColor;pendingColor=nil
  if not request then return end
- local ok,err=Core.preflight(request.project,request.items)
- if not ok then report_error(err);return end
+ if not Core.preflight(request.project,request.items) then sync_selection();displayDirty=true;wake();return end
  local parent=Host.nativeWindow
  if not parent or parent==0 then parent=R.GetMainHwnd() end
  local accepted,native=R.GR_SelectColor(parent)

@@ -1,5 +1,5 @@
 -- @description ACTION - Auto select tracks of selected items (toggle)
--- @version 1.1.5
+-- @version 1.1.6
 -- @author Balrulu
 -- @provides
 --   . > ../
@@ -621,6 +621,7 @@ local function update(now)
   end
   local f = R.GetSelectedMediaItem(p, 0)
   local l = n > 1 and R.GetSelectedMediaItem(p, n - 1) or f
+  if not f or not l then count = -1; return end
   if not changed and n <= 2 and f == first and l == last
       and R.GetMediaItemTrack(f) == selected[f] and R.GetMediaItemTrack(l) == selected[l] then return end
   local s = R.GetProjectStateChangeCount(p)

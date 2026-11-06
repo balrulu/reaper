@@ -1,5 +1,5 @@
 -- @description AUTO TRIM / SPLIT
--- @version 0.6.10
+-- @version 0.6.12
 -- @author Balrulu
 -- @provides
 --   . > ../
@@ -4108,9 +4108,13 @@ local function find_item_by_guid(project,guid)
   return nil
 end
 function Core.refresh_info(project,snapshot)
-  if not snapshot then return nil,"対象アイテムがありません。" end
+  if not snapshot or R.EnumProjects(-1,"")~=project then return nil,"対象アイテムがありません。" end
   local item=snapshot.item
-  if not valid_item(project,item) then item=find_item_by_guid(project,snapshot.guid) end
+  if valid_item(project,item) then
+    local ok,guid=R.GetSetMediaItemInfo_String(item,"GUID","",false)
+    if not ok or guid~=snapshot.guid then item=nil end
+  else item=nil end
+  if not item then item=find_item_by_guid(project,snapshot.guid) end
   if not item then return nil,"対象アイテムが見つかりません。" end
   return Core.info(project,item)
 end
@@ -4146,8 +4150,9 @@ function Core.dispose(j)
   if j.accessor then local accessor=j.accessor;j.accessor=nil;pcall(R.DestroyAudioAccessor,accessor) end
   if j.peak_accessor then local accessor=j.peak_accessor;j.peak_accessor=nil;pcall(R.DestroyAudioAccessor,accessor) end
 end
+Core.context_changed={}
 function Core.start(project,info,basis,known_chunk)
-  if not valid_item(project,info.item) then error("対象が削除されました。",0) end
+  if not valid_item(project,info.item) then error(Core.context_changed,0) end
   if info.len>Core.MAX_ITEM_SECONDS then error("1アイテムは60分以内にしてください。",0) end
   local chunk=known_chunk or Core.chunk(info)
   if basis=="peak" then
@@ -4248,7 +4253,8 @@ end
 
 local function read_peak_step(j)
   if j.done then return true end
-  if not valid_item(j.project,j.info.item) then error("解析中に対象が削除されました。",0) end
+  if R.EnumProjects(-1,'')~=j.project or not valid_item(j.project,j.info.item)
+    or not R.ValidatePtr2(j.project,j.info.take,'MediaItem_Take*') or R.GetActiveTake(j.info.item)~=j.info.take then error(Core.context_changed,0) end
   if j.peak_accessor then return read_peak_accessor_step(j) end
   local remaining=j.total-j.offset
   if remaining<=0 then j.done=true; j.buffer=nil; return true end
@@ -4292,8 +4298,9 @@ local function read_peak_step(j)
 end
 local function read_loud_step(j)
   if j.done then return true end
-  if not valid_item(j.project,j.info.item) then error("解析中に対象が削除されました。",0) end
-  if R.AudioAccessorStateChanged(j.accessor) then error("解析中に音声が変更されました。選択を更新してください。",0) end
+  if R.EnumProjects(-1,'')~=j.project or not valid_item(j.project,j.info.item)
+    or not R.ValidatePtr2(j.project,j.info.take,'MediaItem_Take*') or R.GetActiveTake(j.info.item)~=j.info.take then error(Core.context_changed,0) end
+  if R.AudioAccessorStateChanged(j.accessor) then error(Core.context_changed,0) end
   local count=min(Core.LOUD_BLOCK,j.total-j.offset)
   j.buffer.clear()
   local rc=R.GetAudioAccessorSamples(j.accessor,Core.SR,j.info.channels,j.offset/Core.SR,count,j.buffer)
@@ -4428,11 +4435,11 @@ function Core.apply(project,entries,s)
   local ok,err=Core.validate(s); if not ok then return nil,err end
   local saved={}
   for index,e in ipairs(entries) do
-    local now,info_err=Core.refresh_info(project,e.info)
+    local now=Core.refresh_info(project,e.info)
     local label=e.info and e.info.name or ("#"..index)
-    if not now then return nil,string.format("対象が見つかりません：%s（%s）",label,info_err or "不明なエラー") end
+    if not now then return nil,nil,true end
     if now.locked then return nil,string.format("ロックされたアイテムがあります：%s",now.name or label) end
-    if Core.chunk(now)~=e.chunk then return nil,string.format("解析後に対象が変更されています：%s",now.name or label) end
+    if Core.chunk(now)~=e.chunk then return nil,nil,true end
     e.info=now
     saved[#saved+1]={info=now,chunk=e.chunk,fragments={now.item},touched=false}
   end
@@ -4725,8 +4732,13 @@ end
 
 local function fail(err)
   BLT.cleanup(stop_jobs); A.ready=false
-  notice(err,true)
-  BLT.recoverInput(A,err)
+  if err==Core.context_changed then
+   A.message='';A.bad=false
+   local project=R.EnumProjects(-1,'')
+   if project~=A.project then A.project=project;A.audio_cache={};A.long_lufs_approved={} end
+   sync_selection()
+  else notice(err,true) end
+  BLT.recoverInput(A,err==Core.context_changed and '' or err)
 end
 local function guarded(fn)
   local ok,err=xpcall(fn,debug.traceback); if not ok then fail(err) end
@@ -4753,8 +4765,8 @@ end
 local function batch_next()
   local b=A.batch
   if b.i>#b.list then
-    local result,err=Core.apply(A.project,b.entries,b.settings)
-    if not result then error(err,0) end
+    local result,err,stale=Core.apply(A.project,b.entries,b.settings)
+    if not result then error(stale and Core.context_changed or err,0) end
     local all=b.settings.all
     A.batch=nil; A.analysis=nil; A.detector=nil; A.data=nil; A.ready=false
     if all then A.queue={}; A.index=1
@@ -4766,8 +4778,8 @@ local function batch_next()
     if BLT.completed then BLT.completed(result) end
     return
   end
-  local info,info_err=Core.refresh_info(A.project,b.list[b.i])
-  if not info then error(info_err or "対象アイテムが見つかりません。",0) end
+  local info=Core.refresh_info(A.project,b.list[b.i])
+  if not info then error(Core.context_changed,0) end
   if info.len>Core.MAX_ITEM_SECONDS then error("1アイテムは60分以内にしてください。",0) end
   if info.locked then error("ロックされたアイテムがあります："..(info.name or tostring(b.i)),0) end
   if not confirm_long_lufs(info,b.settings.basis) then
@@ -4788,8 +4800,8 @@ local function execute()
   if S.all then for _,v in ipairs(A.queue) do list[#list+1]=v end
   else list[1]=A.queue[A.index] end
   for i,v in ipairs(list) do
-    local info,err=Core.refresh_info(A.project,v)
-    if not info then error(err,0) end
+    local info=Core.refresh_info(A.project,v)
+    if not info then error(Core.context_changed,0) end
     if info.len>Core.MAX_ITEM_SECONDS then error("1アイテムは60分以内にしてください。",0) end
     if info.locked then error("ロックされたアイテムがあります。ロックを解除してください。",0) end
     if S.basis=="lufs" and info.channels>2 then error("LUFS-Mはモノ／ステレオ対応です。多チャンネルはピークを選択してください。",0) end
@@ -5036,7 +5048,7 @@ BLT.attachPresets({presetLoaded=function(name)shell:showPresetName(name)end,R=R,
 BLT.recoverInput=function(_,err)
  U.editor:close(true);U.capture=nil;U.down=false
  local execution=U.states.execute;if execution then execution.busy=false end
- wake();BLT.logError(err)
+ wake();if err and err~='' then BLT.logError(err) end
 end
 Media.state=A;Media.onchange=wake
 mediaGraphics.getchar=function() return Host.focused and 6 or 4 end
@@ -5323,12 +5335,11 @@ local function poll(now)
   local key=Core.selection_key(A.project)
   if key~=A.selection_key then guarded(sync_selection);wake()
   elseif revision~=A.revision then
-   local wasBatch=A.batch~=nil
    A.revision=revision
    local unchanged=not (A.analysis or A.detector or A.batch) and A.data and valid_item(A.project,A.data.info.item) and Core.chunk(A.data.info)==A.data.chunk
    if not unchanged then
     guarded(function() start_preview(true) end);wake()
-    if wasBatch then notice('プロジェクトが変更されたため解析を中止しました。',true) end
+
    end
   end
  end

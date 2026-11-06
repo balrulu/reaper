@@ -1,5 +1,5 @@
 -- @description ENVELOPE CANVAS TRACK
--- @version 0.7.7
+-- @version 0.7.9
 -- @author Balrulu
 -- @provides
 --   . > ../
@@ -4584,7 +4584,7 @@ function B.cleanup(fn,...)
  return ok,result
 end
 end
-local Core={VERSION='0.7.7',GENERATED_MAX_POINTS=1024,SECTION='BLT_ENVELOPE_CANVAS_TRACK'}
+local Core={VERSION='0.7.9',GENERATED_MAX_POINTS=1024,SECTION='BLT_ENVELOPE_CANVAS_TRACK'}
 local min,max,abs,floor,ceil=math.min,math.max,math.abs,math.floor,math.ceil
 local function clamp(v,a,b) return max(a,min(b,v)) end
 local function finite(v) return type(v)=='number' and v==v and abs(v)<math.huge end
@@ -4788,6 +4788,13 @@ function UI.spectrum_step()
  local j=A.spectrum_job;if not j then return end
  if A.drag or A.spectrum_fade_editing or not Media.ready() then return end
  if not Track.valid(j.v) or not Track.same(j.v,A.v) then UI.stop_spectrum(true);return end
+ if j.phase=='read' and not j.accessor then
+  for _,source in ipairs(j.coverage and j.coverage.sources or {}) do
+   if not R.ValidatePtr2(j.v.project,source.item,'MediaItem*') or not R.ValidatePtr2(j.v.project,source.take,'MediaItem_Take*') or R.GetActiveTake(source.item)~=source.take then
+    UI.stop_spectrum(true);A.source_revision=nil;A.poll_at=0;return
+   end
+  end
+ end
  local done=BLT.EnvelopeSpectrogram.step(R,j,.006)
  if j.data.complete then UI.remember_spectrum_data(j.data) end
  if done then
@@ -4881,8 +4888,7 @@ end
 
 function UI.check_current()
  local reason
- if not Track.valid(A.v) then reason='トラックと時間範囲を選択してください。'
- elseif not Track.same(A.v,Track.target()) then reason='対象トラックまたは時間範囲が変わりました。'
+ if not Track.valid(A.v) or not Track.same(A.v,Track.target()) then UI.load_selection(false);return false
  elseif (R.GetPlayStateEx(A.v.project)&5)~=0 then reason='編集は再生・録音を停止してから行ってください。' end
  if reason then notice(reason,true);UI.dirty();return false end
  return true
@@ -4910,8 +4916,8 @@ function UI.available(id)
   for _,binding in pairs(A.bindings) do if Track.resolve(A.v,binding) then return true end end
   return false
  end
- if id=='drawundo' then return editing and A.v~=nil and R.Undo_CanUndo2(A.v.project)~=nil end
- if id=='drawredo' then return editing and A.v~=nil and R.Undo_CanRedo2(A.v.project)~=nil end
+ if id=='drawundo' then return editing and Track.valid(A.v) and R.Undo_CanUndo2(A.v.project)~=nil end
+ if id=='drawredo' then return editing and Track.valid(A.v) and R.Undo_CanRedo2(A.v.project)~=nil end
  if id=='clear' or id:match('^tool_') or id:match('^enable_') then return editing end
  return true
 end
@@ -5298,7 +5304,8 @@ function Track.raw(p,y)
 end
 
 function UI.assign(key)
- if A.busy or not A.v then return end
+ if A.busy then return end
+ if not Track.valid(A.v) then UI.load_selection(false);return end
  local track=A.v.track;local entries=Track.list(track)
  if #entries==0 then notice('エンベロープを先にREAPERで表示してください。',true);return end
  local rows={Language.message('割り当て解除')}
@@ -5313,7 +5320,9 @@ function UI.assign(key)
  pressed=nil;A.pointer_capture=nil;A.drag=nil;down_last=(gfx.mouse_cap&1)~=0
  if pick==1 then A.bindings[key]=nil;A.layers[key]=Core.new_layers()[key];UI.sync_curves()
  elseif pick>1 and entries[pick-1] then
-  local entry=entries[pick-1]
+  local guid=entries[pick-1].guid;local entry
+  for _,candidate in ipairs(Track.list(track)) do if candidate.guid==guid then entry=candidate;break end end
+  if not entry then A.revision=nil;A.poll_at=0;UI.dirty();return end
   for k,binding in pairs(A.bindings) do if k~=key and binding.guid==entry.guid then notice('同じエンベロープを複数の枠には割り当てられません。',true);UI.dirty();return end end
   local ok,properties=pcall(Track.properties,entry.env)
   if not ok then notice(properties,true);UI.dirty();return end
@@ -5392,8 +5401,9 @@ function UI.poll_spectrum_fades(now,down)
  return fades
 end
 function UI.poll(now)
- if now<A.poll_at or A.busy then return end;A.poll_at=now+.05
- local project=R.EnumProjects(-1,'');local revision=R.GetProjectStateChangeCount(project)
+ local project=R.EnumProjects(-1,'')
+ if A.busy or now<A.poll_at and (not A.v or project==A.v.project) then return end;A.poll_at=now+.05
+ local revision=R.GetProjectStateChangeCount(project)
  local v=Track.target(project,revision==A.source_revision and A.v or nil)
  if not v then if A.v then UI.load_selection(false) end;return end
  if not Track.same(v,A.v) then UI.load_selection(false,v);return end
@@ -5424,7 +5434,7 @@ function UI.poll(now)
   A.host_check_at=now+.25
   local state=Track.host_state(v,A.bindings)
   if not A.host_state or not BLT.same(state,A.host_state) then
-   Track.finish();UI.cancel_preview();notice('REAPER側でカーブが変更されたため、ドラッグを終了しました。',true)
+   Track.finish();UI.cancel_preview();notice('',false)
    for _,binding in pairs(A.bindings) do local env=Track.resolve(v,binding)
     if env then local _,name=R.GetEnvelopeName(env,'');binding.name=name else binding.name='[missing]' end
    end
@@ -5462,7 +5472,7 @@ function Track.target(project,cached)
  return {project=project,track=track,guid=R.GetTrackGUID(track),name=name or '',pos=first,len=last-first,channels=clamp(floor(R.GetMediaTrackInfo_Value(track,'I_NCHAN')),1,64)}
 end
 function Track.same(a,b)
- return a and b and a.project==b.project and a.track==b.track and abs(a.pos-b.pos)<1e-9 and abs(a.len-b.len)<1e-9
+ return a and b and a.project==b.project and a.track==b.track and a.guid==b.guid and abs(a.pos-b.pos)<1e-9 and abs(a.len-b.len)<1e-9
 end
 function Track.valid(v)
  return v and R.EnumProjects(-1,'')==v.project and R.ValidatePtr2(v.project,v.track,'MediaTrack*') and R.GetTrackGUID(v.track)==v.guid
@@ -5675,7 +5685,7 @@ function UI.ensure_host()
  local current=Track.host_state(A.v,A.bindings)
  if not A.host_state or not BLT.same(current,A.host_state) then
   Track.finish();UI.cancel_preview();UI.sync_curves(current)
-  notice('REAPER側でカーブが変更されたため、ドラッグを終了しました。',true)
+  notice('',false)
   return false
  end
  return true

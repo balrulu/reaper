@@ -1,5 +1,5 @@
 -- @description LOUDNESS TRACE
--- @version 0.8.11
+-- @version 0.8.18
 -- @author Balrulu
 -- @provides
 --   . > ../
@@ -3592,6 +3592,13 @@ function Core.history_summary(previous,first,targets)
   return H
 end
 
+function Core.project_open(api,project)
+ if not project then return false end
+ if api.EnumProjects(-1,'')==project then return true end
+ local i=0
+ while true do local p=api.EnumProjects(i,'');if not p then return false end;if p==project then return true end;i=i+1 end
+end
+
 Core.offline={memory='BLT_LoudnessTrace_Offline_v1',fx='BLT/BLT_Loudness_Trace_Offline_v1.jsfx'}
 function Core.offline.install(api)
  local root=api.GetResourcePath()..'/Effects/'
@@ -3604,7 +3611,7 @@ function Core.offline.install(api)
  assert(ok and closed,why or 'オフライン測定JSFXを保存できません。')
 end
 function Core.offline.find(api,state)
- if not api.ValidatePtr2(state.project,state.master,'MediaTrack*')then return end
+ if not Core.project_open(api,state.project) or not api.ValidatePtr2(state.project,state.master,'MediaTrack*')then return end
  for i=0,api.TrackFX_GetCount(state.master)-1 do
   if api.TrackFX_GetFXGUID(state.master,i)==state.guid then return i end
  end
@@ -4408,6 +4415,7 @@ local function create_trace_platform(api,graphics)
   return api.JS_Window_ScreenToClient(hwnd,x,-y)
  end
  function R.JS_Window_FromPoint(x,y) return api.JS_Window_FromPoint(x,-y) end
+ function R.GetTrackFromPoint(x,y) return api.GetTrackFromPoint(x,-y) end
  return P
 end
 
@@ -4850,7 +4858,7 @@ local function warning_time_text(seconds)
   return string.format('%d:%02d',seconds//60,seconds%60)
 end
 local A={data=nil,job=nil,stale=false,project=nil,track=nil,bitmap=nil,arrange=nil,
- linked=false,revision=0,lastPaint=0,cache='',hover=nil,mouseRepairQueue={},
+ linked=false,revision=0,lastPaint=0,cache='',hover=nil,
  closed=false,down=false,active=true,collapsed=false,tempDeletePending={},tempDeleteRetryAt=0}
 local function extnum(key,default)
   local n=tonumber(R.GetExtState(SECTION,key)); return Core.finite(n) and n or default
@@ -4901,12 +4909,15 @@ local function unlink()
     if R.JS_Window_IsWindow(A.arrange) then R.JS_Composite_Unlink(A.arrange,A.bitmap,true) end
   end
   restore_composite_delay()
-  A.graphContentKey=nil;A.graphCursorPixel=nil
-  A.linked=false; A.cache=""; A.layoutCache=nil; A.paintRect=nil; A.hover=nil; A.lastArrangeMouseX=nil; A.mouseRepairQueue={}; A.mouseSweepMin=nil; A.mouseSweepMax=nil; A.lastMouseMoveAt=nil
+  A.graphContentKey=nil;A.graphCursorPixel=nil;A.graphRects=nil;A.graphClip=nil;A.graphRepair=nil
+  A.linked=false;A.cache='';A.layoutCache=nil;A.paintRect=nil;A.hover=nil;A.lastArrangeMouseX=nil
+  A.graphMouseX,A.graphMouseY,A.graphMouseDown=nil,nil,nil
+  A.graphTransport=nil;A.graphForeground=nil;A.graphActive=nil
 end
 local function dispose_bitmap()
   unlink()
   A.drawBitmap=nil
+  if A.baseBitmap then R.JS_LICE_DestroyBitmap(A.baseBitmap);A.baseBitmap=nil end
   if A.backBitmap then R.JS_LICE_DestroyBitmap(A.backBitmap); A.backBitmap=nil end
   if A.bitmap then R.JS_LICE_DestroyBitmap(A.bitmap); A.bitmap=nil end
 end
@@ -5161,9 +5172,7 @@ function Live.message(text,bad)
   Live.notice=text;Live.noticeBad=bad==true;Live.wake()
 end
 function Live.valid_project(project)
-  if not project then return false end
-  local i=0
-  while true do local p=R.EnumProjects(i,'');if not p then return false end;if p==project then return true end;i=i+1 end
+  return Core.project_open(R,project)
 end
 function Live.select_memory() R.gmem_attach(Live.memory) end
 function Live.release_slot()
@@ -5612,11 +5621,11 @@ function Live.toggle()
 end
 function Live.check_connection()
   local host=R.GetMasterTrack(A.project)
-  assert(host and R.ValidatePtr2(A.project,host,'MediaTrack*'),'マスタートラックを取得できません。')
+  if not host or not R.ValidatePtr2(A.project,host,'MediaTrack*') then return false end
   local idx=Live.find_fx(host,Live.guid)
-  assert(idx and Live.is_meter(host,idx),'リアルタイム測定用FXが削除または移動されました。')
-  assert(idx==0x1000000,'モニターFXの順序が変更されたため、測定をOFFにしました。')
-  assert(R.TrackFX_GetEnabled(host,idx) and not R.TrackFX_GetOffline(host,idx),'リアルタイム測定用FXが無効です。')
+  if not idx or not Live.is_meter(host,idx) then return false end
+  if idx~=0x1000000 then return false end
+  if not R.TrackFX_GetEnabled(host,idx) or R.TrackFX_GetOffline(host,idx) then return false end
   assert(R.TrackFX_GetParam(host,idx,0)==Live.slot and R.TrackFX_GetParam(host,idx,1)==Live.token,'測定用JSFXの設定に失敗しました。')
   for output=0,1 do for pin=0,7 do
     local channel=Live.route.map[pin+1];local lo,hi=0,0
@@ -5624,6 +5633,7 @@ function Live.check_connection()
     local a,b=R.TrackFX_GetPinMappings(host,idx,output,pin)
     assert((a&0xffffffff)==lo and (b&0xffffffff)==hi,'測定用JSFXのチャンネルが変更されたため、測定をOFFにしました。')
   end end
+  return true
 end
 
 function Live.tick(now)
@@ -5632,7 +5642,10 @@ function Live.tick(now)
     assert(A.project==Live.project and S.source==Live.source and A.layout==Live.layout,'測定先が変更されたため、リアルタイム測定をOFFにしました。')
     Live.select_memory();assert(R.gmem_read(Live.base)==Live.token,'リアルタイム測定の接続が失われました。')
     R.gmem_write(Live.base+1,now)
-    if now>=(Live.checkAt or 0) then Live.check_connection();Live.checkAt=now+.5 end
+    if now>=(Live.checkAt or 0) then
+      if not Live.check_connection() then Live.stop();return end
+      Live.checkAt=now+.5
+    end
     if R.gmem_read(Live.base+8)>0 then
       assert(R.gmem_read(Live.base+9)==Live.protocol,'リアルタイム測定JSFXの通信形式が一致しません。測定をOFFにしました。')
     end
@@ -5720,7 +5733,7 @@ local function ltext(s,x,y,w,c)
   R.JS_LICE_DrawText(draw_bitmap(),A.font,s,#s,floor(x),floor(y),floor(x+w),floor(y+20))
 end
 -- Arrange graph
-local function chart(width,height,first,last,mx)
+local function chart(width,height,first,last)
   R.JS_LICE_Clear(draw_bitmap(),argb(C.bg))
   local top,bottom=48,height-30
   if bottom-top<18 then ltext('LOUDNESS TRACE - increase track height',12,6,width-24,C.ice); return end
@@ -5823,23 +5836,100 @@ local function chart(width,height,first,last,mx)
   for t=math.ceil(first/step)*step,last,step do
     local x=xx(t); if x>115 and x<width-64 then ltext(Core.clock(t),x+3,height-20,85,C.faint) end
   end
+end
+
+local function chart_overlay(width,height,first,last,mx)
+  if height<96 then A.hover=nil;return {} end
+  local bottom=height-30
+  local function xx(t) return Core.time_x(t,first,last,width) end
+  local rects={}
+  local function damage(x1,y1,x2,y2)
+    Core.graph_damage(rects,x1-2,y1-2,x2+2,y2+2,width,height)
+  end
+  local data=A.data
   local cursor=R.GetCursorPositionEx(A.project)
   if (R.GetPlayStateEx(A.project)&1)==1 then cursor=R.GetPlayPositionEx(A.project) end
   local cx=xx(cursor)
-  if cx>=0 and cx<=width then lline(cx,28,cx,height,C.text,.60) end
+  if cx>=0 and cx<=width then lline(cx,28,cx,height,C.text,.60);damage(cx,28,cx,height) end
   A.hover=nil
   if mx and data then
     local t=Core.x_time(mx,first,last,width); local r=Core.row(data,t)
     if r then
       local iv=not (Live.run and t>Live.run.last+1e-8) and r.i or nil
       A.hover={time=t,s=r.s,m=r.m,i=iv,rms=r.rms,peak=r.peak}
-      lline(mx,28,mx,bottom,C.text,.4)
+      lline(mx,28,mx,bottom,C.text,.4);damage(mx,28,mx,bottom)
       local label=Core.clock(t)..'   S '..value(r.s)..'   M '..value(r.m)..'   I RUN '..value(iv)..' LUFS'
       local boxw=min(555,width-16); local bx=Core.clamp(mx+14,8,max(8,width-boxw-8))
-      lrect(bx,29,boxw,19,C.panel); ltext(label,bx+7,29,boxw-12,C.text)
+      lrect(bx,29,boxw,19,C.panel);ltext(label,bx+7,29,boxw-12,C.text);damage(bx,29,bx+boxw,49)
     end
   end
+  return rects
 end
+
+function Core.graph_damage(rects,x1,y1,x2,y2,width,height)
+  x1,y1=max(0,floor(x1)),max(0,floor(y1));x2,y2=min(width,math.ceil(x2)),min(height,math.ceil(y2))
+  if x2<=x1 or y2<=y1 then return end
+  local i=1
+  while i<=#rects do
+    local r=rects[i]
+    local left,top,right,bottom=min(x1,r[1]),min(y1,r[2]),max(x2,r[3]),max(y2,r[4])
+    if x1<=r[3] and x2>=r[1] and y1<=r[4] and y2>=r[2]
+      and (right-left)*(bottom-top)<=(x2-x1)*(y2-y1)+(r[3]-r[1])*(r[4]-r[2]) then
+      x1,y1,x2,y2=left,top,right,bottom;table.remove(rects,i);i=1
+    else i=i+1 end
+  end
+  rects[#rects+1]={x1,y1,x2,y2}
+end
+function Core.graph_clip(api,track,hwnd,width,viewport,y,height,cache)
+  local top,visible=Core.clip_track(y,height,viewport)
+  if visible<1 then return top,0,top-y end
+  local bottom=top+visible
+  local minimum=top
+  local function remember(start)
+    start=max(minimum,start)
+    if cache then cache.top,cache.track=start,track end
+    return start,bottom-start,start-y
+  end
+  local function stable()
+    local start=minimum
+    if cache and cache.track==track then
+      start=max(minimum,min(bottom,cache.top))
+    end
+    return start,bottom-start,start-y
+  end
+  local function sample(row)
+    local function at(x)
+      local sx,sy=api.JS_Window_ClientToScreen(hwnd,x,row)
+      local owner=api.GetTrackFromPoint(sx,sy)
+      if owner==track then return owner end
+      if owner and api.GetMediaTrackInfo_Value(owner,'B_TCPPIN')==1 then
+        local edge=api.GetMediaTrackInfo_Value(owner,'I_TCPY')+max(api.GetMediaTrackInfo_Value(owner,'I_WNDH'),api.GetMediaTrackInfo_Value(owner,'I_TCPH'))
+        minimum=max(minimum,min(bottom,math.ceil(edge)));return owner
+      end
+    end
+    return at(floor(width/2)) or at(1) or at(width-2)
+  end
+  local owner=sample(top)
+  if owner==track then return remember(top) end
+  if not owner then return stable() end
+  owner=sample(bottom-1)
+  if not owner then return stable() end
+  if owner~=track then return remember(bottom) end
+  local start=cache and cache.top
+  if start and start>top and start<bottom then
+    local here,before=sample(start),sample(start-1)
+    if here==track and before and before~=track then return remember(start) end
+  end
+  local lo,hi=top,bottom-1
+  while lo<hi do
+    local mid=(lo+hi)//2;owner=sample(mid)
+    if not owner then return stable() end
+    if owner==track then hi=mid else lo=mid+1 end
+  end
+  return remember(lo)
+end
+
+
 
 function Core.present_graph(hwnd,bitmap,x1,x2,destY,sourceY,height)
   if x2<=x1 or height<=0 then return end
@@ -5863,7 +5953,8 @@ local function overlay(now)
   if R.CountTrackMediaItems(A.track)>0 or R.TrackFX_GetCount(A.track)>0 then
     unlink(); return
   end
-  local hwnd=R.JS_Window_FindChildByID(R.GetMainHwnd(),1000)
+  local main=R.GetMainHwnd()
+  local hwnd=R.JS_Window_FindChildByID(main,1000)
   if not hwnd then unlink(); return end
   if Platform.mac and A.macCheckedArrange~=hwnd then
     if A.macMetalRetryAt and now<A.macMetalRetryAt then return end
@@ -5884,18 +5975,17 @@ local function overlay(now)
   if not ok or width<100 or vh<30 then unlink(); return end
   local y=floor(R.GetMediaTrackInfo_Value(A.track,"I_TCPY"))
   local height=floor(R.GetMediaTrackInfo_Value(A.track,"I_TCPH"))
-  local destY,visible,sourceY=Core.clip_track(y,height,vh)
+  A.graphClip=A.graphClip or {}
+  local destY,visible,sourceY=Core.graph_clip(R,A.track,hwnd,width,vh,y,height,A.graphClip)
   if visible<1 or height<1 or R.GetMediaTrackInfo_Value(A.track,"B_SHOWINTCP")==0 then unlink(); return end
   if width>12000 or height>4000 then unlink(); return end
-  if A.bw~=width or A.bh~=height or not A.bitmap or not A.backBitmap then
+  if A.bw~=width or A.bh~=height or not A.bitmap or not A.backBitmap or not A.baseBitmap then
     dispose_bitmap(); A.arrange=hwnd; configure_composite_delay(hwnd)
     A.bitmap=R.JS_LICE_CreateBitmap(true,width,height)
     A.backBitmap=R.JS_LICE_CreateBitmap(true,width,height)
-    if not A.bitmap or not A.backBitmap then error("描画用ビットマップを作成できません。") end
-    -- The linked front bitmap is never cleared while visible.  All expensive drawing
-    -- happens in the hidden back buffer, then one native blit publishes a complete frame.
+    A.baseBitmap=R.JS_LICE_CreateBitmap(true,width,height)
+    if not A.bitmap or not A.backBitmap or not A.baseBitmap then error("描画用ビットマップを作成できません。") end
     R.JS_LICE_Clear(A.bitmap,argb(C.bg))
-    R.JS_LICE_Clear(A.backBitmap,argb(C.bg))
     A.bw,A.bh=width,height
   end
   local screenX=R.JS_Window_ClientToScreen(hwnd,0,0)
@@ -5905,112 +5995,117 @@ local function overlay(now)
   local clientMouseX,clientMouseY=R.JS_Window_ScreenToClient(hwnd,mouseX,mouseY)
   local hovering=clientMouseX>=0 and clientMouseX<width and clientMouseY>=destY and clientMouseY<destY+visible and R.JS_Window_FromPoint(mouseX,mouseY)==hwnd
   local mx=hovering and floor(clientMouseX) or nil
-  local cursor=R.GetCursorPositionEx(A.project)
-  if (R.GetPlayStateEx(A.project)&1)==1 then cursor=R.GetPlayPositionEx(A.project) end
+  local playing=(R.GetPlayStateEx(A.project)&1)==1
+  local cursor=playing and R.GetPlayPositionEx(A.project) or R.GetCursorPositionEx(A.project)
   local cursorPixel=floor(Core.time_x(cursor,first,last,width))
 
+
+  local damage={}
+  local function dirty(x1,y1,x2,y2)
+    Core.graph_damage(damage,x1,y1,x2,y2,width,height)
+  end
   local pointerInArrange=clientMouseX>=0 and clientMouseX<width and clientMouseY>=0 and clientMouseY<vh and R.JS_Window_FromPoint(mouseX,mouseY)==hwnd
   local arrangeMouseX=pointerInArrange and floor(clientMouseX) or nil
-  local function queue_mouse_repair(x1,x2,delay)
-    if x1==nil or x2==nil then return end
-    if x2<x1 then x1,x2=x2,x1 end
-    local q=A.mouseRepairQueue
-
-    while #q>=128 do table.remove(q,1) end
-    q[#q+1]={due=now+(delay or .030),x1=x1,x2=x2}
+  local previousMouse=A.lastArrangeMouseX
+  local seek=A.graphCursorPixel and math.abs(cursorPixel-A.graphCursorPixel)>32
+  local transport=A.graphTransport
+  local jumped=false
+  if seek and playing and transport and transport.playing then
+    local elapsed=max(0,now-transport.time)
+    local expected=elapsed*R.Master_GetPlayRate(A.project)
+    jumped=math.abs(cursor-transport.position-expected)>max(.05,elapsed*.25)
   end
-  local function extend_mouse_sweep(a,b)
-    if b<a then a,b=b,a end
-    A.mouseSweepMin=A.mouseSweepMin and min(A.mouseSweepMin,a) or a
-    A.mouseSweepMax=A.mouseSweepMax and max(A.mouseSweepMax,b) or b
-    A.lastMouseMoveAt=now
-  end
-  if arrangeMouseX then
-    if A.lastArrangeMouseX~=nil and arrangeMouseX~=A.lastArrangeMouseX then
-      local a=min(A.lastArrangeMouseX,arrangeMouseX)-7
-      local b=max(A.lastArrangeMouseX,arrangeMouseX)+8
-
-      queue_mouse_repair(a,b,.020)
-      queue_mouse_repair(a,b,.075)
-      extend_mouse_sweep(a,b)
+  transport=transport or {};A.graphTransport=transport
+  transport.position,transport.time,transport.playing=cursor,now,playing
+  local down=R.JS_Mouse_GetState and (R.JS_Mouse_GetState(1)&1)~=0
+  local clicked=down and not A.graphMouseDown
+  local activated=false
+  local foreground=R.JS_Window_GetForeground and R.JS_Window_GetForeground()
+  if foreground and foreground~=A.graphForeground then
+    local owner,active=foreground,false
+    for _=1,32 do
+      if owner==main then active=true;break end
+      local parent=R.JS_Window_GetParent and R.JS_Window_GetParent(owner)
+      if not parent or parent==0 or parent==owner then break end
+      owner=parent
     end
-    A.lastArrangeMouseX=arrangeMouseX
-  elseif A.lastArrangeMouseX~=nil then
-    local a=A.lastArrangeMouseX-7; local b=A.lastArrangeMouseX+8
-    queue_mouse_repair(a,b,.025)
-    queue_mouse_repair(a,b,.095)
-    extend_mouse_sweep(a,b)
-    A.lastArrangeMouseX=nil
+    activated=active and A.graphActive==false
+    A.graphForeground,A.graphActive=foreground,active
+  end
+  local rects
+  if activated or jumped or clicked and pointerInArrange then rects={{0,0,width,height}}
+  elseif arrangeMouseX~=previousMouse or arrangeMouseX and clientMouseY~=A.graphMouseY then
+    rects={}
+    local function band(left,right)
+      Core.graph_damage(rects,left-7,0,right+8,height,width,height)
+    end
+    if seek then
+      if previousMouse then band(previousMouse,previousMouse) end
+      if arrangeMouseX then band(arrangeMouseX,arrangeMouseX) end
+    else
+      local from=previousMouse or A.graphMouseX or arrangeMouseX
+      local to=arrangeMouseX or clientMouseX
+      band(min(from,to),max(from,to))
+    end
+  end
+  A.lastArrangeMouseX=arrangeMouseX
+  if rects and #rects>0 then
+    for _,r in ipairs(rects) do dirty(r[1],r[2],r[3],r[4]) end
+    local queue=A.graphRepair or {};A.graphRepair=queue
+    queue[#queue+1]={rects=rects,started=now,at=now+.03}
+  end
+  A.graphMouseX,A.graphMouseY,A.graphMouseDown=clientMouseX,clientMouseY,down
+  local queue=A.graphRepair
+  if queue then
+    for i=#queue,1,-1 do
+      local repair=queue[i]
+      if now>=repair.at then
+        for _,r in ipairs(repair.rects) do dirty(r[1],r[2],r[3],r[4]) end
+        if now>=repair.started+.32 then table.remove(queue,i)
+        else repair.at=repair.started+(now>=repair.started+.12 and .32 or .12) end
+      end
+    end
+    if #queue==0 then A.graphRepair=nil end
   end
 
-  if A.mouseSweepMin and A.lastMouseMoveAt and now-A.lastMouseMoveAt>=.050 then
-    local a=A.mouseSweepMin-4
-    local b=A.mouseSweepMax+4
-
-    queue_mouse_repair(a,b,.005)
-    queue_mouse_repair(a,b,.085)
-    queue_mouse_repair(a,b,.180)
-    queue_mouse_repair(a,b,.320)
-    A.mouseSweepMin=nil; A.mouseSweepMax=nil; A.lastMouseMoveAt=nil
-  end
-
-  local contentKey=table.concat({width,height,first,last,A.revision,tostring(A.stale),mx or -1},":")
-  local key=contentKey..":"..cursorPixel
-  local layout=table.concat({width,height,destY,visible,sourceY},":")
-
-  local redraw=key~=A.cache and (A.cache=="" or now-A.lastPaint>=.05)
-  local cursorOnly=Platform.mac and redraw and A.cache~="" and A.linked and layout==A.layoutCache and A.graphContentKey==contentKey
-  local previousCursor=A.graphCursorPixel
-  local dirtyLeft,dirtyRight
-  local function present(left,right)
-    if right<=left then return end
-    if Platform.mac then
-      dirtyLeft=dirtyLeft and min(dirtyLeft,left) or left;dirtyRight=dirtyRight and max(dirtyRight,right) or right
-    else Core.present_graph(hwnd,A.bitmap,left,right,destY,sourceY,visible) end
-  end
-  if redraw then
-    A.drawBitmap=A.backBitmap
-    chart(width,height,first,last,mx)
-    A.drawBitmap=nil
-    R.JS_LICE_Blit(A.bitmap,0,0,A.backBitmap,0,0,width,height,1,"COPY")
-    A.cache=key;A.lastPaint=now;A.graphContentKey=contentKey;A.graphCursorPixel=cursorPixel
-  end
+  local contentKey=table.concat({width,height,first,last,A.revision,tostring(A.stale)},':')
+  local key=contentKey..':'..(mx or -1)..':'..cursorPixel
+  local layout=table.concat({width,height,destY,visible,sourceY},':')
   local moved=not A.linked or layout~=A.layoutCache
+  local redraw=key~=A.cache and (A.cache=='' or seek or now-A.lastPaint>=.05)
+  if redraw then
+    local rebuild=A.cache=='' or A.graphContentKey~=contentKey
+    if rebuild then
+      A.drawBitmap=A.baseBitmap;chart(width,height,first,last);A.drawBitmap=nil
+    end
+    R.JS_LICE_Blit(A.backBitmap,0,0,A.baseBitmap,0,0,width,height,1,'COPY')
+    A.drawBitmap=A.backBitmap
+    local rects=chart_overlay(width,height,first,last,mx)
+    A.drawBitmap=nil
+    R.JS_LICE_Blit(A.bitmap,0,0,A.backBitmap,0,0,width,height,1,'COPY')
+    if rebuild then dirty(0,0,width,height)
+    else
+      for _,set in ipairs({A.graphRects or {},rects}) do
+        for _,r in ipairs(set) do dirty(r[1],r[2],r[3],r[4]) end
+      end
+    end
+    A.graphRects=rects;A.graphContentKey=contentKey;A.graphCursorPixel=cursorPixel;A.cache=key;A.lastPaint=now
+  end
   if moved then
     local old=A.paintRect
     local code=R.JS_Composite(hwnd,0,destY,width,visible,A.bitmap,0,sourceY,width,visible,false)
-    if code~=1 then error("JS_Composite failed: "..tostring(code)) end
+    if code~=1 then error('JS_Composite failed: '..tostring(code)) end
     A.linked=true;A.layoutCache=layout;A.paintRect={top=destY,bottom=destY+visible,width=width}
-
     if old then
       if old.top<destY then R.JS_Window_InvalidateRect(hwnd,0,old.top,old.width,min(old.bottom,destY),false) end
       if old.bottom>destY+visible then R.JS_Window_InvalidateRect(hwnd,0,max(old.top,destY+visible),old.width,old.bottom,false) end
     end
+    dirty(0,0,width,height)
   end
-  if redraw or moved then
-    if cursorOnly and not moved and previousCursor then
-
-      present(max(0,min(previousCursor,cursorPixel)-3),min(width,max(previousCursor,cursorPixel)+4))
-    else present(0,width) end
+  for _,r in ipairs(damage) do
+    local top,bottom=max(sourceY,r[2]),min(sourceY+visible,r[4])
+    if bottom>top then Core.present_graph(hwnd,A.bitmap,r[1],r[3],destY+top-sourceY,top,bottom-top) end
   end
-
-  if A.linked and A.mouseRepairQueue and #A.mouseRepairQueue>0 then
-    local processed=0
-    local i=1
-    while i<=#A.mouseRepairQueue and processed<24 do
-      local r=A.mouseRepairQueue[i]
-      if r.due<=now then
-        table.remove(A.mouseRepairQueue,i)
-        local x1=max(0,floor(r.x1)); local x2=min(width,math.ceil(r.x2))
-        if x2>x1 then present(x1,x2) end
-        processed=processed+1
-      else
-        i=i+1
-      end
-    end
-  end
-
-  if dirtyLeft then Core.present_graph(hwnd,A.bitmap,dirtyLeft,dirtyRight,destY,sourceY,visible) end
 end
 
 
@@ -6111,6 +6206,11 @@ end
 local function step_job()
   local job=A.job
   if not job then return end
+  if R.EnumProjects(-1,'')~=job.project then cancel_job(false);return end
+  if not job.renderState then
+    local first,last=R.GetSet_LoopTimeRange2(job.project,false,false,0,0,false)
+    if math.abs(first-job.first)>1e-9 or math.abs(last-job.last)>1e-9 then cancel_job();return end
+  end
   if job.phase=='prepare' and not Media.ready() then return end
   local ok,err=coroutine.resume(job.co)
   if not ok then

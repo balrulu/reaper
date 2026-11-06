@@ -1,5 +1,5 @@
 -- @description TRACK TREE
--- @version 0.3.21
+-- @version 0.3.23
 -- @author Balrulu
 -- @provides
 --   . > ../
@@ -2935,7 +2935,7 @@ function Core.pastenames(api,text,ids)
 end
 function Core.move(api,tree,selected,target,mode)
  local live=Core.snapshot(api)
- assert(live.project==tree.project and live.signature==tree.signature,'トラック構造が変更されました。もう一度ドラッグしてください。')
+ if live.project~=tree.project or live.signature~=tree.signature then return end
  local result=Core.plan(live,selected,target,mode);local changed=false
  for i,r in ipairs(result)do if r.id~=live.rows[i].id or r.delta~=live.rows[i].delta then changed=true;break end end
  if not changed then return end
@@ -2955,7 +2955,7 @@ function Core.move(api,tree,selected,target,mode)
  end)
 end
 function Core.visibility(api,tree,ids,on)
- local live=Core.snapshot(api);assert(live.project==tree.project,'プロジェクトが切り替わりました。')
+ local live=Core.snapshot(api);if live.project~=tree.project then return end
  if not ids then
   ids={};if live.master.shown~=on or live.master.mixer~=on then ids[live.master.id]=true end
   for _,r in ipairs(live.rows)do if r.shown~=on or r.mixer~=on then ids[r.id]=true end end
@@ -2972,7 +2972,7 @@ function Core.visibility(api,tree,ids,on)
  end)
 end
 function Core.pin(api,tree,ids,on)
- local live=Core.snapshot(api);assert(live.project==tree.project,'プロジェクトが切り替わりました。')
+ local live=Core.snapshot(api);if live.project~=tree.project then return end
  local targets={};if ids[live.master.id]and live.master.pinned~=on then targets[1]=live.master end
  for _,r in ipairs(live.rows)do if ids[r.id]and r.pinned~=on then targets[#targets+1]=r end end
  if #targets==0 then return end
@@ -2981,7 +2981,7 @@ function Core.pin(api,tree,ids,on)
  end)
 end
 function Core.reveal(api,tree,id)
- local live=Core.snapshot(api);assert(live.project==tree.project,'プロジェクトが切り替わりました。')
+ local live=Core.snapshot(api);if live.project~=tree.project then return end
  local row=live.by[id];if not row then return end
  local changes={};local node=row
  while node do
@@ -4205,7 +4205,7 @@ local function search_match(row,q)
  A.matches[row.id]=found;return found
 end
 local function update_view(relink,reuse)
- if not A.tree then return end
+ if not A.tree or R.EnumProjects(-1,'')~=A.tree.project then A.nextCheck=0;A.dirty=true;return end
  A.viewPending=true;A.viewRetry=R.time_precise()+.25
  if not reuse then A.rows=Core.visible(A.tree,A.closed,A.query,search_match,S.related)end
  if relink then A.manualVisibility=nil end
@@ -4235,10 +4235,9 @@ local function sync_selection(project)
  return true
 end
 local function refresh(force)
- local now=R.time_precise()
- if not force and now<(A.nextCheck or 0)then return end
+ local now=R.time_precise();local project=R.EnumProjects(-1,'')
+ if not force and now<(A.nextCheck or 0) and A.tree and A.tree.project==project then return end
  A.nextCheck=now+.025
- local project=R.EnumProjects(-1,'')
  if A.linkState and A.linkState.project~=project then Core.restoreview(R,A.linkState);A.linkState=nil end
  local revision=R.GetProjectStateChangeCount(project)
  if not force and A.tree and A.tree.project==project and A.revision==revision

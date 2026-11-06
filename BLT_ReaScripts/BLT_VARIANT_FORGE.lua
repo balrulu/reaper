@@ -1,5 +1,5 @@
 -- @description VARIANT FORGE
--- @version 0.6.13
+-- @version 0.6.15
 -- @author Balrulu
 -- @provides
 --   . > ../
@@ -4262,7 +4262,7 @@ end
 return B
 end)()
 
-local Core={VERSION='0.6.13',SOURCE_SR=48000,SOURCE_HOP=48,SOURCE_BLOCK=12000,SOURCE_PREVIEW_BINS=1400,SOURCE_MAX_REGIONS=16384,
+local Core={VERSION='0.6.15',SOURCE_SR=48000,SOURCE_HOP=48,SOURCE_BLOCK=12000,SOURCE_PREVIEW_BINS=1400,SOURCE_MAX_REGIONS=16384,
  GENERATED_TAG='P_EXT:BLT_VARIANT_FORGE',TEMP_TAG='P_EXT:BLT_VARIANT_FORGE_TEMP',SECTION='BLT_VARIANT_FORGE',EQ_FIXED_CACHE={}}
 Core.STALE_TEMP_PROJECTS={};Core.RUN_ID='';Core.TEMP_HEARTBEAT_TTL=8;Core.TEMP_HEARTBEAT_KEY='temp_live_registry_v1';Core.temp_heartbeat_at=0
 local abs,min,max,floor,ceil=math.abs,math.min,math.max,math.floor,math.ceil
@@ -4580,7 +4580,7 @@ function Core.source_cleanup(j)
  if not j then return end
  local cleaned=not j.cleanup_failed
  if j.accessor then pcall(R.DestroyAudioAccessor,j.accessor);j.accessor=nil end
- if j.temp_item and j.project and R.ValidatePtr2(j.project,j.temp_item,'MediaItem*') then
+ if j.temp_item and j.project and Core.project_is_open(j.project) and R.ValidatePtr2(j.project,j.temp_item,'MediaItem*') then
   R.PreventUIRefresh(1);local ok,result=pcall(R.DeleteTrackMediaItem,j.track,j.temp_item);R.PreventUIRefresh(-1);R.UpdateArrange()
   if not ok or not result then cleaned=false end
  end
@@ -4676,12 +4676,13 @@ function Core.source_scan_start(project,v)
   if not ok then error(why,0)end
  end)
 end
+Core.context_changed={}
 function Core.source_scan_step(j)
  if not j or not j.accessor then return true end
- if R.EnumProjects(-1,'')~=j.project then Core.source_cleanup(j);error('解析中にプロジェクトが切り替わりました。',0) end
- if not R.ValidatePtr2(j.project,j.info.item,'MediaItem*') then Core.source_cleanup(j);error('解析中に元アイテムが削除されました。',0) end
- if R.GetProjectStateChangeCount(j.project)~=j.revision then Core.source_cleanup(j);error('解析中にプロジェクトが変更されました。',0) end
- if R.AudioAccessorStateChanged(j.accessor) then Core.source_cleanup(j);error('解析中に音声が変更されました。',0) end
+ if R.EnumProjects(-1,'')~=j.project then Core.source_cleanup(j);error(Core.context_changed,0) end
+ if not R.ValidatePtr2(j.project,j.info.item,'MediaItem*') then Core.source_cleanup(j);error(Core.context_changed,0) end
+ if R.GetProjectStateChangeCount(j.project)~=j.revision then Core.source_cleanup(j);error(Core.context_changed,0) end
+ if R.AudioAccessorStateChanged(j.accessor) then Core.source_cleanup(j);error(Core.context_changed,0) end
  local count=min(Core.SOURCE_BLOCK,j.total-j.offset);if count<=0 then return true end
  j.buffer.clear();local rc=R.GetAudioAccessorSamples(j.accessor,Core.SOURCE_SR,j.info.analysis_channels,j.offset/Core.SOURCE_SR,count,j.buffer)
  if type(rc)~='number' or (rc~=0 and rc~=1) then Core.source_cleanup(j);error('素材全体の音声取得に失敗しました。',0) end
@@ -4723,7 +4724,7 @@ function Core.source_scan_step(j)
  j.offset=j.offset+count
  if j.offset>=j.total then
   if j.file_stamp and Core.source_file_stamp(j.info.file)~=j.file_stamp then
-   Core.source_cleanup(j);error('解析中に音声が変更されました。',0)
+   Core.source_cleanup(j);error(Core.context_changed,0)
   end
   if j.bin_samples>0 then source_finish_bin(j) end
   if j.opened then source_finish_region(j,j.opened,j.info.source_len,j.anchor);j.opened=nil end
@@ -7140,7 +7141,7 @@ end
 function UI.target_lock_valid(project)
  local lock=A.target_lock;if not lock then return true end
  project=project or R.EnumProjects(-1,'')
- if project~=lock.project then return false end
+ if project~=lock.project or R.EnumProjects(-1,'')~=project then return false end
  local revision=R.GetProjectStateChangeCount(project)
  if lock.revision==revision then return true end
  for _,item in ipairs(lock.refs or {}) do
@@ -7734,6 +7735,10 @@ end
 function UI.step_generation()
  if not Media.ready()then return end
  local j=A.job;if not j then return end
+ if not j.committing and not Core.generation_targets_valid(j.snapshot) then
+  j.cancelled=true;j.context_changed=true
+  if not j.running then A.job=nil;A.progress=0;UI.refresh();return end
+ end
  if not j.thread then
   j.running=true
   j.thread=coroutine.create(function()
@@ -7751,7 +7756,7 @@ function UI.finish_generation(j)
  local groups,err=Core.plan(j.snapshot.items,j.settings,j.apply,Core.occupancy(j.snapshot.project,j.snapshot.items))
  if not groups then A.job=nil;A.progress=0;UI.refresh();UI.notice(err,true);return nil end
  UI.generation_input(j)
- if j.cancelled then A.job=nil;A.progress=0;UI.notice('生成を中止しました。');return nil end
+ if j.cancelled then A.job=nil;A.progress=0;if not j.context_changed then UI.notice('生成を中止しました。') end;UI.refresh();return nil end
  j.committing=true
  local count,created_or_err,free_before,original_before,cleanup_failed,rollback_ok=Core.apply(j.snapshot,groups,j.settings,function(progress)
   A.progress=progress
@@ -7761,12 +7766,13 @@ function UI.finish_generation(j)
   if j.cancelled then return false,'生成を中止しました。' end
   if R.EnumProjects(-1,'')~=j.snapshot.project or
    (R.GetProjectStateChangeCount(j.snapshot.project)~=revision and not Core.generation_targets_valid(j.snapshot)) then
+   j.cancelled=true;j.context_changed=true
    return false,'生成対象が変更されたため中止しました。'
   end
   return true
  end,j.restore_selection)
  j.committing=nil
- if not count then UI.queue_bake_deletes(cleanup_failed,j.snapshot.project);A.job=nil;A.progress=0;UI.refresh();UI.notice(j.cancelled and rollback_ok and '生成を中止し、今回のコピーを削除しました。' or created_or_err,not (j.cancelled and rollback_ok));return nil end
+ if not count then UI.queue_bake_deletes(cleanup_failed,j.snapshot.project);A.job=nil;A.progress=0;UI.refresh();if not j.context_changed or not rollback_ok then UI.notice(j.cancelled and rollback_ok and '生成を中止し、今回のコピーを削除しました。' or created_or_err,not (j.cancelled and rollback_ok)) end;return nil end
  A.job=nil;A.progress=0;local refs={};for _,v in ipairs(j.snapshot.items) do refs[#refs+1]=v.item end;A.last_created={project=j.snapshot.project,items=created_or_err or {},count=count,seed=j.settings.seed,source_refs=refs,free_before=free_before or {},original_before=original_before or {},undo_desc='BLT Variant Forge: '..#groups..' variations'}
  UI.watch_folder_undo(j.snapshot.project)
  UI.target_lock_rebase()
@@ -7995,10 +8001,10 @@ function UI.work_step()
   if not A.source_queue_done then UI.source_queue_start_next() end
   if A.source_queue_done and A.source_execute_pending then
    local pending=A.source_execute_pending;A.source_execute_pending=nil
-   local target_changed=pending.target_locked and (not A.target_lock or not UI.target_lock_valid(pending.project))
+   local target_changed=R.EnumProjects(-1,'')~=pending.project or pending.target_locked and (not A.target_lock or not UI.target_lock_valid(pending.project))
     or (not pending.target_locked and Core.selection_signature(pending.project)~=pending.selection_signature)
    if R.EnumProjects(-1,'')~=pending.project or target_changed then
-    UI.restore_item_selection(pending.project,pending.restore_selection,true);UI.refresh();UI.notice('素材の再解析中に対象またはプロジェクトが変わったため、実行を中止しました。',true);return
+    UI.restore_item_selection(pending.project,pending.restore_selection,false);UI.refresh();return
    end
    for guid in pairs(pending.requested or {}) do
     local v=A.item_by_guid[guid]
@@ -8017,8 +8023,7 @@ function UI.work_step()
   local ok,done,result=pcall(Core.source_scan_step,j)
   if not ok then
    local key=j.info and (j.info.source_key or Core.source_cache_key(j.info));local message=tostring(done):match('^[^\n]+') or tostring(done);Core.source_cleanup(j);if j.cleanup_failed and j.project then A.stale_temp_projects[j.project]=true end;A.source_job=nil
-   A.revision=R.GetProjectStateChangeCount(A.project)
-   if message:find('解析中にプロジェクトが変更',1,true) or message:find('解析中にプロジェクトが切り替わり',1,true) or message:find('解析中に元アイテムが削除',1,true) or message:find('解析中に音声が変更',1,true) then
+   if done==Core.context_changed then
     local restore=A.source_execute_pending and A.source_execute_pending.restore_selection
     A.source_execute_pending=nil;A.source_queue={};A.source_queue_i=1;UI.restore_item_selection(A.project,restore,true);UI.refresh();return
    end

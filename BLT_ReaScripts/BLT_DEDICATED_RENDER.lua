@@ -1,5 +1,5 @@
 -- @description BLT DEDICATED RENDER
--- @version 0.14.22
+-- @version 0.14.24
 -- @author Balrulu
 -- @provides
 --   . > ../
@@ -2294,7 +2294,7 @@ function Embed.write_aiff(path,plan,source)
  if not ok then if exists(temp)then os.remove(temp)end;error(err,0)end
 end
 
-local Model={VERSION='0.14.22',SOURCE_MASK=1|2|8|32|64|128|4096}
+local Model={VERSION='0.14.24',SOURCE_MASK=1|2|8|32|64|128|4096}
 Model.numbers={'RENDER_SETTINGS','RENDER_BOUNDSFLAG','RENDER_CHANNELS','RENDER_SRATE','RENDER_STARTPOS','RENDER_ENDPOS','RENDER_TAILFLAG','RENDER_TAILMS','RENDER_ADDTOPROJ','RENDER_DITHER','RENDER_NORMALIZE','RENDER_NORMALIZE_TARGET','RENDER_BRICKWALL','RENDER_FADEIN','RENDER_FADEOUT','RENDER_FADEINSHAPE','RENDER_FADEOUTSHAPE','RENDER_FADELPF','RENDER_PADSTART','RENDER_PADEND','RENDER_TRIMSTART','RENDER_TRIMEND','RENDER_DELAY'}
 Model.strings={'RENDER_FILE','RENDER_PATTERN','RENDER_EXTRAFILEDIR','RENDER_FORMAT2','RENDER_FORMAT'}
 Model.configs={'projrenderlimit','projrenderspeedcap','projrenderresample','projrenderrateinternal','renderclosewhendone','renderpeaks','projrenderqdelay','renderbsnew'}
@@ -5271,6 +5271,8 @@ local function clamp(v,a,b)return max(a,min(b,v))end
 local function finite(v)return type(v)=='number' and v==v and math.abs(v)<math.huge end
 local A={pressed=nil,tab=1,status='REAPERの現在のレンダー設定',bad=false,files={},busy=false}
 local m,sessionView,sessionWarning=Session.start(R)
+local projectStates={}
+local projectIdentity=R.GetProjectGUID and R.GetProjectGUID(m.project)or m.project
 if sessionView then
  for k,limit in pairs({tab=6,detailTab=3,channelTab=2,formatTab=2})do local v=sessionView[k];if type(v)=='number'and v%1==0 and v>=1 and v<=limit then A[k]=v end end
  A.status='前回の状態を復元しました。'
@@ -6287,7 +6289,7 @@ end)().new(ItemLabelNative,Model.ITEM_CHANNEL_KEY,function(message)
  if message=='METAL_MODE_1'then message=Language.code=='EN'and'The current Metal mode cannot display item labels (same restriction as LOUDNESS TRACE).'or'現在のMetal設定ではChを重ね描画できません（LOUDNESS TRACEと同じ制限）。'end
  status('Ch label: '..message,true)
 end)
-local function guarded(fn)local ok,e=xpcall(fn,tostring);if not ok then RenderGraphics.abort();status(BLT.publicError(e),true);Language.mb(e,APP_NAME,0)end end
+local function guarded(fn)local ok,e=xpcall(function()if not(A.follow_project and A.follow_project())then fn()end end,tostring);if not ok then RenderGraphics.abort();status(BLT.publicError(e),true);Language.mb(e,APP_NAME,0)end end
 local function changed(keepTargets)
  BLT.invalidate()
  local now=R.time_precise();A.sessionDue=now+.5
@@ -6338,7 +6340,9 @@ local function choose(title,options,current,setter)
   emit(rows)
  else emit(options)end
  gfx.x,gfx.y=gfx.mouse_x,gfx.mouse_y
+ local model=m
  gfx.openMenu(table.concat(parts,'|'),function(i)
+  if m~=model then return end
   local leaf=leaves[i];if leaf and leaf[2]and setter(leaf[1])~=false then changed()end
  end)
 end
@@ -7167,7 +7171,7 @@ local function poll_count(now)
   local targetsChanged=A.tab==6 and(A.targetsDirty or A.targetsRevision==nil or revision~=A.targetsRevision)
   if not A.countAt or revision~=A.countRevision or targetsChanged then
    local before,err=A.fileCount,A.countError
-   local oldGroups=A.channelCounts;local ok,count,groups=pcall(Model.count,R,m);A.fileCount=ok and count or nil;A.channelCounts=ok and groups or nil;A.countError=ok and nil or tostring(count)
+   local oldGroups=A.channelCounts;local ok,count,groups=pcall(Model.count,R,m);A.fileCount=ok and count or nil;A.channelCounts=ok and groups or nil;A.countError=not ok and tostring(count)or nil
    if ok and groups and(not oldGroups or oldGroups.mono~=groups.mono or oldGroups.stereo~=groups.stereo or oldGroups.multi~=groups.multi)then redraw_dirty=true end
    if A.fileCount~=before or A.countError~=err then redraw_dirty=true end
    if targetsChanged and not A.targetList.drag then A.refresh_targets()end
@@ -7184,6 +7188,9 @@ local function visual_step(now,active,dragging)
  if RenderIcon:animating(now) or RenderUI:executeAnimating('render') then return 1/30 end
 end
 function A.run_render(approval)
+ if A.follow_project() then return end
+ local counted,count=pcall(Model.count,R,m)
+ if counted and count==0 then A.renderConfirm=nil;A.fileCount=0;status('待機中');return end
  A.renderConfirm=nil;A.busy=true;status('レンダリング中…');gfx.update()
  local ok,result,done=xpcall(function()return Model.render(R,m,'render',approval)end,tostring);A.busy=false;BLT.invalidate()
  if not ok then error(result,0)end
@@ -7279,6 +7286,39 @@ BLT.attach({menuState=A,menuError=function(why)guarded(function()error(why,0)end
  busy=function()return A.busy end,commit=function()return finish_edit(false)end,cancelEdit=function()finish_edit(true)end,editing=function()return E~=nil end,modal=function()return A.renderConfirm~=nil end,
  tooltip=A.detail_tip,
  handle=gfx_window_handle,resizeHit=chrome_resize_hit,cursor=set_resize_cursor,beginResize=begin_window_resize,resize=update_window_resize})
+function A.follow_project()
+ if A.busy then return false end
+ local project=R.EnumProjects(-1,'')
+ if not project then return false end
+ local identity=R.GetProjectGUID and R.GetProjectGUID(project)or project
+ if project==m.project and identity==projectIdentity then return false end
+ finish_edit(false);finish_edit(true)
+ local presets=BLT.presets
+ projectStates[m.project]={model=m,identity=projectIdentity,preset=presets.current,baseline=presets.baseline}
+ local live={};local i=0
+ while true do
+  local p=R.EnumProjects(i,'');if not p then break end
+  live[p]=R.GetProjectGUID and R.GetProjectGUID(p)or p;i=i+1
+ end
+ for p,saved in pairs(projectStates)do if live[p]~=saved.identity then projectStates[p]=nil end end
+ local saved=projectStates[project]
+ local nextModel=saved and saved.model or Model.load(R)
+ if not saved then
+  for _,key in ipairs(Model.appkeys)do if m.state[key]~=nil then nextModel.state[key]=Model.clone(m.state[key])end end
+ end
+ m=nextModel;projectIdentity=identity
+ presets.dismiss();presets.setCurrent(saved and saved.preset,saved and saved.baseline)
+ A.renderConfirm=nil;A.pressed=nil;A.numericDrag=nil;A.editBounds=nil
+ widgets={};last_down=(gfx.mouse_cap&1)~=0
+ A.files={};A.fileCount=nil;A.channelCounts=nil;A.countError=nil
+ A.targetsError=nil;A.targetsRevision=nil;A.countRevision=nil
+ A.countAt=nil;A.countDue=0;A.targetsDirty=true
+ A.targetList.drag=nil;A.targetList.scroll=0
+ BLT.invalidate();status('待機中')
+ A.sessionDue=R.time_precise()+.5;next_draw_time=0
+ return true
+end
+
 function A.save_session()
  if Session.save(R,m,{tab=A.tab,detailTab=A.detailTab or 1,channelTab=A.channelTab or 1,formatTab=A.formatTab or 1})then A.sessionDue=nil end
 end
@@ -7462,6 +7502,7 @@ local xx=tonumber(R.GetExtState(SECTION,'window_x'));local yy=tonumber(R.GetExtS
 if xx and yy then gfx.init(APP_NAME,ww,hh,0,xx,yy)else gfx.init(APP_NAME,ww,hh,0)end
 R.atexit(close);if Chameleon.enabled then Chameleon.refresh(true)end
 local function loop()
+ A.follow_project()
  local k=BLT.key(gfx.getchar())
  if k==27 and A.renderConfirm then A.renderConfirm=nil;status('待機中');k=0 end
  if k<0 or(k==27 and not E)or Chrome.requestClose then close();return end
@@ -7477,8 +7518,6 @@ local function loop()
   if insideWindow or wasInside then wake_visuals(now)end
  end
  if Chrome.requestReset then Chrome.requestReset=false;reset_window_size()end
- local mismatch=R.EnumProjects(-1,'')~=m.project
- if mismatch and not A.projectMismatch then status('別プロジェクトです。REAPER設定を読込してください。',true)end;A.projectMismatch=mismatch
  poll_count(now)
  local dragging=(gfx.mouse_cap&1)~=0 or Chrome.drag or Chrome.resize
  if dragging then wake_visuals(now)end

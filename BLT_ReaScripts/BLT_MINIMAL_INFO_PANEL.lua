@@ -1,5 +1,5 @@
 -- @description MINIMAL INFO PANEL
--- @version 0.2.37
+-- @version 0.2.40
 -- @author Balrulu
 -- @provides
 --   . > ../
@@ -2993,17 +2993,17 @@ function Core.same_selection(s)
 end
 function Core.check(s,key)
  local nameEdit=key=='name'and s.edit_name
- if R.EnumProjects(-1,'')~=s.project or not nameEdit and R.GetProjectStateChangeCount(s.project)~=s.revision then return false,'編集中に対象が変更されました。もう一度操作してください。' end
- if not nameEdit and R.CountSelectedMediaItems(s.project)~=#s.rows then return false,'選択が変更されました。もう一度操作してください。' end
+ if R.EnumProjects(-1,'')~=s.project or not nameEdit and R.GetProjectStateChangeCount(s.project)~=s.revision then return false,'編集中に対象が変更されました。もう一度操作してください。',true end
+ if not nameEdit and R.CountSelectedMediaItems(s.project)~=#s.rows then return false,'選択が変更されました。もう一度操作してください。',true end
  for _,v in ipairs(s.rows) do
   if not Core.valid(s.project,v.item,'MediaItem*') or not nameEdit and not R.IsMediaItemSelected(v.item)
-   or R.GetActiveTake(v.item)~=v.take or (v.take and not Core.valid(s.project,v.take,'MediaItem_Take*')) then return false,'対象アイテムが変更または削除されました。' end
+   or R.GetActiveTake(v.item)~=v.take or (v.take and not Core.valid(s.project,v.take,'MediaItem_Take*')) then return false,'対象アイテムが変更または削除されました。',true end
   if nameEdit then
    local _,itemGuid=R.GetSetMediaItemInfo_String(v.item,'GUID','',false)
    local takeGuid;if v.take then _,takeGuid=R.GetSetMediaItemTakeInfo_String(v.take,'GUID','',false)end
    if itemGuid~=v.edit_item_guid or takeGuid~=v.edit_take_guid or R.GetMediaItemTrack(v.item)~=v.trackPtr
-    or v.take and (R.GetTakeName(v.take)or'')~=v.name then return false,'対象アイテムが変更または削除されました。'end
-   if (floor(R.GetMediaItemInfo_Value(v.item,'C_LOCK')or 0)&1)~=0 then return false,'ロックされたアイテムがあります。先にロックを解除してください。'end
+    or v.take and (R.GetTakeName(v.take)or'')~=v.name then return false,'対象アイテムが変更または削除されました。',true end
+   if (floor(R.GetMediaItemInfo_Value(v.item,'C_LOCK')or 0)&1)~=0 then return false,'ロックされたアイテムがあります。先にロックを解除してください。',not v.lock end
   end
  end
  return true
@@ -3158,7 +3158,7 @@ function Core.commit(s,key,changes,defer_undo)
  return #changes
 end
 function Core.apply(s,key,value,absolute,defer_undo,rename)
- local ok,err=Core.check(s,key);if not ok then return nil,err end
+ local ok,err,stale=Core.check(s,key);if not ok then return nil,err,stale end
  local changes;changes,err=Core.plan(s,key,value,absolute,rename);if not changes then return nil,err end
  return Core.commit(s,key,changes,defer_undo)
 end
@@ -4028,8 +4028,16 @@ end
 
 local function poll(force)
  local now=R.time_precise();local project=R.EnumProjects(-1,'')
- PeakZoom.poll(force,project,now)
- if not force and (now<A.nextPoll or E or gesture) then return end
+ local switched=A.project~=nil and project~=A.project
+ if switched then
+  WheelUndo.finish()
+  if gesture and gesture.live then WheelUndo.commit(gesture.live)end
+  E=nil;gesture=nil;IME.active=false;IME.ctx=nil;IME.font=nil;IME.inputPending=nil
+  A.message='';A.bad=false;A.rightLast=false;downLast=(gfx.mouse_cap&1)~=0
+  for key in pairs(A.flash)do A.flash[key]=nil end
+ end
+ PeakZoom.poll(force or switched,project,now)
+ if not force and not switched and (now<A.nextPoll or E or gesture) then return end
  A.nextPoll=now+.15
  local rev=R.GetProjectStateChangeCount(project)
  local count=R.CountSelectedMediaItems(project);local ids=A.selection
@@ -4061,13 +4069,15 @@ local function fail(key,message)
  flash_field(key);status(message,true)
 end
 local function apply_value(snapshot,key,value,absolute)
+ if R.EnumProjects(-1,'')~=snapshot.project then poll(true);return false end
  local revision=R.GetProjectStateChangeCount(snapshot.project)
  WheelUndo.finish()
  if snapshot.revision==revision then snapshot.revision=R.GetProjectStateChangeCount(snapshot.project) end
  if key=='reverse' and not Media.ready(true) then fail(key,'音声がオンラインになるまでお待ちください。');return false end
  local currentDisplay=key=='name'and revision==snapshot.revision and A.project==snapshot.project and A.revision==snapshot.revision
   and A.count==#snapshot.rows and A.items[1]and A.items[1].item==snapshot.rows[1].item and Core.same_selection(snapshot)
- local n,err=Core.apply(snapshot,key,value,absolute,false,Rename)
+ local n,err,stale=Core.apply(snapshot,key,value,absolute,false,Rename)
+ if stale then poll(true);return true end
  if not n then fail(key,err);if key=='name'and not Core.same_selection(snapshot)then poll(true)end;return false end
  -- A name change leaves source/flag/numeric display values intact. Stale
  -- displays still use the normal full refresh instead of reusing old values.
@@ -4106,6 +4116,10 @@ local function preview_length(g,absolute)
 end
 local function finish_gesture(cancel)
  local g=gesture;if not g then return end
+ if g.snapshot and not Core.check(g.snapshot,g.key) then
+  if g.live then WheelUndo.commit(g.live)end
+  gesture=nil;poll(true);return
+ end
  if g.live then
   if cancel then
    g.value=g.start
@@ -4121,8 +4135,10 @@ end
 local function finish_edit(cancel,absolute,confirmed)
  if not E then return true end
  local e=E;E=nil;IME.active=false;IME.ctx=nil;IME.font=nil
+ local switched=R.EnumProjects(-1,'')~=e.snapshot.project
+ cancel=cancel or switched
  if cancel or(e.key=='name'and not confirmed and e.text==e.snapshot.rows[1].name)then
-  if e.key=='name'and not Core.same_selection(e.snapshot)then poll(true)end
+  if switched or e.key=='name'and not Core.same_selection(e.snapshot)then poll(true)end
   wake_visuals();return true
  end
  local value,err
@@ -4140,7 +4156,7 @@ local function value_bounds(f) return f.x+7,row_y()+13,f.w-14,26 end
 local function open_edit(f)
  WheelUndo.finish()
  local snapshot=Core.snapshot(f.key);local first=snapshot.rows[1]
- if not first or first[f.key]==nil then fail(f.key,'この項目は選択アイテムでは編集できません。');return end
+ if not first or first[f.key]==nil then poll(true);return end
  if f.key=='name'then
   snapshot.edit_name=true
   for _,v in ipairs(snapshot.rows)do
@@ -4664,6 +4680,19 @@ local function recover_input(err)
 end
 local function overlay_frame()
  if gfx.w<1 or gfx.h<1 then return end
+ if (E or gesture)and R.EnumProjects(-1,'')~=A.project then poll(true)end
+ local input=E or gesture
+ if input and input.snapshot then
+  local revision=R.GetProjectStateChangeCount(input.snapshot.project)
+  if revision~=(input.checked_revision or input.snapshot.revision) then
+   input.checked_revision=revision
+   local ok,_,stale=Core.check(input.snapshot,input.key)
+   if not ok and stale then
+    if E then finish_edit(true) else finish_gesture(false) end
+    poll(true)
+   end
+  end
+ end
  ime_frame()
  if not IME.inputPending then return end
  IME.inputPending=nil;interact()

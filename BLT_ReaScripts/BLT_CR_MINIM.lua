@@ -1,5 +1,5 @@
 -- @description CR MINIM
--- @version 0.6.13
+-- @version 0.6.14
 -- @author Balrulu
 -- @provides
 --   . > ../
@@ -4293,8 +4293,9 @@ function Core.placement(p,length)
  for _,v in ipairs(occupied) do if v[1]<at+length+1-1e-9 and v[1]+v[2]+1>at+1e-9 then at=v[1]+v[2]+1 end end
  return track,at
 end
+Core.context_changed={}
 function Core.validate_target(p)
- assert(R.EnumProjects(-1,'')==p.project and R.ValidatePtr2(p.project,p.item,'MediaItem*'),'生成元のプロジェクトまたはアイテムが利用できません。')
+ assert(R.EnumProjects(-1,'')==p.project and R.ValidatePtr2(p.project,p.item,'MediaItem*'),Core.context_changed)
  assert(R.GetMediaItemTrack(p.item)==p.track and R.GetActiveTake(p.item)==p.take
   and abs(R.GetMediaItemInfo_Value(p.item,'D_POSITION')-p.pos)<1e-9
   and abs(R.GetMediaItemInfo_Value(p.item,'D_LENGTH')-p.duration)<1e-9
@@ -4304,7 +4305,7 @@ function Core.validate_target(p)
   and abs(R.GetMediaItemTakeInfo_Value(p.take,'D_PITCH'))<1e-9
   and R.GetTakeNumStretchMarkers(p.take)==0
   and R.GetMediaItemTakeInfo_Value(p.take,'I_CHANMODE')==0,
-  '生成元のアイテム自体が編集されたため中止しました。')
+  Core.context_changed)
 end
 function Core.commit(j)
  local p=j.source
@@ -4385,7 +4386,12 @@ function UI.refresh()
 end
 function UI.safe(fn)
  local ok,err=xpcall(fn,debug.traceback)
- if not ok then if BLT.cleanup(Core.abort,A.job) then A.job=nil end;A.busy=false;BLT.cleanup(UI.wave_close);notice(tostring(err):match('^(.-)\nstack traceback:') or tostring(err),true);UI.release_capture();UI.commit_edit() end
+ if not ok then
+  if BLT.cleanup(Core.abort,A.job) then A.job=nil end
+  A.busy=false;BLT.cleanup(UI.wave_close);UI.release_capture();UI.commit_edit()
+  if err==Core.context_changed then A.status='';A.warning=false;UI.poll(R.time_precise(),true)
+  else notice(tostring(err):match('^(.-)\nstack traceback:') or tostring(err),true) end
+ end
  return ok
 end
 function UI.poll(now,force)
@@ -4434,7 +4440,7 @@ function UI.execute()
  if A.busy then UI.cancel();return end
  if A.retrigger_on==false and A.tail_on==false then return end
  if not UI.commit_edit() then return end
- UI.poll(R.time_precise(),true);assert(A.source,A.source_problem);assert(A.plan,A.problem)
+ UI.poll(R.time_precise(),true);if not A.source then return end;assert(A.plan,A.problem)
  local dir=blt_output_directory(A.project)
  local id=R.genGuid():gsub('[^%w]','');local target=dir..'/CR_MINIM_'..id..'.wav'
  local s={};for k in pairs(Core.defaults) do s[k]=A[k] end

@@ -1,5 +1,5 @@
 -- @description ENVELOPE CANVAS ITEM
--- @version 0.7.13
+-- @version 0.7.17
 -- @author Balrulu
 -- @provides
 --   . > ../
@@ -4597,7 +4597,7 @@ function B.cleanup(fn,...)
  return ok,result
 end
 end
-local Core={VERSION='0.7.13',SECTION='BLT_ENVELOPE_CANVAS_ITEM',MAX_POINTS=1024}
+local Core={VERSION='0.7.17',SECTION='BLT_ENVELOPE_CANVAS_ITEM',MAX_POINTS=1024}
 local min,max,abs,floor,ceil=math.min,math.max,math.abs,math.floor,math.ceil
 local function clamp(v,a,b) return max(a,min(b,v)) end
 local function finite(v) return type(v)=='number' and v==v and abs(v)<math.huge end
@@ -4836,73 +4836,162 @@ end
 function Core.knots(layers,keys)
  local xs={0,1}
  for _,key in ipairs(keys) do local c=layers[key]
-  if c.enabled then for _,p in ipairs(c.points) do xs[#xs+1]=p.x end end
+  if c.enabled then
+   while c.link_source do c=c.link_source end
+   for _,p in ipairs(c.points) do xs[#xs+1]=p.x end
+  end
  end
  table.sort(xs);local out={}
  for _,x in ipairs(xs) do if #out==0 or x-out[#out]>1e-10 then out[#out+1]=x end end
  return out
 end
-function Core.ramp_map(layers,map,len)
- -- Shared endpoint rates make adjacent linear output-time ramps continuous.
- local t=0
- local r0=2^(2*(Core.at(layers,'tape',map[1].u)+Core.at(layers,'speed',map[1].u)))
- map[1].t=0
- for i=1,#map-1 do
-  local a,b=map[i],map[i+1]
-  local r1=2^(2*(Core.at(layers,'tape',b.u)+Core.at(layers,'speed',b.u)))
-  local sum=r0+r1
-  a.slope=(r1-r0)/sum
-  t=t+2*len*(b.u-a.u)/sum
-  b.t=t;r0=r1
- end
- map[#map].slope=0
- return map,t
-end
 function Core.map(layers,len,limit)
- -- Curves are anchored to the ORIGINAL item timeline. Both timing layers compose
- -- multiplicatively; independent pitch is applied on the mapped output timeline.
+ if limit then limit=max(2,floor(limit)) end
  local timing=Core.changed(layers.tape) or Core.changed(layers.speed)
  local tape,speed=Core.constant(layers.tape),Core.constant(layers.speed)
  if tape and speed then
   local factor=2^(2*(tape+speed));local duration=len/factor
   return {{u=0,t=0},{u=1,t=duration}},duration,timing,factor
  end
+ if limit and tape==nil then limit=limit+256 end
  local unique=Core.knots(layers,{'tape','speed'})
- local variation=0
- for i=2,#unique do for _,key in ipairs({'tape','speed'}) do
-  variation=variation+24*abs(Core.at(layers,key,unique[i])-Core.at(layers,key,unique[i-1]))
- end end
- local pitch_tolerance=limit and max(.05,variation/(limit*4)) or .05
- local time_tolerance=limit and max(.0001,len/(limit*16)) or .0001
- local m={{u=0,t=0}};local t=0
- local function inv(u) return 2^(-2*Core.at(layers,'tape',u)-2*Core.at(layers,'speed',u)) end
- local function integral(a,b,depth)
-  local mid=(a+b)/2;local fa,fm,fb=inv(a),inv(mid),inv(b)
-  local whole=(b-a)*(fa+4*fm+fb)/6
-  local split=(b-a)*(fa+4*inv((a+mid)/2)+2*fm+4*inv((mid+b)/2)+fb)/12
-  if depth<16 and abs(split-whole)>1e-8*(b-a) then return integral(a,mid,depth+1)+integral(mid,b,depth+1) end
-  return len*(split+(split-whole)/15)
+ local function point(u) return {u=u,r=2^(2*(Core.at(layers,'tape',u)+Core.at(layers,'speed',u)))} end
+ local first=point(0);first.t=0
+ local reference={first};local unresolved=false;local anchors={1}
+ local maxdepth=limit and max(2,floor(math.log(max(1,limit*16/#unique),2))) or 24
+ local function sample(a,b,depth)
+  local h=b.u-a.u;local mid=point(a.u+h/2)
+  local q1,q3=point(a.u+h/4),point(a.u+3*h/4)
+  local aa,bb=a.r*a.r,b.r*b.r;local worst=0
+  for i,p in ipairs({q1,mid,q3}) do
+   worst=max(worst,abs(6*math.log((aa+(bb-aa)*i/4)/(p.r*p.r),2)))
+  end
+  local whole=h*(1/a.r+4/mid.r+1/b.r)/6
+  local split=h*(1/a.r+4/q1.r+2/mid.r+4/q3.r+1/b.r)/12
+  if (worst>.000005 or abs(split-whole)>1e-9*h) and depth<maxdepth and mid.u>a.u and mid.u<b.u then
+   if #reference>32768 then error('時間カーブが複雑すぎます。点を減らしてから適用してください。',0) end
+   sample(a,mid,depth+1);sample(mid,b,depth+1)
+  else
+   unresolved=unresolved or worst>.01
+   b.t=reference[#reference].t+len*(split+(split-whole)/15)
+   reference[#reference+1]=b
+  end
  end
- local function segment(a,b,depth)
-  local mid=(a+b)/2;local f0,f1,f2,f3,f4=inv(a),inv((a+mid)/2),inv(mid),inv((mid+b)/2),inv(b)
-  local left=len*(b-a)*(f0+4*f1+f2)/12
-  local right=len*(b-a)*(f2+4*f3+f4)/12
-  -- Bound local varispeed changes to 0.05 semitone and midpoint timing error
-  -- to 0.1 ms. Flat regions need only their boundaries, regardless of duration.
-  local span=12*math.log(max(f0,f1,f2,f3,f4)/min(f0,f1,f2,f3,f4),2)
-  if span>pitch_tolerance or abs(left-right)/2>time_tolerance then
-   if depth>=24 or #m>32768 then error('時間カーブが複雑すぎます。点を減らしてから適用してください。',0) end
-   segment(a,mid,depth+1);segment(mid,b,depth+1)
-  else t=t+(limit and integral(a,b,0) or left+right);m[#m+1]={u=b,t=t} end
+ first.anchor=true
+ for i=2,#unique do
+  local p=point(unique[i]);p.anchor=true
+  sample(reference[#reference],p,0);anchors[#anchors+1]=#reference
  end
- for i=2,#unique do segment(unique[i-1],unique[i],0) end
- local reduced={points={}}
- for _,p in ipairs(m) do reduced.points[#reduced.points+1]={x=p.u,y=p.t} end
- Core.simplify(reduced,1e-12);m={}
- for _,p in ipairs(reduced.points) do m[#m+1]={u=p.x,t=p.y} end
- m,t=Core.ramp_map(layers,m,len)
- return m,t,timing
+ local heap={};local keep={[1]=true,[#reference]=true}
+ local function push(a,b)
+  if b-a<2 then return end
+  local p,q=reference[a],reference[b];local h=q.u-p.u
+  local aa,bb=p.r*p.r,q.r*q.r
+  local worst,index=0,floor((a+b)/2)
+  local time_error=abs(2*len*h/(p.r+q.r)-(q.t-p.t))
+  for i=a+1,b-1 do
+   local s=reference[i];local f=(s.u-p.u)/h
+   local r2=aa+(bb-aa)*f
+   -- Native slopes are linear in output time: rate squared is linear in source time.
+   local e=abs(6*math.log(r2/(s.r*s.r),2))
+   if e>worst then worst,index=e,i end
+   local t=2*len*(s.u-p.u)/(p.r+math.sqrt(r2))
+   time_error=max(time_error,abs(t-(s.t-p.t)))
+  end
+  local score=max(worst/.00001,time_error/(max(.00001,len*.00001)*h))
+  if score<=1 then return end
+  local entry={a=a,b=b,i=index,e=score};local n=#heap+1
+  while n>1 and heap[floor(n/2)].e<score do heap[n]=heap[floor(n/2)];n=floor(n/2) end
+  heap[n]=entry
+ end
+ local function pop()
+  local top=heap[1];local last=table.remove(heap)
+  if #heap>0 then
+   local n=1
+   while n*2<=#heap do
+    local c=n*2;if c<#heap and heap[c+1].e>heap[c].e then c=c+1 end
+    if heap[c].e<=last.e then break end;heap[n]=heap[c];n=c
+   end
+   heap[n]=last
+  end
+  return top
+ end
+ local count=2
+ push(1,#reference)
+ if #heap>0 and #anchors<=max(2,(limit or 32768)/4) then
+  heap={}
+  count=#anchors
+  for i=2,#anchors do keep[anchors[i]]=true;push(anchors[i-1],anchors[i]) end
+ end
+ for _=count+1,limit or 32768 do
+  if #heap==0 then break end
+  local p=pop();keep[p.i]=true;push(p.a,p.i);push(p.i,p.b)
+ end
+ local map={};local d,o,v={},{},{}
+ for i,p in ipairs(reference) do
+  if keep[i] then map[#map+1]={u=p.u,t=0,r=p.r,anchor=p.anchor};d[#map],o[#map],v[#map]=0,0,0 end
+ end
+ -- Fit relative squared rates with a tridiagonal least-squares system. Keep
+ -- retained curve anchors fixed; fitted endpoints are shared across segments.
+ local j=1
+ for i,p in ipairs(reference) do
+  while j<#map-1 and p.u>map[j+1].u do j=j+1 end
+  local a,b=map[j],map[j+1];local f=(p.u-a.u)/(b.u-a.u)
+  local aa,bb=(1-f)*(a.r/p.r)^2,f*(b.r/p.r)^2
+  local w=((reference[i+1] or p).u-(reference[i-1] or p).u)/2
+  d[j]=d[j]+w*aa*aa;d[j+1]=d[j+1]+w*bb*bb;o[j]=o[j]+w*aa*bb
+  v[j]=v[j]+w*aa;v[j+1]=v[j+1]+w*bb
+ end
+ for i,p in ipairs(map) do
+  if p.anchor then
+   if i>1 then v[i-1]=v[i-1]-o[i-1];o[i-1]=0 end
+   if i<#map then v[i+1]=v[i+1]-o[i];o[i]=0 end
+   d[i],v[i]=1,1
+  end
+ end
+ for i=2,#map do
+  local f=o[i-1]/d[i-1];d[i]=d[i]-f*o[i-1];v[i]=v[i]-f*v[i-1]
+ end
+ local fit={};local valid=true
+ for i=#map,1,-1 do
+  local x=(v[i]-o[i]*(fit[i+1] or 0))/d[i]
+  if not finite(x) or x<=0 then valid=false;break end
+  fit[i]=x
+ end
+ if valid then
+  local original_error,fit_error=0,0
+  local original_duration,fit_duration=0,0
+  local original_time,fit_time,original_time_error,fit_time_error=0,0,0,0;j=1
+  for _,p in ipairs(reference) do
+   while j<#map-1 and p.u>map[j+1].u do
+    local a,b=map[j],map[j+1];local span=2*len*(b.u-a.u)
+    original_time=original_time+span/(a.r+b.r)
+    fit_time=fit_time+span/(a.r*math.sqrt(fit[j])+b.r*math.sqrt(fit[j+1]));j=j+1
+   end
+   local a,b=map[j],map[j+1];local f=(p.u-a.u)/(b.u-a.u)
+   local aa,bb=(1-f)*a.r*a.r,f*b.r*b.r
+   original_error=max(original_error,abs(6*math.log((aa+bb)/(p.r*p.r),2)))
+   fit_error=max(fit_error,abs(6*math.log((aa*fit[j]+bb*fit[j+1])/(p.r*p.r),2)))
+   original_duration=original_time+2*len*(p.u-a.u)/(a.r+math.sqrt(aa+bb))
+   fit_duration=fit_time+2*len*(p.u-a.u)/(a.r*math.sqrt(fit[j])+math.sqrt(aa*fit[j]+bb*fit[j+1]))
+   original_time_error=max(original_time_error,abs(original_duration-p.t))
+   fit_time_error=max(fit_time_error,abs(fit_duration-p.t))
+  end
+  local target=reference[#reference].t
+  if fit_error<=original_error and fit_time_error<=original_time_error and abs(fit_duration-target)<=abs(original_duration-target) then
+   for i,p in ipairs(map) do p.r=p.r*math.sqrt(fit[i]) end
+  end
+ end
+ local duration=0
+ for i=1,#map-1 do
+  local a,b=map[i],map[i+1];local sum=a.r+b.r
+  a.slope=(b.r-a.r)/sum;duration=duration+2*len*(b.u-a.u)/sum;b.t=duration
+ end
+ map[#map].slope=0
+ for _,p in ipairs(map) do p.r=nil;p.anchor=nil end
+ return map,duration,timing,nil,unresolved or #heap>0
 end
+
 function Core.lookup(map,x,from,to)
  if x<=map[1][from] then return map[1][to] end
  if x>=map[#map][from] then return map[#map][to] end
@@ -5167,16 +5256,8 @@ end
 
 function Core.apply(v,layers,limit,joined)
  if not Core.valid(v.project,v.item,v.take) then error('対象のテイクが変更されています。再読み込みしてください。',0) end
- local map,len,timing,factor=Core.map(layers,v.len,limit)
- local stats={markers=0,pitch=0,volume=0,highpass=0,lowpass=0,reduced=false,limit=limit}
- if limit and not factor then
-  local pts={};for _,p in ipairs(map) do pts[#pts+1]={x=p.u,y=p.t} end
-  pts,stats.reduced=Core.limit_points(pts,limit)
-  if stats.reduced then
-   map={};for _,p in ipairs(pts) do map[#map+1]={u=p.x,t=p.y} end
-   map,len=Core.ramp_map(layers,map,v.len)
-  end
- end
+ local map,len,timing,factor,reduced=Core.map(layers,v.len,limit)
+ local stats={markers=0,pitch=0,volume=0,highpass=0,lowpass=0,reduced=reduced or false,limit=limit}
  local fixed_timing=timing and factor~=nil
  local rate=fixed_timing and v.rate*factor or v.rate
  -- Expected input restrictions are UI notices, not execution failures. Leave the
@@ -5195,10 +5276,11 @@ function Core.apply(v,layers,limit,joined)
  local vm=ve and R.GetEnvelopeScalingMode(ve) or 0
  local pitch_samples,volume_samples
  if pitch and not fixed_pitch then
+  local pitch_limit=limit and limit+(pc==nil and 256 or 0)
   pitch_samples=Core.sample_curve(layers,{'pitch','speed'},map,v,rate,pe,function(u)
    return Core.evaluate(pe,u*v.len*v.rate,0)+24*(Core.at(layers,'pitch',u)-(timing and Core.at(layers,'speed',u) or 0))
-  end,false,limit)
-  local reduced;pitch_samples,reduced=Core.limit_points(pitch_samples,limit);stats.reduced=stats.reduced or reduced;stats.pitch=#pitch_samples
+  end,false,pitch_limit)
+  local reduced;pitch_samples,reduced=Core.limit_points(pitch_samples,pitch_limit);stats.reduced=stats.reduced or reduced;stats.pitch=#pitch_samples
  end
  if volume and vc==nil then
   volume_samples=Core.sample_curve(layers,{'volume'},map,v,rate,ve,function(u)
@@ -5803,7 +5885,7 @@ function UI.load_selection(force,selected)
  if A.busy then return end
  local project=R.EnumProjects(-1,'');local v=selected or Core.first(project)
  if not v and A.v and A.v.project==project then v=Core.info(project,A.v.item) end
- local same=v and A.v and A.v.project==project and A.v.item==v.item and A.v.take==v.take
+ local same=v and A.v and A.v.project==project and A.v.item==v.item and A.v.take==v.take and A.v.guid==v.guid
  if same and not force then return end
  if same and A.record then UI.dirty();return end
  UI.stash();UI.stop_wave();UI.stop_spectrum(true)
@@ -5811,7 +5893,7 @@ function UI.load_selection(force,selected)
  A.drag=nil;A.selection=nil;pressed=nil;A.pointer_capture=nil;A.center_snap=nil
  A.v=v;A.record=nil;A.conflict=false;A.revision=nil
  if not v then
-  A.baseline=nil;A.wave={};A.wave_max=1;A.wave_ready=false;A.status='音声アイテムを選択すると自動で読み込みます。';UI.dirty();return
+  A.baseline=nil;A.wave={};A.wave_max=1;A.wave_ready=false;A.warning=false;A.status='音声アイテムを選択すると自動で読み込みます。';UI.dirty();return
  end
  local current=Core.chunk(v.item);local session=A.sessions[UI.session_key(v)]
  if session and session.signature~=Core.signature(current) then session=nil end
@@ -5832,9 +5914,8 @@ end
 
 function UI.check_current()
  local reason
- if not A.v then reason='音声アイテムを選択してください。'
- elseif R.EnumProjects(-1,'')~=A.v.project then reason='対象のプロジェクトタブに戻ってください。'
- elseif not Core.valid(A.v.project,A.v.item,A.v.take) then reason='対象が削除されたか、テイクが変わっています。再読み込みしてください。'
+ if not A.v or R.EnumProjects(-1,'')~=A.v.project or not Core.valid(A.v.project,A.v.item,A.v.take) then
+  UI.load_selection(false);return false
  elseif (R.GetPlayStateEx(A.v.project)&5)~=0 then reason='生成は再生・録音を停止してから行ってください。' end
  if reason then notice(reason,true);UI.dirty();return false end
  return true
@@ -5843,7 +5924,7 @@ end
 function UI.read_curves()
  if A.busy or A.drag or A.wave_job or not A.v then return end
  if R.EnumProjects(-1,'')~=A.v.project or not Core.valid(A.v.project,A.v.item,A.v.take) then
-  notice('対象の音声アイテムを確認してください。',true);return
+  UI.load_selection(false);return
  end
  local current=Core.chunk(A.v.item);local layers,record,clipped
  if A.record and A.record.layers and Core.signature(current)==Core.signature(A.record.after) then
@@ -5932,6 +6013,7 @@ function UI.available(id)
   end
   if UI.has_curve then return true end
   if UI.filter_take~=A.v.take or UI.filter_revision~=A.revision then
+   if R.EnumProjects(-1,'')~=A.v.project or not Core.valid(A.v.project,A.v.item,A.v.take) then return false end
    UI.filter_take,UI.filter_revision=A.v.take,A.revision
    UI.has_filters=#Core.find_filters(A.v.take)>0
   end
@@ -6513,8 +6595,8 @@ function UI.sync_item_mute(chunk)
 end
 function UI.poll(now)
  if not Media.ready() then return end
- if now<A.poll_at or A.busy then return end;A.poll_at=now+.05
  local project=R.EnumProjects(-1,'')
+ if A.busy or now<A.poll_at and (not A.v or project==A.v.project) then return end;A.poll_at=now+.05
  local revision=A.v and project==A.v.project and R.GetProjectStateChangeCount(project)
  if A.v and project==A.v.project and revision==A.revision then
   local count=R.CountSelectedMediaItems(project)
@@ -6529,9 +6611,9 @@ function UI.poll(now)
   if A.v and A.v.project==project then selected=Core.info(project,A.v.item) end
   if not selected then if A.v then UI.load_selection(false) end;return end
  end
- if not A.v or project~=A.v.project or selected.item~=A.v.item or selected.take~=A.v.take then
+ if not A.v or project~=A.v.project or selected.item~=A.v.item or selected.take~=A.v.take or selected.guid~=A.v.guid then
   -- Recognize host undo before switching to a different take.
-  if A.v and project==A.v.project and selected.item==A.v.item and A.record and Core.signature(A.record.before)~=Core.signature(A.record.after) and Core.signature(Core.chunk(selected.item))==Core.signature(A.record.before) then
+  if A.v and project==A.v.project and selected.item==A.v.item and selected.guid==A.v.guid and A.record and Core.signature(A.record.before)~=Core.signature(A.record.after) and Core.signature(Core.chunk(selected.item))==Core.signature(A.record.before) then
    A.v=selected;A.record=nil;A.baseline=Core.chunk(selected.item);A.conflict=false;UI.start_wave()
   else UI.load_selection(false,selected) end
   return
