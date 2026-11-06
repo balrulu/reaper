@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<index version="1" name="BLT ReaScripts" commit="4a4950819485aaf80c0fd5de0475897132855430">
+<index version="1" name="BLT ReaScripts" commit="babc60c5bfa877f3afe8069399e7f41c8dd5a86f">
   <category name="BLT">
     <reapack name="BLT_SPATIAL_FIELD.jsfx" type="effect" desc="BLT SPATIAL FIELD">
       <version name="0.5.4" author="Balrulu" time="2026-10-05T05:08:58Z">
@@ -20,7 +20,6 @@
 }
 ]]></description>
       </metadata>
-      
       <version name="1.0.17" author="Balrulu" time="2026-11-05T22:32:44Z">
         <changelog><![CDATA[BLT SERIES ACTIONS]]></changelog>
         <source main="main" file="../BLT_ACTION_Add_Folder_Covers(Auto).lua">https://github.com/balrulu/reaper/raw/4a4950819485aaf80c0fd5de0475897132855430/BLT_ReaScripts/BLT_ACTION_Add_Folder_Covers(Auto).lua</source>
@@ -36,7 +35,6 @@
 }
 ]]></description>
       </metadata>
-      
       <version name="1.1.5" author="Balrulu" time="2026-11-05T22:32:44Z">
         <changelog><![CDATA[BLT SERIES ACTIONS]]></changelog>
         <source main="main" file="../BLT_ACTION_Auto select tracks of selected items.lua">https://github.com/balrulu/reaper/raw/4a4950819485aaf80c0fd5de0475897132855430/BLT_ReaScripts/BLT_ACTION_Auto%20select%20tracks%20of%20selected%20items.lua</source>
@@ -52,7 +50,6 @@
 }
 ]]></description>
       </metadata>
-      
       <version name="1.1.4" author="Balrulu" time="2026-11-05T22:32:44Z">
         <changelog><![CDATA[BLT SERIES ACTIONS]]></changelog>
         <source main="main" file="../BLT_ACTION_Hide_Video_Window_Under_Mouse.lua">https://github.com/balrulu/reaper/raw/4a4950819485aaf80c0fd5de0475897132855430/BLT_ReaScripts/BLT_ACTION_Hide_Video_Window_Under_Mouse.lua</source>
@@ -113,7 +110,6 @@
 }
 ]]></description>
       </metadata>
-      
       <version name="0.6.14" author="Balrulu" time="2026-11-05T22:32:44Z">
         <changelog><![CDATA[BLT SERIES Beta TEST UPLOAD]]></changelog>
         <source main="main" file="../BLT_BATCH_RENAME.lua">https://github.com/balrulu/reaper/raw/4a4950819485aaf80c0fd5de0475897132855430/BLT_ReaScripts/BLT_BATCH_RENAME.lua</source>
@@ -219,7 +215,6 @@
 }
 ]]></description>
       </metadata>
-      
       <version name="0.6.20" author="Balrulu" time="2026-11-05T22:32:44Z">
         <changelog><![CDATA[BLT SERIES Beta TEST UPLOAD]]></changelog>
         <source main="main" file="../BLT_LOOP_RM_STUDIO.lua">https://github.com/balrulu/reaper/raw/4a4950819485aaf80c0fd5de0475897132855430/BLT_ReaScripts/BLT_LOOP_RM_STUDIO.lua</source>
@@ -250,7 +245,6 @@
 }
 ]]></description>
       </metadata>
-      
       <version name="0.6.16" author="Balrulu" time="2026-11-05T22:32:44Z">
         <changelog><![CDATA[BLT SERIES Beta TEST UPLOAD]]></changelog>
         <source main="main" file="../BLT_MARKER_REGION_DESK.lua">https://github.com/balrulu/reaper/raw/4a4950819485aaf80c0fd5de0475897132855430/BLT_ReaScripts/BLT_MARKER_REGION_DESK.lua</source>
@@ -266,7 +260,6 @@
 }
 ]]></description>
       </metadata>
-      
       <version name="0.2.37" author="Balrulu" time="2026-11-05T22:32:44Z">
         <changelog><![CDATA[BLT SERIES Beta TEST UPLOAD]]></changelog>
         <source main="main" file="../BLT_MINIMAL_INFO_PANEL.lua">https://github.com/balrulu/reaper/raw/4a4950819485aaf80c0fd5de0475897132855430/BLT_ReaScripts/BLT_MINIMAL_INFO_PANEL.lua</source>
@@ -312,7 +305,6 @@
 }
 ]]></description>
       </metadata>
-      
       <version name="0.3.21" author="Balrulu" time="2026-11-05T22:32:44Z">
         <changelog><![CDATA[BLT SERIES Beta TEST UPLOAD]]></changelog>
         <source main="main" file="../BLT_TRACK_TREE.lua">https://github.com/balrulu/reaper/raw/4a4950819485aaf80c0fd5de0475897132855430/BLT_ReaScripts/BLT_TRACK_TREE.lua</source>
@@ -346,9 +338,10 @@
   </category>
   <category name="LangPacks">
     <reapack name="Japanese_add_SWS_kb_edit.ReaperLangPack" type="langpack" desc="日本語 [JP] - REAPER + SWS">
-      <version name="7.84.0" author="Balrulu" time="2026-10-29T19:02:20Z">
-        <changelog><![CDATA[Japanese translation for REAPER v7.84 + SWS]]></changelog>
-        <source>https://github.com/balrulu/reaper/raw/8e17440755dd68a4e2cf5f73af5a6c2747aea040/LangPacks/Japanese_add_SWS_kb_edit.ReaperLangPack</source>
+      
+      <version name="7.85.0" author="Balrulu" time="2026-11-06T15:28:33Z">
+        <changelog><![CDATA[Japanese translation for REAPER v7.85 + SWS]]></changelog>
+        <source>https://github.com/balrulu/reaper/raw/babc60c5bfa877f3afe8069399e7f41c8dd5a86f/LangPacks/Japanese_add_SWS_kb_edit.ReaperLangPack</source>
       </version>
     </reapack>
   </category>
