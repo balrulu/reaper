@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<index version="1" name="BLT ReaScripts" commit="babc60c5bfa877f3afe8069399e7f41c8dd5a86f">
+<index version="1" name="BLT ReaScripts" commit="95d09b33655b11ba3073d2b3e75f81d74503e21b">
   <category name="BLT">
     <reapack name="BLT_SPATIAL_FIELD.jsfx" type="effect" desc="BLT SPATIAL FIELD">
       <version name="0.5.4" author="Balrulu" time="2026-10-05T05:08:58Z">
@@ -35,9 +35,10 @@
 }
 ]]></description>
       </metadata>
-      <version name="1.1.5" author="Balrulu" time="2026-11-05T22:32:44Z">
+      
+      <version name="1.1.6" author="Balrulu" time="2026-11-06T21:27:04Z">
         <changelog><![CDATA[BLT SERIES ACTIONS]]></changelog>
-        <source main="main" file="../BLT_ACTION_Auto select tracks of selected items.lua">https://github.com/balrulu/reaper/raw/4a4950819485aaf80c0fd5de0475897132855430/BLT_ReaScripts/BLT_ACTION_Auto%20select%20tracks%20of%20selected%20items.lua</source>
+        <source main="main" file="../BLT_ACTION_Auto select tracks of selected items.lua">https://github.com/balrulu/reaper/raw/95d09b33655b11ba3073d2b3e75f81d74503e21b/BLT_ReaScripts/BLT_ACTION_Auto%20select%20tracks%20of%20selected%20items.lua</source>
       </version>
     </reapack>
     <reapack name="BLT_ACTION_Hide_Video_Window_Under_Mouse.lua" type="script" desc="ACTION - Auto-hide video window under mouse (toggle)">
@@ -50,9 +51,10 @@
 }
 ]]></description>
       </metadata>
-      <version name="1.1.4" author="Balrulu" time="2026-11-05T22:32:44Z">
+      
+      <version name="1.1.5" author="Balrulu" time="2026-11-06T21:27:04Z">
         <changelog><![CDATA[BLT SERIES ACTIONS]]></changelog>
-        <source main="main" file="../BLT_ACTION_Hide_Video_Window_Under_Mouse.lua">https://github.com/balrulu/reaper/raw/4a4950819485aaf80c0fd5de0475897132855430/BLT_ReaScripts/BLT_ACTION_Hide_Video_Window_Under_Mouse.lua</source>
+        <source main="main" file="../BLT_ACTION_Hide_Video_Window_Under_Mouse.lua">https://github.com/balrulu/reaper/raw/95d09b33655b11ba3073d2b3e75f81d74503e21b/BLT_ReaScripts/BLT_ACTION_Hide_Video_Window_Under_Mouse.lua</source>
       </version>
     </reapack>
     <reapack name="BLT_ACTION_Move_Cursor_to_Selected_Item_Taking_playback_status.lua" type="script" desc="ACTION - Move Cursor to Selected Item Taking playback status">
@@ -80,9 +82,10 @@
 }
 ]]></description>
       </metadata>
-      <version name="1.0.4" author="Balrulu" time="2026-11-03T16:24:40Z">
+      
+      <version name="1.0.5" author="Balrulu" time="2026-11-06T21:27:04Z">
         <changelog><![CDATA[BLT SERIES ACTIONS]]></changelog>
-        <source main="main" file="../BLT_ACTION_Open_Original_or_Glued_item_in_External_editor.lua">https://github.com/balrulu/reaper/raw/037ae64085b9ecc94cf12004ea03de9be554925a/BLT_ReaScripts/BLT_ACTION_Open_Original_or_Glued_item_in_External_editor.lua</source>
+        <source main="main" file="../BLT_ACTION_Open_Original_or_Glued_item_in_External_editor.lua">https://github.com/balrulu/reaper/raw/95d09b33655b11ba3073d2b3e75f81d74503e21b/BLT_ReaScripts/BLT_ACTION_Open_Original_or_Glued_item_in_External_editor.lua</source>
       </version>
     </reapack>
     <reapack name="BLT_AUTO_TRIM_SPLIT.lua" type="script" desc="AUTO TRIM / SPLIT">
@@ -95,9 +98,10 @@
 }
 ]]></description>
       </metadata>
-      <version name="0.6.10" author="Balrulu" time="2026-11-04T17:44:05Z">
+      
+      <version name="0.6.12" author="Balrulu" time="2026-11-06T21:27:04Z">
         <changelog><![CDATA[BLT SERIES Beta TEST UPLOAD]]></changelog>
-        <source main="main" file="../BLT_AUTO_TRIM_SPLIT.lua">https://github.com/balrulu/reaper/raw/9b6d85e0ab958af95c27edc25a9fa96ec13b613d/BLT_ReaScripts/BLT_AUTO_TRIM_SPLIT.lua</source>
+        <source main="main" file="../BLT_AUTO_TRIM_SPLIT.lua">https://github.com/balrulu/reaper/raw/95d09b33655b11ba3073d2b3e75f81d74503e21b/BLT_ReaScripts/BLT_AUTO_TRIM_SPLIT.lua</source>
       </version>
     </reapack>
     <reapack name="BLT_BATCH_RENAME.lua" type="script" desc="BATCH RENAME">
@@ -110,9 +114,10 @@
 }
 ]]></description>
       </metadata>
-      <version name="0.6.14" author="Balrulu" time="2026-11-05T22:32:44Z">
+      
+      <version name="0.6.15" author="Balrulu" time="2026-11-06T21:27:04Z">
         <changelog><![CDATA[BLT SERIES Beta TEST UPLOAD]]></changelog>
-        <source main="main" file="../BLT_BATCH_RENAME.lua">https://github.com/balrulu/reaper/raw/4a4950819485aaf80c0fd5de0475897132855430/BLT_ReaScripts/BLT_BATCH_RENAME.lua</source>
+        <source main="main" file="../BLT_BATCH_RENAME.lua">https://github.com/balrulu/reaper/raw/95d09b33655b11ba3073d2b3e75f81d74503e21b/BLT_ReaScripts/BLT_BATCH_RENAME.lua</source>
       </version>
     </reapack>
     <reapack name="BLT_COLOR_PALETTE.lua" type="script" desc="COLOR PALETTE">
@@ -125,9 +130,10 @@
 }
 ]]></description>
       </metadata>
-      <version name="0.6.11" author="Balrulu" time="2026-11-04T17:44:05Z">
+      
+      <version name="0.6.12" author="Balrulu" time="2026-11-06T21:27:04Z">
         <changelog><![CDATA[BLT SERIES Beta TEST UPLOAD]]></changelog>
-        <source main="main" file="../BLT_COLOR_PALETTE.lua">https://github.com/balrulu/reaper/raw/9b6d85e0ab958af95c27edc25a9fa96ec13b613d/BLT_ReaScripts/BLT_COLOR_PALETTE.lua</source>
+        <source main="main" file="../BLT_COLOR_PALETTE.lua">https://github.com/balrulu/reaper/raw/95d09b33655b11ba3073d2b3e75f81d74503e21b/BLT_ReaScripts/BLT_COLOR_PALETTE.lua</source>
       </version>
     </reapack>
     <reapack name="BLT_CR_MINIM.lua" type="script" desc="CR MINIM">
@@ -140,9 +146,10 @@
 }
 ]]></description>
       </metadata>
-      <version name="0.6.13" author="Balrulu" time="2026-11-04T17:44:05Z">
+      
+      <version name="0.6.14" author="Balrulu" time="2026-11-06T21:27:04Z">
         <changelog><![CDATA[BLT SERIES Beta TEST UPLOAD]]></changelog>
-        <source main="main" file="../BLT_CR_MINIM.lua">https://github.com/balrulu/reaper/raw/9b6d85e0ab958af95c27edc25a9fa96ec13b613d/BLT_ReaScripts/BLT_CR_MINIM.lua</source>
+        <source main="main" file="../BLT_CR_MINIM.lua">https://github.com/balrulu/reaper/raw/95d09b33655b11ba3073d2b3e75f81d74503e21b/BLT_ReaScripts/BLT_CR_MINIM.lua</source>
       </version>
     </reapack>
     <reapack name="BLT_DEDICATED_RENDER.lua" type="script" desc="BLT DEDICATED RENDER">
@@ -155,9 +162,10 @@
 }
 ]]></description>
       </metadata>
-      <version name="0.14.22" author="Balrulu" time="2026-11-04T17:44:05Z">
+      
+      <version name="0.14.24" author="Balrulu" time="2026-11-06T21:27:04Z">
         <changelog><![CDATA[BLT SERIES Beta TEST UPLOAD]]></changelog>
-        <source main="main" file="../BLT_DEDICATED_RENDER.lua">https://github.com/balrulu/reaper/raw/9b6d85e0ab958af95c27edc25a9fa96ec13b613d/BLT_ReaScripts/BLT_DEDICATED_RENDER.lua</source>
+        <source main="main" file="../BLT_DEDICATED_RENDER.lua">https://github.com/balrulu/reaper/raw/95d09b33655b11ba3073d2b3e75f81d74503e21b/BLT_ReaScripts/BLT_DEDICATED_RENDER.lua</source>
       </version>
     </reapack>
     <reapack name="BLT_ENVELOPE_CANVAS_ITEM.lua" type="script" desc="ENVELOPE CANVAS ITEM">
@@ -170,9 +178,10 @@
 }
 ]]></description>
       </metadata>
-      <version name="0.7.13" author="Balrulu" time="2026-11-04T17:44:05Z">
+      
+      <version name="0.7.17" author="Balrulu" time="2026-11-06T21:27:04Z">
         <changelog><![CDATA[BLT SERIES Beta TEST UPLOAD]]></changelog>
-        <source main="main" file="../BLT_ENVELOPE_CANVAS_ITEM.lua">https://github.com/balrulu/reaper/raw/9b6d85e0ab958af95c27edc25a9fa96ec13b613d/BLT_ReaScripts/BLT_ENVELOPE_CANVAS_ITEM.lua</source>
+        <source main="main" file="../BLT_ENVELOPE_CANVAS_ITEM.lua">https://github.com/balrulu/reaper/raw/95d09b33655b11ba3073d2b3e75f81d74503e21b/BLT_ReaScripts/BLT_ENVELOPE_CANVAS_ITEM.lua</source>
       </version>
     </reapack>
     <reapack name="BLT_ENVELOPE_CANVAS_TRACK.lua" type="script" desc="ENVELOPE CANVAS TRACK">
@@ -185,9 +194,10 @@
 }
 ]]></description>
       </metadata>
-      <version name="0.7.7" author="Balrulu" time="2026-11-04T17:44:05Z">
+      
+      <version name="0.7.9" author="Balrulu" time="2026-11-06T21:27:04Z">
         <changelog><![CDATA[BLT SERIES Beta TEST UPLOAD]]></changelog>
-        <source main="main" file="../BLT_ENVELOPE_CANVAS_TRACK.lua">https://github.com/balrulu/reaper/raw/9b6d85e0ab958af95c27edc25a9fa96ec13b613d/BLT_ReaScripts/BLT_ENVELOPE_CANVAS_TRACK.lua</source>
+        <source main="main" file="../BLT_ENVELOPE_CANVAS_TRACK.lua">https://github.com/balrulu/reaper/raw/95d09b33655b11ba3073d2b3e75f81d74503e21b/BLT_ReaScripts/BLT_ENVELOPE_CANVAS_TRACK.lua</source>
       </version>
     </reapack>
     <reapack name="BLT_INTERVAL.lua" type="script" desc="INTERVAL">
@@ -200,9 +210,10 @@
 }
 ]]></description>
       </metadata>
-      <version name="0.6.30" author="Balrulu" time="2026-11-04T17:44:05Z">
+      
+      <version name="0.6.31" author="Balrulu" time="2026-11-06T21:27:04Z">
         <changelog><![CDATA[BLT SERIES Beta TEST UPLOAD]]></changelog>
-        <source main="main" file="../BLT_INTERVAL.lua">https://github.com/balrulu/reaper/raw/9b6d85e0ab958af95c27edc25a9fa96ec13b613d/BLT_ReaScripts/BLT_INTERVAL.lua</source>
+        <source main="main" file="../BLT_INTERVAL.lua">https://github.com/balrulu/reaper/raw/95d09b33655b11ba3073d2b3e75f81d74503e21b/BLT_ReaScripts/BLT_INTERVAL.lua</source>
       </version>
     </reapack>
     <reapack name="BLT_LOOP_RM_STUDIO.lua" type="script" desc="LOOP RM STUDIO">
@@ -230,9 +241,10 @@
 }
 ]]></description>
       </metadata>
-      <version name="0.8.11" author="Balrulu" time="2026-11-04T17:44:05Z">
+      
+      <version name="0.8.18" author="Balrulu" time="2026-11-06T21:27:04Z">
         <changelog><![CDATA[BLT SERIES Beta TEST UPLOAD]]></changelog>
-        <source main="main" file="../BLT_LOUDNESS_TRACE.lua">https://github.com/balrulu/reaper/raw/9b6d85e0ab958af95c27edc25a9fa96ec13b613d/BLT_ReaScripts/BLT_LOUDNESS_TRACE.lua</source>
+        <source main="main" file="../BLT_LOUDNESS_TRACE.lua">https://github.com/balrulu/reaper/raw/95d09b33655b11ba3073d2b3e75f81d74503e21b/BLT_ReaScripts/BLT_LOUDNESS_TRACE.lua</source>
       </version>
     </reapack>
     <reapack name="BLT_MARKER_REGION_DESK.lua" type="script" desc="MARKER REGION DESK">
@@ -245,9 +257,10 @@
 }
 ]]></description>
       </metadata>
-      <version name="0.6.16" author="Balrulu" time="2026-11-05T22:32:44Z">
+      
+      <version name="0.6.18" author="Balrulu" time="2026-11-06T21:27:04Z">
         <changelog><![CDATA[BLT SERIES Beta TEST UPLOAD]]></changelog>
-        <source main="main" file="../BLT_MARKER_REGION_DESK.lua">https://github.com/balrulu/reaper/raw/4a4950819485aaf80c0fd5de0475897132855430/BLT_ReaScripts/BLT_MARKER_REGION_DESK.lua</source>
+        <source main="main" file="../BLT_MARKER_REGION_DESK.lua">https://github.com/balrulu/reaper/raw/95d09b33655b11ba3073d2b3e75f81d74503e21b/BLT_ReaScripts/BLT_MARKER_REGION_DESK.lua</source>
       </version>
     </reapack>
     <reapack name="BLT_MINIMAL_INFO_PANEL.lua" type="script" desc="MINIMAL INFO PANEL">
@@ -260,9 +273,10 @@
 }
 ]]></description>
       </metadata>
-      <version name="0.2.37" author="Balrulu" time="2026-11-05T22:32:44Z">
+      
+      <version name="0.2.40" author="Balrulu" time="2026-11-06T21:27:04Z">
         <changelog><![CDATA[BLT SERIES Beta TEST UPLOAD]]></changelog>
-        <source main="main" file="../BLT_MINIMAL_INFO_PANEL.lua">https://github.com/balrulu/reaper/raw/4a4950819485aaf80c0fd5de0475897132855430/BLT_ReaScripts/BLT_MINIMAL_INFO_PANEL.lua</source>
+        <source main="main" file="../BLT_MINIMAL_INFO_PANEL.lua">https://github.com/balrulu/reaper/raw/95d09b33655b11ba3073d2b3e75f81d74503e21b/BLT_ReaScripts/BLT_MINIMAL_INFO_PANEL.lua</source>
       </version>
     </reapack>
     <reapack name="BLT_SIMPLE_NORMALIZER.lua" type="script" desc="SIMPLE NORMALIZER">
@@ -275,9 +289,10 @@
 }
 ]]></description>
       </metadata>
-      <version name="0.6.8" author="Balrulu" time="2026-11-04T17:44:05Z">
+      
+      <version name="0.6.10" author="Balrulu" time="2026-11-06T21:27:04Z">
         <changelog><![CDATA[BLT SERIES Beta TEST UPLOAD]]></changelog>
-        <source main="main" file="../BLT_SIMPLE_NORMALIZER.lua">https://github.com/balrulu/reaper/raw/9b6d85e0ab958af95c27edc25a9fa96ec13b613d/BLT_ReaScripts/BLT_SIMPLE_NORMALIZER.lua</source>
+        <source main="main" file="../BLT_SIMPLE_NORMALIZER.lua">https://github.com/balrulu/reaper/raw/95d09b33655b11ba3073d2b3e75f81d74503e21b/BLT_ReaScripts/BLT_SIMPLE_NORMALIZER.lua</source>
       </version>
     </reapack>
     <reapack name="BLT_SPECTRAL NORMALIZER.lua" type="script" desc="SPECTRAL NORMALIZER">
@@ -290,9 +305,10 @@
 }
 ]]></description>
       </metadata>
-      <version name="0.6.12" author="Balrulu" time="2026-11-04T17:44:05Z">
+      
+      <version name="0.6.14" author="Balrulu" time="2026-11-06T21:27:04Z">
         <changelog><![CDATA[BLT SERIES Beta TEST UPLOAD]]></changelog>
-        <source main="main" file="../BLT_SPECTRAL NORMALIZER.lua">https://github.com/balrulu/reaper/raw/9b6d85e0ab958af95c27edc25a9fa96ec13b613d/BLT_ReaScripts/BLT_SPECTRAL%20NORMALIZER.lua</source>
+        <source main="main" file="../BLT_SPECTRAL NORMALIZER.lua">https://github.com/balrulu/reaper/raw/95d09b33655b11ba3073d2b3e75f81d74503e21b/BLT_ReaScripts/BLT_SPECTRAL%20NORMALIZER.lua</source>
       </version>
     </reapack>
     <reapack name="BLT_TRACK_TREE.lua" type="script" desc="TRACK TREE">
@@ -305,9 +321,10 @@
 }
 ]]></description>
       </metadata>
-      <version name="0.3.21" author="Balrulu" time="2026-11-05T22:32:44Z">
+      
+      <version name="0.3.23" author="Balrulu" time="2026-11-06T21:27:04Z">
         <changelog><![CDATA[BLT SERIES Beta TEST UPLOAD]]></changelog>
-        <source main="main" file="../BLT_TRACK_TREE.lua">https://github.com/balrulu/reaper/raw/4a4950819485aaf80c0fd5de0475897132855430/BLT_ReaScripts/BLT_TRACK_TREE.lua</source>
+        <source main="main" file="../BLT_TRACK_TREE.lua">https://github.com/balrulu/reaper/raw/95d09b33655b11ba3073d2b3e75f81d74503e21b/BLT_ReaScripts/BLT_TRACK_TREE.lua</source>
       </version>
     </reapack>
     <reapack name="BLT_VARIANT_FORGE.lua" type="script" desc="VARIANT FORGE">
@@ -320,9 +337,10 @@
 }
 ]]></description>
       </metadata>
-      <version name="0.6.13" author="Balrulu" time="2026-11-04T17:44:05Z">
+      
+      <version name="0.6.15" author="Balrulu" time="2026-11-06T21:27:04Z">
         <changelog><![CDATA[BLT SERIES Beta TEST UPLOAD]]></changelog>
-        <source main="main" file="../BLT_VARIANT_FORGE.lua">https://github.com/balrulu/reaper/raw/9b6d85e0ab958af95c27edc25a9fa96ec13b613d/BLT_ReaScripts/BLT_VARIANT_FORGE.lua</source>
+        <source main="main" file="../BLT_VARIANT_FORGE.lua">https://github.com/balrulu/reaper/raw/95d09b33655b11ba3073d2b3e75f81d74503e21b/BLT_ReaScripts/BLT_VARIANT_FORGE.lua</source>
       </version>
     </reapack>
   </category>
@@ -338,7 +356,6 @@
   </category>
   <category name="LangPacks">
     <reapack name="Japanese_add_SWS_kb_edit.ReaperLangPack" type="langpack" desc="日本語 [JP] - REAPER + SWS">
-      
       <version name="7.85.0" author="Balrulu" time="2026-11-06T15:28:33Z">
         <changelog><![CDATA[Japanese translation for REAPER v7.85 + SWS]]></changelog>
         <source>https://github.com/balrulu/reaper/raw/babc60c5bfa877f3afe8069399e7f41c8dd5a86f/LangPacks/Japanese_add_SWS_kb_edit.ReaperLangPack</source>
