@@ -1,5 +1,5 @@
 -- @description LOUDNESS TRACE
--- @version 0.8.20
+-- @version 0.8.21
 -- @author Balrulu
 -- @provides
 --   . > ../
@@ -10,7 +10,7 @@
 
 local reaper=reaper
 do
--- BEGIN BLT NATIVE DIALOGS 1.2.2 (generated from _shared/BLT_NativeDialogs.lua)
+-- BEGIN BLT NATIVE DIALOGS 1.2.3 (generated from _shared/BLT_NativeDialogs.lua)
 local BLTNativeDialogs=(function()
  local M={}
  function M.install(api,view)
@@ -47,7 +47,7 @@ local BLTNativeDialogs=(function()
    return false
   end
   local function suspend(session)
-   if not api.JS_Window_Find or not api.JS_Window_IsWindow then return end
+   if not windowsOS or not api.JS_Window_Find or not api.JS_Window_IsWindow then return end
    local own=title and api.JS_Window_Find(title,true)
    local main=api.GetMainHwnd and api.GetMainHwnd()
    local candidates,seen={},{}
@@ -187,7 +187,12 @@ local BLTNativeDialogs=(function()
    local function finish()
     if active then local session=active;active=nil;local failed=restore(session);if #failed>0 then warn() end end
     if pending then pending.windows=restore(pending);if #pending.windows>0 then warn() end end
-    if exitHandler then exitHandler() end
+    local ok,why=true,nil
+    if exitHandler then ok,why=xpcall(exitHandler,debug.traceback)end
+    if view and type(view.inputContext)=='function'and type(view.quit)=='function'then
+     local closed,err=pcall(view.quit);if not closed and ok then ok,why=false,err end
+    end
+    if not ok then error(why,0)end
    end
    P.atexit=function(fn) exitHandler=fn;return api.atexit(finish) end
    api.atexit(finish)
@@ -1066,11 +1071,16 @@ function M.new(api,title,width,height,section)
  local imageCache,retiredImages={},{}
  local gradientFrame=0
  local retireEpoch,retireFrame=floor(api.time_precise()*10),0
+ local function detach(image)
+  if type(I.ValidatePtr)~='function' or I.ValidatePtr(ctx,'ImGui_Context*')then
+   pcall(I.Detach,ctx,image)
+  end
+ end
  function H:attachImage(image)
   I.Attach(ctx,image);imageCache[image]=true
  end
  function H:releaseImage(image,batched)
-  if self.closing or batched then retiredImages[image]=nil;imageCache[image]=nil;I.Detach(ctx,image)
+  if self.closing or batched then retiredImages[image]=nil;imageCache[image]=nil;detach(image)
   elseif not retiredImages[image] then retiredImages[image]={frame=gradientFrame,time=api.time_precise()} end
  end
  function H:retainImages()
@@ -1097,7 +1107,7 @@ function M.new(api,title,width,height,section)
   local now=api.time_precise()
   for image,retired in pairs(retiredImages) do
    if self.closing or gradientFrame-retired.frame>=2 and now-retired.time>=.1 then
-    imageCache[image]=nil;retiredImages[image]=nil;I.Detach(ctx,image)
+    imageCache[image]=nil;retiredImages[image]=nil;detach(image)
    end
   end
  end
@@ -3255,7 +3265,7 @@ end
 
 local Media=create_media_gate(reaper,mediaGraphics)
 
-local VERSION="0.8.20"
+local VERSION="0.8.21"
 local MAX_HISTORY_ROWS=126000
 local MAX_SAVE_BYTES=12*1024*1024
 local Core = {}
@@ -6419,7 +6429,7 @@ local function tcp_dispose()
   pcall(reaper.JS_Window_Destroy,TCP.window);TCP.window=nil
  end
  if TCP.bitmap then R.JS_LICE_DestroyBitmap(TCP.bitmap);TCP.bitmap=nil end
- TCP.parent=nil;TCP.signature=nil;TCP.position=nil;TCP.down=nil
+ TCP.parent=nil;TCP.signature=nil;TCP.position=nil;TCP.down=nil;TCP.lastDown=nil;TCP.lastUp=nil;TCP.shown=nil
 end
 local function tcp_button(now)
  if TCP.supported==nil then
@@ -6449,24 +6459,27 @@ local function tcp_button(now)
   if Platform.mac and reaper.JS_Window_EnableMetal(parent)==1 then tcp_dispose();return end
   if TCP.parent~=parent or not TCP.window or not R.JS_Window_IsWindow(TCP.window) then
    tcp_dispose();TCP.parent=parent
-   TCP.window=reaper.JS_Window_Create('BLT TRACE Analyze','BLT_TRACE_TCP',x,y,TCP.width,TCP.height,'CHILD,VISIBLE',parent)
+   TCP.window=reaper.JS_Window_Create('BLT TRACE Analyze','BLT_TRACE_TCP',x,y,TCP.width,TCP.height,'CHILD',parent)
    if not TCP.window then TCP.supported=false;return end
    reaper.JS_Window_SetParent(TCP.window,parent)
    reaper.JS_Window_SetPosition(TCP.window,x,y,TCP.width,TCP.height,'TOP','NOACTIVATE');TCP.position=x..':'..y
+   TCP.bitmap=R.JS_LICE_CreateBitmap(true,TCP.width,TCP.height)
+   if not TCP.bitmap then tcp_dispose();return end
+   if Platform.mac and reaper.JS_Window_EnableMetal(TCP.window)==1 then tcp_dispose();TCP.supported=false;return end
+   if R.JS_Composite(TCP.window,0,0,0,0,TCP.bitmap,0,0,0,0,false)~=1 then tcp_dispose();return end
    for _,msg in ipairs({'WM_LBUTTONDOWN','WM_LBUTTONUP'}) do
     if reaper.JS_WindowMessage_Intercept(TCP.window,msg,false)~=1 then tcp_dispose();TCP.supported=false;return end
    end
-   TCP.bitmap=R.JS_LICE_CreateBitmap(true,TCP.width,TCP.height)
-   if not TCP.bitmap then tcp_dispose();return end
+   R.JS_Composite_Unlink(TCP.window,TCP.bitmap,false)
   end
   local position=x..':'..y
   if TCP.position~=position then reaper.JS_Window_SetPosition(TCP.window,x,y,TCP.width,TCP.height,'TOP','NOACTIVATE');TCP.position=position end
  end
  if not TCP.window then return end
  local down,_,dt=reaper.JS_WindowMessage_Peek(TCP.window,'WM_LBUTTONDOWN')
- if down and dt~=TCP.lastDown then TCP.lastDown=dt;TCP.down=dt end
+ if down and dt>0 and dt~=TCP.lastDown then TCP.lastDown=dt;TCP.down=dt end
  local up,_,ut,_,_,x,y=reaper.JS_WindowMessage_Peek(TCP.window,'WM_LBUTTONUP')
- if up and ut~=TCP.lastUp then
+ if up and ut>0 and ut~=TCP.lastUp then
   TCP.lastUp=ut
   if TCP.down and ut>=TCP.down and x>=0 and y>=0 and x<TCP.width and y<TCP.height then
    TCP.down=nil;if A.job then cancel_job() else measure() end
@@ -6482,6 +6495,7 @@ local function tcp_button(now)
   R.JS_LICE_DrawText(TCP.bitmap,A.font,label,#label,10,3,TCP.width-4,TCP.height)
   local code=R.JS_Composite(TCP.window,0,0,TCP.width,TCP.height,TCP.bitmap,0,0,TCP.width,TCP.height,true)
   if code~=1 then tcp_dispose();return end
+  if not TCP.shown then reaper.JS_Window_Show(TCP.window,'SHOWNA');TCP.shown=true end
   R.JS_Window_InvalidateRect(TCP.window,0,0,TCP.width,TCP.height,false);TCP.signature=signature
  end
 end

@@ -1473,7 +1473,7 @@ if type(reaper.ImGui_GetBuiltinPath)~='function'then reaper.MB('ReaImGui 0.10以
 local reaper,gfx=AppCanvas.install(reaper,gfx,AppCanvasHost,
  {section='BLT_TRACK_TREE',title='BLT TRACK TREE',width=648,height=700,minWidth=360,minHeight=300},AppShellText,AppChromeRaster,AppCanvasDraw,AppPresetNotice)
 do
--- BEGIN BLT NATIVE DIALOGS 1.2.2 (generated from _shared/BLT_NativeDialogs.lua)
+-- BEGIN BLT NATIVE DIALOGS 1.2.3 (generated from _shared/BLT_NativeDialogs.lua)
 local BLTNativeDialogs=(function()
  local M={}
  function M.install(api,view)
@@ -1510,7 +1510,7 @@ local BLTNativeDialogs=(function()
    return false
   end
   local function suspend(session)
-   if not api.JS_Window_Find or not api.JS_Window_IsWindow then return end
+   if not windowsOS or not api.JS_Window_Find or not api.JS_Window_IsWindow then return end
    local own=title and api.JS_Window_Find(title,true)
    local main=api.GetMainHwnd and api.GetMainHwnd()
    local candidates,seen={},{}

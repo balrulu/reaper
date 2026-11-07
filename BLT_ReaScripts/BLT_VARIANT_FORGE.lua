@@ -77,11 +77,16 @@ function M.new(api,title,width,height,section)
  local imageCache,retiredImages={},{}
  local gradientFrame=0
  local retireEpoch,retireFrame=floor(api.time_precise()*10),0
+ local function detach(image)
+  if type(I.ValidatePtr)~='function' or I.ValidatePtr(ctx,'ImGui_Context*')then
+   pcall(I.Detach,ctx,image)
+  end
+ end
  function H:attachImage(image)
   I.Attach(ctx,image);imageCache[image]=true
  end
  function H:releaseImage(image,batched)
-  if self.closing or batched then retiredImages[image]=nil;imageCache[image]=nil;I.Detach(ctx,image)
+  if self.closing or batched then retiredImages[image]=nil;imageCache[image]=nil;detach(image)
   elseif not retiredImages[image] then retiredImages[image]={frame=gradientFrame,time=api.time_precise()} end
  end
  function H:retainImages()
@@ -108,7 +113,7 @@ function M.new(api,title,width,height,section)
   local now=api.time_precise()
   for image,retired in pairs(retiredImages) do
    if self.closing or gradientFrame-retired.frame>=2 and now-retired.time>=.1 then
-    imageCache[image]=nil;retiredImages[image]=nil;I.Detach(ctx,image)
+    imageCache[image]=nil;retiredImages[image]=nil;detach(image)
    end
   end
  end
@@ -1467,7 +1472,7 @@ end)()
 if type(reaper.ImGui_GetBuiltinPath)~='function'then reaper.MB('ReaImGui 0.10以降が必要です。 / ReaImGui 0.10 or later is required.','BLT Variant Forge',0);return end
 local reaper,gfx=AppCanvas.install(reaper,gfx,AppCanvasHost,{section='BLT_VARIANT_FORGE',title='BLT Variant Forge',width=900,height=910,minWidth=780,minHeight=800},AppShellText,AppChromeRaster,AppCanvasDraw,AppPresetNotice)
 do
--- BEGIN BLT NATIVE DIALOGS 1.2.2 (generated from _shared/BLT_NativeDialogs.lua)
+-- BEGIN BLT NATIVE DIALOGS 1.2.3 (generated from _shared/BLT_NativeDialogs.lua)
 local BLTNativeDialogs=(function()
  local M={}
  function M.install(api,view)
@@ -1504,7 +1509,7 @@ local BLTNativeDialogs=(function()
    return false
   end
   local function suspend(session)
-   if not api.JS_Window_Find or not api.JS_Window_IsWindow then return end
+   if not windowsOS or not api.JS_Window_Find or not api.JS_Window_IsWindow then return end
    local own=title and api.JS_Window_Find(title,true)
    local main=api.GetMainHwnd and api.GetMainHwnd()
    local candidates,seen={},{}

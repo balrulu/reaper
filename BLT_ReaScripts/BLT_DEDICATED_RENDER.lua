@@ -1511,7 +1511,7 @@ local BLTNativeDialogs=(function()
    return false
   end
   local function suspend(session)
-   if not api.JS_Window_Find or not api.JS_Window_IsWindow then return end
+   if not windowsOS or not api.JS_Window_Find or not api.JS_Window_IsWindow then return end
    local own=title and api.JS_Window_Find(title,true)
    local main=api.GetMainHwnd and api.GetMainHwnd()
    local candidates,seen={},{}

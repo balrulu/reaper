@@ -1,5 +1,5 @@
 -- @description LOOP RM STUDIO
--- @version 0.6.20
+-- @version 0.6.21
 -- @author Balrulu
 -- @provides
 --   . > ../
@@ -10,7 +10,7 @@
 
 local reaper=reaper
 do
--- BEGIN BLT NATIVE DIALOGS 1.2.2 (generated from _shared/BLT_NativeDialogs.lua)
+-- BEGIN BLT NATIVE DIALOGS 1.2.3 (generated from _shared/BLT_NativeDialogs.lua)
 local BLTNativeDialogs=(function()
  local M={}
  function M.install(api,view)
@@ -47,7 +47,7 @@ local BLTNativeDialogs=(function()
    return false
   end
   local function suspend(session)
-   if not api.JS_Window_Find or not api.JS_Window_IsWindow then return end
+   if not windowsOS or not api.JS_Window_Find or not api.JS_Window_IsWindow then return end
    local own=title and api.JS_Window_Find(title,true)
    local main=api.GetMainHwnd and api.GetMainHwnd()
    local candidates,seen={},{}
@@ -187,7 +187,12 @@ local BLTNativeDialogs=(function()
    local function finish()
     if active then local session=active;active=nil;local failed=restore(session);if #failed>0 then warn() end end
     if pending then pending.windows=restore(pending);if #pending.windows>0 then warn() end end
-    if exitHandler then exitHandler() end
+    local ok,why=true,nil
+    if exitHandler then ok,why=xpcall(exitHandler,debug.traceback)end
+    if view and type(view.inputContext)=='function'and type(view.quit)=='function'then
+     local closed,err=pcall(view.quit);if not closed and ok then ok,why=false,err end
+    end
+    if not ok then error(why,0)end
    end
    P.atexit=function(fn) exitHandler=fn;return api.atexit(finish) end
    api.atexit(finish)
@@ -1163,11 +1168,16 @@ function M.new(api,title,width,height,section)
  local imageCache,retiredImages={},{}
  local gradientFrame=0
  local retireEpoch,retireFrame=floor(api.time_precise()*10),0
+ local function detach(image)
+  if type(I.ValidatePtr)~='function' or I.ValidatePtr(ctx,'ImGui_Context*')then
+   pcall(I.Detach,ctx,image)
+  end
+ end
  function H:attachImage(image)
   I.Attach(ctx,image);imageCache[image]=true
  end
  function H:releaseImage(image,batched)
-  if self.closing or batched then retiredImages[image]=nil;imageCache[image]=nil;I.Detach(ctx,image)
+  if self.closing or batched then retiredImages[image]=nil;imageCache[image]=nil;detach(image)
   elseif not retiredImages[image] then retiredImages[image]={frame=gradientFrame,time=api.time_precise()} end
  end
  function H:retainImages()
@@ -1194,7 +1204,7 @@ function M.new(api,title,width,height,section)
   local now=api.time_precise()
   for image,retired in pairs(retiredImages) do
    if self.closing or gradientFrame-retired.frame>=2 and now-retired.time>=.1 then
-    imageCache[image]=nil;retiredImages[image]=nil;I.Detach(ctx,image)
+    imageCache[image]=nil;retiredImages[image]=nil;detach(image)
    end
   end
  end
@@ -4892,7 +4902,7 @@ function Core.project_region_selection(project)
  end
  return selected
 end
-function Core.set_project_region_selection(project,selected)
+function Core.set_project_region_selection(project,selected,allow_missing)
  assert(type(R.SetRegionOrMarkerInfo_Value)=='function','REAPERのリージョン選択APIを利用できません。REAPERを更新してください。')
  local found={}
  for i=0,R.GetNumRegionsOrMarkers(project)-1 do
@@ -4907,7 +4917,7 @@ function Core.set_project_region_selection(project,selected)
    end
   end
  end
- for id in pairs(selected) do assert(found[id],'レンダー対象リージョンが見つかりません: '..id) end
+ if not allow_missing then for id in pairs(selected) do assert(found[id],'レンダー対象リージョンが見つかりません: '..id) end end
  if type(R.UpdateArrange)=='function' then R.UpdateArrange() end
 end
 function Core.snapshot_render(project)
@@ -4926,7 +4936,7 @@ function Core.restore_render(s)
  for _,key in ipairs(Core.render_strings) do R.GetSetProjectInfo_String(s.project,key,s.s[key],true) end
  -- Work around REAPER sink configuration order sensitivity.
  R.GetSetProjectInfo_String(s.project,'RENDER_FORMAT',s.s.RENDER_FORMAT,true)
- if s.regions then Core.set_project_region_selection(s.project,s.regions) end
+ if s.regions then Core.set_project_region_selection(s.project,s.regions,true) end
  if s.selection_changed then
   R.GetSet_LoopTimeRange2(s.project,true,false,s.selection[1],s.selection[2],false)
   R.GetSet_LoopTimeRange2(s.project,true,true,s.loop[1],s.loop[2],false)
@@ -5220,7 +5230,7 @@ local function cf_read(j,source,role,start,n,buffer)
  return buffer.table(1,n*source.ch)
 end
 function Core.crossfade_step(j)
- assert(R.EnumProjects(-1,'')==j.project and R.GetProjectStateChangeCount(j.project)==j.revision,'処理中にプロジェクトが変更されました。やり直してください。')
+ assert(R.EnumProjects(-1,'')==j.project and R.GetProjectStateChangeCount(j.project)==j.revision,Core.context_changed)
  local p=j.plans[j.index];if not p then return true end
  local pre_guard=p.pre_guard or 0;local post_guard=p.post_guard or 0
  local file_frames=p.file_frames or (pre_guard+p.output_frames+post_guard)
@@ -5294,16 +5304,16 @@ function Core.crossfade_step(j)
  return j.index>#j.plans
 end
 function Core.crossfade_commit(j)
- assert(R.EnumProjects(-1,'')==j.project and R.GetProjectStateChangeCount(j.project)==j.revision,'プロジェクトが変更されました。')
+ assert(R.EnumProjects(-1,'')==j.project and R.GetProjectStateChangeCount(j.project)==j.revision,Core.context_changed)
  local has_mixed=false
  for _,p in ipairs(j.plans) do
   if p.mixed_commit then
    has_mixed=true
    for _,snapshot in ipairs(p.snapshots or {}) do
-    local ok,chunk=R.GetItemStateChunk(snapshot.item,'',false);assert(ok and chunk==snapshot.chunk,'クロスフェード対象のアイテムが変更されました。')
+    local ok,chunk=R.GetItemStateChunk(snapshot.item,'',false);assert(ok and chunk==snapshot.chunk,Core.context_changed)
    end
   else
-   local ok,chunk=R.GetItemStateChunk(p.item,'',false);assert(ok and chunk==p.chunk,'アイテムが変更されました。')
+   local ok,chunk=R.GetItemStateChunk(p.item,'',false);assert(ok and chunk==p.chunk,Core.context_changed)
   end
  end
  if has_mixed then assert(type(R.Undo_DoUndo2)=='function','安全なクロスフェード置換に必要なUndo APIを利用できません。') end
@@ -5690,7 +5700,7 @@ function Core.loop_extension_items(project,p,new_start,new_end,relative)
 end
 
 function Core.loop_adjust_step(j)
- assert(R.EnumProjects(-1,'')==j.project and R.GetProjectStateChangeCount(j.project)==j.revision,'解析中にプロジェクトが変更されました。やり直してください。')
+ assert(R.EnumProjects(-1,'')==j.project and R.GetProjectStateChangeCount(j.project)==j.revision,Core.context_changed)
  local p=j.plans[j.index];if not p then return true end
  local w=p.windows[j.window];local source=w.source or p
  if j.open_source~=source then
@@ -5777,7 +5787,7 @@ function Core.loop_adjust_step(j)
 end
 
 function Core.loop_adjust_commit(j)
- assert(R.EnumProjects(-1,'')==j.project and R.GetProjectStateChangeCount(j.project)==j.revision,'プロジェクトが変更されました。')
+ assert(R.EnumProjects(-1,'')==j.project and R.GetProjectStateChangeCount(j.project)==j.revision,Core.context_changed)
  for _,p in ipairs(j.plans) do
   for _,snapshot in ipairs(p.snapshots or {{item=p.item,take=p.take}}) do
    if R.ValidatePtr2 then assert(R.ValidatePtr2(j.project,snapshot.item,'MediaItem*'),'解析したアイテムが削除されました。') end
@@ -6119,7 +6129,7 @@ function UI.select_insert_color(kind)
   if not finite(v) or v%1~=0 or v<0 or v>255 then notice('カラー選択を開けませんでした。',true);return end
  end
  if r==nil or g==nil or b==nil then notice('カラー選択を開けませんでした。',true);return end
- assert(project==R.EnumProjects(-1,''),'プロジェクトが変わりました。追加をやり直してください。')
+ assert(project==R.EnumProjects(-1,''),Core.context_changed)
  A[kind..'_color']=(r<<16)|(g<<8)|b;UI.refresh()
 end
 function UI.cleanup_raw()
@@ -6134,6 +6144,7 @@ function UI.cleanup_raw()
  A.raw_delete_at=R.time_precise()+2
  return false
 end
+Core.context_changed={}
 function UI.safe(fn,...)
  local ok,err=xpcall(fn,debug.traceback,...)
  if not ok then
@@ -6151,7 +6162,9 @@ function UI.safe(fn,...)
   cleaned=cleanup_ok and cleaned
   local msg=BLT.publicError(err)
   if not cleaned then msg=msg..'\n\n一時WAVを削除できませんでした。終了前に再試行します。' end
-  notice(msg,true);BLT.recoverInput(A,msg)
+  if err==Core.context_changed and cleaned then A.status='';A.warning=false;UI.dirty()
+  else notice(msg,true) end
+  BLT.recoverInput(A,err==Core.context_changed and cleaned and '' or msg)
  end
  return ok
 end
@@ -6343,6 +6356,11 @@ function UI.set_add_mode(mode)
  A.add_mode=mode;A.add_kind_flash=R.time_precise();UI.refresh()
 end
 function UI.poll(now,force,render_prepare)
+ local active=R.EnumProjects(-1,'')
+ if active~=A.project then
+  UI.cancel();A.popup=nil;A.name_dialog=nil;pressed=nil
+  UI.load_project(active);force=true
+ end
  if (A.busy and not render_prepare) or (not force and now<A.poll_at) then return end
  if not Media.ready() then return end;A.poll_at=now+.12
  local project=R.EnumProjects(-1,'')
@@ -6384,7 +6402,7 @@ function UI.choose_directory()
  else UI.begin_edit('field_directory',A,'directory',nil) end
 end
 function UI.undo(label,flags,fn)
- assert(R.EnumProjects(-1,'')==A.project,'プロジェクトが変わりました。')
+ assert(R.EnumProjects(-1,'')==A.project,Core.context_changed)
  R.Undo_BeginBlock2(A.project)
  local ok,err=xpcall(fn,debug.traceback)
  R.Undo_EndBlock2(A.project,'BLT LOOP RM STUDIO: '..label,flags);R.UpdateArrange();UI.poll(R.time_precise(),true)
@@ -6406,7 +6424,7 @@ function UI.project_undo()
  notice('元に戻しました。'..(description and description~='' and ' '..description or ''),false)
 end
 function UI.add_commit(kind,ranges,names,project)
- assert(project==R.EnumProjects(-1,''),'プロジェクトが変わりました。追加をやり直してください。')
+ assert(project==R.EnumProjects(-1,''),Core.context_changed)
  UI.undo(Core.names[kind]..'を追加',8,function()
   local c=UI.insert_color(kind);local native=R.ColorToNative(floor(c[1]*255+.5),floor(c[2]*255+.5),floor(c[3]*255+.5))|0x1000000
   local added={}
@@ -6480,7 +6498,7 @@ function UI.stop_for_adjustment(project)
  end
 end
 function UI.follow_loop_selection(project,plans)
- assert(project==A.project,'プロジェクトが変わりました。')
+ assert(project==A.project,Core.context_changed)
  local start,finish=Core.adjusted_loop_bounds(plans)
  R.GetSet_LoopTimeRange2(project,true,false,start,finish,false)
  if R.UpdateTimeline then R.UpdateTimeline() else R.UpdateArrange() end
@@ -6667,7 +6685,7 @@ function UI.start_copy(source,p,target)
  else A.progress=0;notice('リージョン情報を埋め込んでいます…',false) end
 end
 function UI.render_one(p,batch_index,batch_count,target)
- assert(R.EnumProjects(-1,'')==A.project,'書き出し中にプロジェクトが切り替わりました。')
+ assert(R.EnumProjects(-1,'')==A.project,Core.context_changed)
  target=target or UI.output_path(p,batch_index,batch_count)
  local token=R.genGuid():gsub('[^%w]','')
  -- Keep path resolution and native metadata wildcards identical to previous releases.
@@ -6706,7 +6724,7 @@ end
 function UI.render_step()
  local b=A.render_batch
  if not b or not b.presented or A.closed or A.closing then return end
- assert(R.EnumProjects(-1,'')==b.project,'書き出し中にプロジェクトが切り替わりました。')
+ assert(R.EnumProjects(-1,'')==b.project,Core.context_changed)
  if not Media.ready() then return end
  local phase=b.phase
  if phase=='prepare' then
@@ -6876,7 +6894,7 @@ function UI.preview_step()
  local ok,done=pcall(Core.loop_adjust_step,j)
  if not ok then
   Core.loop_audio_close(j);A.pjob=nil;A.seam=nil;A.seam_hold=nil;A.seam_refreshing=false
-  A.seam_problem=tostring(done):gsub('^.-:%d+: ','');UI.dirty()
+  A.seam_problem=done~=Core.context_changed and tostring(done):gsub('^.-:%d+: ','') or nil;UI.dirty()
  elseif done then
   A.pjob=nil;A.seam=j.plans;A.seam_hold=nil;A.seam_refreshing=false
   UI.dirty()
@@ -6884,9 +6902,9 @@ function UI.preview_step()
 end
 
 function UI.move_loop_drag(d)
- assert(R.EnumProjects(-1,'')==A.project,'ドラッグ中にプロジェクトが変わりました。やり直してください。')
+ assert(R.EnumProjects(-1,'')==A.project,Core.context_changed)
  UI.stop_for_adjustment(A.project)
- assert(R.GetProjectStateChangeCount(A.project)==d.revision,'ドラッグ中にプロジェクトが変更されました。やり直してください。')
+ assert(R.GetProjectStateChangeCount(A.project)==d.revision,Core.context_changed)
  A.rows=Core.project_rows(A.project)
  local items=UI.loop_target_items(A.project,'drag',false,d.selected)
  local p=Core.loop_move_plan(A.project,A.rows,d.selected,d.edge,d.delta,d.relative,items)
@@ -7262,7 +7280,7 @@ wave=BLT.LoopStudioWave.new(Host,R,shell.typography,Language,C)
 Media.state=A;Media.onchange=UI.dirty
 mediaGraphics.getchar=function() return Host.focused and 6 or 4 end
 BLT.recoverInput=function(_,err)
- cancelEdit();A.popup=nil;A.name_dialog=nil;A.seam_drag=nil;U.down=false;pressed=nil;UI.dirty();BLT.logError(err)
+ cancelEdit();A.popup=nil;A.name_dialog=nil;A.seam_drag=nil;U.down=false;pressed=nil;UI.dirty();if err and err~='' then BLT.logError(err) end
 end
 local hintID,hintText,tooltipID,tooltipSince
 local function sx(x) return ox+x*scale end

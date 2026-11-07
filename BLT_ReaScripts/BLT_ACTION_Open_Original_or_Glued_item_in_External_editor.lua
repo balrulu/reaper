@@ -10,7 +10,7 @@
 
 local reaper=reaper
 do
--- BEGIN BLT NATIVE DIALOGS 1.2.1 (generated from _shared/BLT_NativeDialogs.lua)
+-- BEGIN BLT NATIVE DIALOGS 1.2.3 (generated from _shared/BLT_NativeDialogs.lua)
 local BLTNativeDialogs=(function()
  local M={}
  function M.install(api,view)
@@ -47,7 +47,7 @@ local BLTNativeDialogs=(function()
    return false
   end
   local function suspend(session)
-   if not api.JS_Window_Find or not api.JS_Window_IsWindow then return end
+   if not windowsOS or not api.JS_Window_Find or not api.JS_Window_IsWindow then return end
    local own=title and api.JS_Window_Find(title,true)
    local main=api.GetMainHwnd and api.GetMainHwnd()
    local candidates,seen={},{}
@@ -187,7 +187,12 @@ local BLTNativeDialogs=(function()
    local function finish()
     if active then local session=active;active=nil;local failed=restore(session);if #failed>0 then warn() end end
     if pending then pending.windows=restore(pending);if #pending.windows>0 then warn() end end
-    if exitHandler then exitHandler() end
+    local ok,why=true,nil
+    if exitHandler then ok,why=xpcall(exitHandler,debug.traceback)end
+    if view and type(view.inputContext)=='function'and type(view.quit)=='function'then
+     local closed,err=pcall(view.quit);if not closed and ok then ok,why=false,err end
+    end
+    if not ok then error(why,0)end
    end
    P.atexit=function(fn) exitHandler=fn;return api.atexit(finish) end
    api.atexit(finish)
@@ -202,7 +207,13 @@ local BLTNativeDialogs=(function()
   end
   for _,name in ipairs({'GetUserInputs','MB','ShowMessageBox','GetUserFileName','GetUserFileNameForRead','JS_Dialog_BrowseForSaveFile','JS_Dialog_BrowseForOpenFiles','JS_Dialog_BrowseForFolder','GR_SelectColor','Main_OnCommand','Main_OnCommandEx','CF_SendActionShortcut','MIDIEditor_LastFocused_OnCommand'}) do
    local fn=api[name]
-   if type(fn)=='function' then P[name]=function(...) return call(fn,...) end end
+   if type(fn)=='function' then
+    local transport=name=='Main_OnCommand' or name=='Main_OnCommandEx'
+    P[name]=function(...)
+     if transport and select(1,...)==40044 then return fn(...) end
+     return call(fn,...)
+    end
+   end
   end
   if type(api.GetSetProjectInfo_String)=='function' then
    local fn=api.GetSetProjectInfo_String

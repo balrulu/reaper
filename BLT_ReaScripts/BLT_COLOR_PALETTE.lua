@@ -10,7 +10,7 @@
 
 local reaper=reaper
 do
--- BEGIN BLT NATIVE DIALOGS 1.2.2 (generated from _shared/BLT_NativeDialogs.lua)
+-- BEGIN BLT NATIVE DIALOGS 1.2.3 (generated from _shared/BLT_NativeDialogs.lua)
 local BLTNativeDialogs=(function()
  local M={}
  function M.install(api,view)
@@ -47,7 +47,7 @@ local BLTNativeDialogs=(function()
    return false
   end
   local function suspend(session)
-   if not api.JS_Window_Find or not api.JS_Window_IsWindow then return end
+   if not windowsOS or not api.JS_Window_Find or not api.JS_Window_IsWindow then return end
    local own=title and api.JS_Window_Find(title,true)
    local main=api.GetMainHwnd and api.GetMainHwnd()
    local candidates,seen={},{}
@@ -187,7 +187,12 @@ local BLTNativeDialogs=(function()
    local function finish()
     if active then local session=active;active=nil;local failed=restore(session);if #failed>0 then warn() end end
     if pending then pending.windows=restore(pending);if #pending.windows>0 then warn() end end
-    if exitHandler then exitHandler() end
+    local ok,why=true,nil
+    if exitHandler then ok,why=xpcall(exitHandler,debug.traceback)end
+    if view and type(view.inputContext)=='function'and type(view.quit)=='function'then
+     local closed,err=pcall(view.quit);if not closed and ok then ok,why=false,err end
+    end
+    if not ok then error(why,0)end
    end
    P.atexit=function(fn) exitHandler=fn;return api.atexit(finish) end
    api.atexit(finish)
@@ -1017,11 +1022,16 @@ function M.new(api,title,width,height,section)
  local imageCache,retiredImages={},{}
  local gradientFrame=0
  local retireEpoch,retireFrame=floor(api.time_precise()*10),0
+ local function detach(image)
+  if type(I.ValidatePtr)~='function' or I.ValidatePtr(ctx,'ImGui_Context*')then
+   pcall(I.Detach,ctx,image)
+  end
+ end
  function H:attachImage(image)
   I.Attach(ctx,image);imageCache[image]=true
  end
  function H:releaseImage(image,batched)
-  if self.closing or batched then retiredImages[image]=nil;imageCache[image]=nil;I.Detach(ctx,image)
+  if self.closing or batched then retiredImages[image]=nil;imageCache[image]=nil;detach(image)
   elseif not retiredImages[image] then retiredImages[image]={frame=gradientFrame,time=api.time_precise()} end
  end
  function H:retainImages()
@@ -1048,7 +1058,7 @@ function M.new(api,title,width,height,section)
   local now=api.time_precise()
   for image,retired in pairs(retiredImages) do
    if self.closing or gradientFrame-retired.frame>=2 and now-retired.time>=.1 then
-    imageCache[image]=nil;retiredImages[image]=nil;I.Detach(ctx,image)
+    imageCache[image]=nil;retiredImages[image]=nil;detach(image)
    end
   end
  end
