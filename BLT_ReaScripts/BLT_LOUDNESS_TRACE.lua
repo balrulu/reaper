@@ -1,5 +1,5 @@
 -- @description LOUDNESS TRACE
--- @version 0.8.19
+-- @version 0.8.20
 -- @author Balrulu
 -- @provides
 --   . > ../
@@ -3255,7 +3255,7 @@ end
 
 local Media=create_media_gate(reaper,mediaGraphics)
 
-local VERSION="0.8.19"
+local VERSION="0.8.20"
 local MAX_HISTORY_ROWS=126000
 local MAX_SAVE_BYTES=12*1024*1024
 local Core = {}
@@ -4906,11 +4906,12 @@ function ChildGraph.dispose()
   local window=ChildGraph.window
   ChildGraph.window=nil
   if window and R.JS_Window_IsWindow(window) then
+    if ChildGraph.seed then BLT.cleanup(R.JS_Composite_Unlink,window,ChildGraph.seed,false) end
     if A.bitmap and A.linked then BLT.cleanup(R.JS_Composite_Unlink,window,A.bitmap,false) end
     BLT.cleanup(R.JS_Window_Destroy,window)
   end
   BLT.cleanup(ChildGraph.restore_parent)
-  ChildGraph.parent,ChildGraph.events,ChildGraph.parentAddress=nil,nil,nil
+  ChildGraph.parent,ChildGraph.events,ChildGraph.parentAddress,ChildGraph.seed,ChildGraph.inputMessage=nil,nil,nil,nil,nil
   ChildGraph.pending,ChildGraph.frames,ChildGraph.content,ChildGraph.damage=nil,nil,nil,nil
   ChildGraph.width,ChildGraph.top,ChildGraph.height,ChildGraph.visible,ChildGraph.sourceY=nil,nil,nil,nil,nil
   ChildGraph.mouseX,ChildGraph.version,ChildGraph.inputStamp,ChildGraph.frontWidth,ChildGraph.frontHeight=nil,nil,nil,nil,nil
@@ -4941,8 +4942,13 @@ function ChildGraph.create(parent)
     assert(R.JS_Window_EnableMetal(window)~=1,'The graph child window requires Metal drawing compatibility')
     ChildGraph.parentAddress=R.JS_Window_AddressFromHandle(parent)
     ChildGraph.events,ChildGraph.pending={},{}
+    local seed=A.backBitmap or A.bitmap or A.baseBitmap
+    local code=R.JS_Composite(window,0,0,0,0,seed,0,0,0,0,false)
+    assert(code==1,'Cannot initialize graph drawing hook: '..tostring(code))
+    ChildGraph.seed=seed
     ChildGraph.inputStamp=0
-    assert(R.JS_WindowMessage_Intercept(window,'WM_NCHITTEST',true)==1,'Cannot monitor graph input activity')
+    local ok,result=pcall(R.JS_WindowMessage_Intercept,window,'0x0084',true)
+    ChildGraph.inputMessage=ok and result==1 and '0x0084' or nil
     for _,name in ipairs({'WM_MOUSEMOVE','WM_LBUTTONDOWN','WM_LBUTTONUP','WM_LBUTTONDBLCLK',
       'WM_RBUTTONDOWN','WM_RBUTTONUP','WM_RBUTTONDBLCLK','WM_MBUTTONDOWN','WM_MBUTTONUP','WM_MBUTTONDBLCLK',
       'WM_MOUSEWHEEL','WM_MOUSEHWHEEL'}) do
@@ -4953,15 +4959,19 @@ function ChildGraph.create(parent)
     end
     assert(R.JS_WindowMessage_Intercept(window,'WM_MOUSEACTIVATE',false)==1,'Cannot protect graph keyboard focus')
     assert(R.JS_WindowMessage_Intercept(window,'WM_SETCURSOR',false)==1,'Cannot forward graph cursor feedback')
+    R.JS_Composite_Unlink(window,ChildGraph.seed,false);ChildGraph.seed=nil
   end
 end
 function ChildGraph.forward()
   if not ChildGraph.events then return end
   local pending=ChildGraph.pending
   local dx,dy
-  local found,_,stamp=R.JS_WindowMessage_Peek(ChildGraph.window,'WM_NCHITTEST')
-  local pointer=found and stamp>0 and stamp~=ChildGraph.inputStamp
-  if found then ChildGraph.inputStamp=stamp end
+  local pointer=true
+  if ChildGraph.inputMessage then
+    local found,_,stamp=R.JS_WindowMessage_Peek(ChildGraph.window,ChildGraph.inputMessage)
+    pointer=not found or stamp>0 and stamp~=ChildGraph.inputStamp
+    if found then ChildGraph.inputStamp=stamp else ChildGraph.inputMessage=nil end
+  end
   for _,event in ipairs(ChildGraph.events) do
     if pointer or event.wheel then
       local found,_,at,lo,hi,x,y=R.JS_WindowMessage_Peek(ChildGraph.window,event.name)
