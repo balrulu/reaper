@@ -1,5 +1,5 @@
 -- @description LOUDNESS TRACE
--- @version 0.8.18
+-- @version 0.8.19
 -- @author Balrulu
 -- @provides
 --   . > ../
@@ -3255,7 +3255,7 @@ end
 
 local Media=create_media_gate(reaper,mediaGraphics)
 
-local VERSION="0.8.5"
+local VERSION="0.8.19"
 local MAX_HISTORY_ROWS=126000
 local MAX_SAVE_BYTES=12*1024*1024
 local Core = {}
@@ -4149,6 +4149,7 @@ local function create_language(api,section,catalog)
 end
 
 local LanguageCatalog={en={
+ ["グラフ描画を停止しました。グラフを一度非表示にすると再試行できます。"]="Graph drawing stopped. Hide and show the graph to retry.",
  ["オフライン測定JSFXを保存できません。"]="Cannot save the offline measurement JSFX.",
  ["オフライン測定JSFXを終了できません。"]="Cannot remove the offline measurement JSFX.",
  ["オフライン測定の共有メモリを確保できません。"]="Cannot reserve shared memory for offline measurement.",
@@ -4235,7 +4236,6 @@ local LanguageCatalog={en={
  ["保存情報が不正です。"]="Invalid saved information.",
  ["保存カーブが不足しています。"]="Missing saved curve data.",
  ["LOUDNESS TRACE: 表示トラックを作成"]="LOUDNESS TRACE: Create display track",
- ["描画用ビットマップを作成できません。"]="Cannot create drawing bitmap.",
  ["解析ソース"]="Source",
  ["測定開始前にプロジェクトが切り替わりました。"]="Project changed before measurement started.",
  ["測定開始前に時間選択が変更されました。"]="Time selection changed before measurement started.",
@@ -4278,7 +4278,6 @@ local LanguageCatalog={en={
  ["グラフ ON"]="Graph ON",
  ["グラフ OFF"]="Graph OFF",
  ["LOUDNESS TRACEはWindows／macOS用です。"]="LOUDNESS TRACE requires Windows or macOS.",
- ["現在のMetal設定ではグラフを重ね描画できません。REAPERの高度なUI設定でMetalを無効にするか、描画互換モードを選び、必要に応じてREAPERを再起動してください。"]="The current Metal mode cannot display the graph overlay. Disable Metal or enable drawing compatibility in REAPER's advanced UI settings, then restart REAPER if needed.",
  ["リアルタイム"]="Real-time",
  ["リアルタイム測定をOFFにしました。グラフは保持します。"]="Real-time recording is OFF. Recorded graph retained.",
  ["リアルタイムOFF：記録したグラフを表示しています。"]="Real-time OFF: showing recorded graph.",
@@ -4373,7 +4372,7 @@ local LanguageCatalog={en={
 local Language=create_language(reaper,"BLT_LOUDNESS_TRACE",LanguageCatalog)
 
 -- Platform drawing adapter
-local function create_trace_platform(api,graphics)
+local function create_trace_platform(api)
  local osname=api.GetOS()
  local P={mac=osname:match('OSX')~=nil or osname:match('macOS')~=nil,windows=osname:match('Win')~=nil}
  P.api=api
@@ -4419,7 +4418,7 @@ local function create_trace_platform(api,graphics)
  return P
 end
 
-local Platform=create_trace_platform(reaper,gfx)
+local Platform=create_trace_platform(reaper)
 local R=Platform.api
 
 
@@ -4873,7 +4872,12 @@ local required={"SNM_GetIntConfigVar","SNM_SetIntConfigVar","JS_Window_FindChild
   "JS_LICE_Clear","JS_LICE_Blit","JS_LICE_FillRect","JS_LICE_Line","JS_LICE_CreateFont",
   "JS_LICE_DestroyFont","JS_LICE_SetFontFromGDI","JS_LICE_SetFontColor",
   "JS_LICE_SetFontBkColor","JS_LICE_DrawText","JS_GDI_CreateFont","JS_GDI_DeleteObject"}
-if Platform.windows then required[#required+1]="JS_Composite_Delay" end
+for _,name in ipairs({'JS_Window_Create','JS_Window_SetParent','JS_Window_GetParent','JS_Window_Destroy','JS_Window_Show'}) do required[#required+1]=name end
+if Platform.windows then
+  for _,name in ipairs({'JS_Window_GetLong','JS_Window_SetLong','JS_Window_Enable'}) do required[#required+1]=name end
+else
+  for _,name in ipairs({'JS_WindowMessage_Intercept','JS_WindowMessage_Peek','JS_WindowMessage_Send','JS_Window_SetFocus','JS_Window_AddressFromHandle'}) do required[#required+1]=name end
+end
 if Platform.mac then required[#required+1]="JS_Window_EnableMetal" end
 local missing={}
 for _,name in ipairs(required) do if not R.APIExists(name) then missing[#missing+1]=name end end
@@ -4886,37 +4890,180 @@ if not Platform.windows and not Platform.mac then
   Language.mb("LOUDNESS TRACEはWindows／macOS用です。", "LOUDNESS TRACE",0); return
 end
 
-local function restore_composite_delay()
-  if not Platform.windows then return end
-  if A.compositeDelayWindow and A.compositeDelayPrev and R.JS_Window_IsWindow(A.compositeDelayWindow) then
-    local p=A.compositeDelayPrev
-    pcall(R.JS_Composite_Delay,A.compositeDelayWindow,p.min,p.max,p.bitmaps)
+local ChildGraph={epoch=0,clipChildren=0x02000000}
+local function event_order(a,b) return a.time==b.time and a.order<b.order or a.time<b.time end
+function ChildGraph.restore_parent()
+  local parent=ChildGraph.clipParent
+  ChildGraph.clipParent=nil
+  if parent and R.JS_Window_IsWindow(parent) then
+    local style=math.tointeger(R.JS_Window_GetLong(parent,'STYLE'))
+    if style and (style&ChildGraph.clipChildren)~=0 then
+      R.JS_Window_SetLong(parent,'STYLE',style&~ChildGraph.clipChildren)
+    end
   end
-  A.compositeDelayWindow=nil;A.compositeDelayPrev=nil
 end
-local function configure_composite_delay(hwnd)
-  if not Platform.windows then return end
-  if A.compositeDelayWindow==hwnd and A.compositeDelayPrev then return end
-  restore_composite_delay()
+function ChildGraph.dispose()
+  local window=ChildGraph.window
+  ChildGraph.window=nil
+  if window and R.JS_Window_IsWindow(window) then
+    if A.bitmap and A.linked then BLT.cleanup(R.JS_Composite_Unlink,window,A.bitmap,false) end
+    BLT.cleanup(R.JS_Window_Destroy,window)
+  end
+  BLT.cleanup(ChildGraph.restore_parent)
+  ChildGraph.parent,ChildGraph.events,ChildGraph.parentAddress=nil,nil,nil
+  ChildGraph.pending,ChildGraph.frames,ChildGraph.content,ChildGraph.damage=nil,nil,nil,nil
+  ChildGraph.width,ChildGraph.top,ChildGraph.height,ChildGraph.visible,ChildGraph.sourceY=nil,nil,nil,nil,nil
+  ChildGraph.mouseX,ChildGraph.version,ChildGraph.inputStamp,ChildGraph.frontWidth,ChildGraph.frontHeight=nil,nil,nil,nil,nil
+  A.linked=false
+end
+function ChildGraph.create(parent)
+  if Platform.windows then
+    local style=assert(math.tointeger(R.JS_Window_GetLong(parent,'STYLE')),'Cannot read arrange style')
+    if (style&ChildGraph.clipChildren)==0 then
+      ChildGraph.clipParent=parent
+      R.JS_Window_SetLong(parent,'STYLE',style|ChildGraph.clipChildren)
+      assert((math.tointeger(R.JS_Window_GetLong(parent,'STYLE'))&ChildGraph.clipChildren)~=0,'Cannot protect graph from parent painting')
+    end
+  end
+  local window=R.JS_Window_Create('BLT LOUDNESS TRACE Graph','BLT_TRACE_GRAPH',-32000,-32000,1,1,
+    Platform.windows and 'CHILD,DISABLED,CLIPSIBLINGS' or 'CHILD,CLIPSIBLINGS',parent)
+  assert(window,'Cannot create graph child window')
+  ChildGraph.window,ChildGraph.parent=window,parent
+  ChildGraph.damage={}
+  R.JS_Window_Show(window,'HIDE')
+  R.JS_Window_SetParent(window,parent)
+  assert(R.JS_Window_GetParent(window)==parent,'Cannot attach graph child window')
+  if Platform.windows then
+    R.JS_Window_Enable(window,false)
+    local ex=math.tointeger(R.JS_Window_GetLong(window,'EXSTYLE')) or 0
+    R.JS_Window_SetLong(window,'EXSTYLE',(ex&~0x00040410)|0x08000000)
+  else
+    assert(R.JS_Window_EnableMetal(window)~=1,'The graph child window requires Metal drawing compatibility')
+    ChildGraph.parentAddress=R.JS_Window_AddressFromHandle(parent)
+    ChildGraph.events,ChildGraph.pending={},{}
+    ChildGraph.inputStamp=0
+    assert(R.JS_WindowMessage_Intercept(window,'WM_NCHITTEST',true)==1,'Cannot monitor graph input activity')
+    for _,name in ipairs({'WM_MOUSEMOVE','WM_LBUTTONDOWN','WM_LBUTTONUP','WM_LBUTTONDBLCLK',
+      'WM_RBUTTONDOWN','WM_RBUTTONUP','WM_RBUTTONDBLCLK','WM_MBUTTONDOWN','WM_MBUTTONUP','WM_MBUTTONDBLCLK',
+      'WM_MOUSEWHEEL','WM_MOUSEHWHEEL'}) do
+      assert(R.JS_WindowMessage_Intercept(window,name,false)==1,'Cannot forward graph input: '..name)
+      local wheel=name=='WM_MOUSEWHEEL' or name=='WM_MOUSEHWHEEL'
+      ChildGraph.events[#ChildGraph.events+1]={name=name,time=0,order=#ChildGraph.events+1,wheel=wheel,
+        focus=name:find('DOWN',1,true)~=nil or name:find('DBLCLK',1,true)~=nil}
+    end
+    assert(R.JS_WindowMessage_Intercept(window,'WM_MOUSEACTIVATE',false)==1,'Cannot protect graph keyboard focus')
+    assert(R.JS_WindowMessage_Intercept(window,'WM_SETCURSOR',false)==1,'Cannot forward graph cursor feedback')
+  end
+end
+function ChildGraph.forward()
+  if not ChildGraph.events then return end
+  local pending=ChildGraph.pending
+  local dx,dy
+  local found,_,stamp=R.JS_WindowMessage_Peek(ChildGraph.window,'WM_NCHITTEST')
+  local pointer=found and stamp>0 and stamp~=ChildGraph.inputStamp
+  if found then ChildGraph.inputStamp=stamp end
+  for _,event in ipairs(ChildGraph.events) do
+    if pointer or event.wheel then
+      local found,_,at,lo,hi,x,y=R.JS_WindowMessage_Peek(ChildGraph.window,event.name)
+      if found and at>0 and at~=event.time then
+        event.time=at
+        if not event.wheel then
+          if not dx then
+            local sx,sy=R.JS_Window_ClientToScreen(ChildGraph.window,0,0)
+            dx,dy=R.JS_Window_ScreenToClient(ChildGraph.parent,sx,sy)
+          end
+          x,y=x+dx,y+dy
+        end
+        event.lo,event.hi,event.x,event.y=lo,hi,x,y
+        pending[#pending+1]=event
+      end
+    end
+  end
+  if #pending>1 then table.sort(pending,event_order) end
+  for i=1,#pending do
+    local event=pending[i];pending[i]=nil
+    if event.focus then R.JS_Window_SetFocus(ChildGraph.parent) end
+    R.JS_WindowMessage_Send(ChildGraph.parent,event.name,event.lo,event.hi,event.x,event.y)
+    if event.name=='WM_MOUSEMOVE' then
+      R.JS_WindowMessage_Send(ChildGraph.parent,'WM_SETCURSOR',ChildGraph.parentAddress,0,1,0x0200)
+    end
+  end
+end
+function ChildGraph.publish(width,visible,sourceY)
+  local previous,nextFrame=A.bitmap,A.backBitmap
+  local code=R.JS_Composite(ChildGraph.window,0,0,width,visible,nextFrame,0,sourceY,width,visible,false)
+  assert(code==1,'Child graph publication failed: '..tostring(code))
+  A.bitmap,A.backBitmap=nextFrame,nil
+  if A.linked then
+    local entry=ChildGraph.frames[previous]
+    if not entry or ChildGraph.frontWidth~=A.bw or ChildGraph.frontHeight~=A.bh then
+      R.JS_Composite_Unlink(ChildGraph.window,previous,false)
+      R.JS_LICE_DestroyBitmap(previous)
+    else
+      A.framePool=A.framePool or {}
+      entry.bitmap,entry.window,entry.linked,entry.ready=previous,ChildGraph.window,true,ChildGraph.epoch+2
+      A.framePool[#A.framePool+1]=entry
+      R.JS_Composite_Unlink(ChildGraph.window,previous,false);entry.linked=false
+    end
+  else
+    if previous and (ChildGraph.frontWidth and ChildGraph.frontWidth~=A.bw or ChildGraph.frontHeight and ChildGraph.frontHeight~=A.bh) then
+      R.JS_LICE_DestroyBitmap(previous)
+    else A.backBitmap=previous end
+  end
+  A.linked=true
+  ChildGraph.visible,ChildGraph.sourceY=visible,sourceY
+  ChildGraph.frontWidth,ChildGraph.frontHeight=A.bw,A.bh
+end
+function ChildGraph.resize(width,height)
+  ChildGraph.clear_pool()
+  if A.baseBitmap then R.JS_LICE_DestroyBitmap(A.baseBitmap);A.baseBitmap=nil end
+  if A.backBitmap then R.JS_LICE_DestroyBitmap(A.backBitmap);A.backBitmap=nil end
+  if A.bitmap and not A.linked then R.JS_LICE_DestroyBitmap(A.bitmap);A.bitmap=nil end
+  ChildGraph.frames,ChildGraph.content=nil,nil
+  A.baseBitmap=assert(R.JS_LICE_CreateBitmap(true,width,height),'Cannot allocate graph base image')
+  A.backBitmap=assert(R.JS_LICE_CreateBitmap(true,width,height),'Cannot allocate graph staging image')
+  A.bw,A.bh=width,height;A.cache=''
+end
+function ChildGraph.place(width,destY,visible,screenX,screenY)
+  if ChildGraph.width==width and ChildGraph.top==destY and ChildGraph.height==visible then
+    local sx,sy=R.JS_Window_ClientToScreen(ChildGraph.window,0,0)
+    if sx==screenX and sy==screenY+destY then return false end
+  end
+  assert(R.JS_Window_SetPosition(ChildGraph.window,0,destY,width,visible,'TOP','NOACTIVATE'),'Cannot position graph child window')
+  ChildGraph.width,ChildGraph.top,ChildGraph.height=width,destY,visible
+  R.JS_Window_Show(ChildGraph.window,'SHOWNA')
+  return true
+end
 
-  local _,pmin,pmax,pbitmaps=R.JS_Composite_Delay(hwnd,-1,-1,-1)
-  A.compositeDelayWindow=hwnd
-  A.compositeDelayPrev={min=pmin or -1,max=pmax or -1,bitmaps=pbitmaps or -1}
-  R.JS_Composite_Delay(hwnd,.040,.040,2)
-end
-local function unlink()
-  if A.linked and A.arrange and A.bitmap then
-    if R.JS_Window_IsWindow(A.arrange) then R.JS_Composite_Unlink(A.arrange,A.bitmap,true) end
+
+function ChildGraph.clear_pool()
+  for _,entry in ipairs(A.framePool or {}) do
+    if entry.linked and R.JS_Window_IsWindow(entry.window) then BLT.cleanup(R.JS_Composite_Unlink,entry.window,entry.bitmap,false) end
+    BLT.cleanup(R.JS_LICE_DestroyBitmap,entry.bitmap)
   end
-  restore_composite_delay()
-  A.graphContentKey=nil;A.graphCursorPixel=nil;A.graphRects=nil;A.graphClip=nil;A.graphRepair=nil
-  A.linked=false;A.cache='';A.layoutCache=nil;A.paintRect=nil;A.hover=nil;A.lastArrangeMouseX=nil
-  A.graphMouseX,A.graphMouseY,A.graphMouseDown=nil,nil,nil
-  A.graphTransport=nil;A.graphForeground=nil;A.graphActive=nil
+  A.framePool=nil
+end
+function ChildGraph.acquire(width,height)
+  local pool=A.framePool
+  if pool then
+    for i,entry in ipairs(pool) do
+      if not entry.linked and entry.ready<=ChildGraph.epoch then table.remove(pool,i);return entry.bitmap end
+    end
+  end
+  return assert(R.JS_LICE_CreateBitmap(true,width,height),'Cannot allocate test frame buffer')
+end
+
+
+local function unlink()
+  if ChildGraph.window or ChildGraph.clipParent then ChildGraph.dispose() end
+  ChildGraph.failed=nil
+  A.graphCursorPixel,A.graphRects,A.graphClip=nil,nil,nil
+  A.linked=false;A.cache='';A.hover=nil
 end
 local function dispose_bitmap()
   unlink()
   A.drawBitmap=nil
+  ChildGraph.clear_pool()
   if A.baseBitmap then R.JS_LICE_DestroyBitmap(A.baseBitmap);A.baseBitmap=nil end
   if A.backBitmap then R.JS_LICE_DestroyBitmap(A.backBitmap); A.backBitmap=nil end
   if A.bitmap then R.JS_LICE_DestroyBitmap(A.bitmap); A.bitmap=nil end
@@ -5838,7 +5985,7 @@ local function chart(width,height,first,last)
   end
 end
 
-local function chart_overlay(width,height,first,last,mx)
+local function chart_overlay(width,height,first,last,mx,cursor)
   if height<96 then A.hover=nil;return {} end
   local bottom=height-30
   local function xx(t) return Core.time_x(t,first,last,width) end
@@ -5847,8 +5994,6 @@ local function chart_overlay(width,height,first,last,mx)
     Core.graph_damage(rects,x1-2,y1-2,x2+2,y2+2,width,height)
   end
   local data=A.data
-  local cursor=R.GetCursorPositionEx(A.project)
-  if (R.GetPlayStateEx(A.project)&1)==1 then cursor=R.GetPlayPositionEx(A.project) end
   local cx=xx(cursor)
   if cx>=0 and cx<=width then lline(cx,28,cx,height,C.text,.60);damage(cx,28,cx,height) end
   A.hover=nil
@@ -5931,180 +6076,103 @@ end
 
 
 
-function Core.present_graph(hwnd,bitmap,x1,x2,destY,sourceY,height)
-  if x2<=x1 or height<=0 then return end
-  if Platform.windows and R.JS_GDI_GetClientDC and R.JS_GDI_ReleaseDC and R.JS_LICE_GetDC and R.JS_GDI_Blit then
-    local dc=R.JS_GDI_GetClientDC(hwnd)
-    if dc then
-      local ok,err=pcall(function()
-        local source=R.JS_LICE_GetDC(bitmap);assert(source,'Graph bitmap DC unavailable')
-        R.JS_GDI_Blit(dc,x1,destY,source,x1,sourceY,x2-x1,height,'SRCCOPY')
-      end)
-      R.JS_GDI_ReleaseDC(dc,hwnd)
-      if ok then return end
-      BLT.logError(err)
-    end
+
+function ChildGraph.update(now)
+  ChildGraph.epoch=ChildGraph.epoch+1
+  if not S.visible or not valid_track() then unlink();return end
+  if R.CountTrackMediaItems(A.track)>0 or R.TrackFX_GetCount(A.track)>0 then unlink();return end
+  local hwnd=A.arrange
+  if not hwnd or not R.JS_Window_IsWindow(hwnd) then hwnd=R.JS_Window_FindChildByID(R.GetMainHwnd(),1000) end
+  if not hwnd then unlink();return end
+  if A.arrange~=hwnd or ChildGraph.window and not R.JS_Window_IsWindow(ChildGraph.window) then
+    dispose_bitmap();A.arrange=hwnd
   end
-  R.JS_Window_InvalidateRect(hwnd,x1,destY,x2,destY+height,false)
-end
-local function overlay(now)
-  if not S.visible then unlink(); return end
-  if not valid_track() then unlink(); return end
-  if R.CountTrackMediaItems(A.track)>0 or R.TrackFX_GetCount(A.track)>0 then
-    unlink(); return
-  end
-  local main=R.GetMainHwnd()
-  local hwnd=R.JS_Window_FindChildByID(main,1000)
-  if not hwnd then unlink(); return end
-  if Platform.mac and A.macCheckedArrange~=hwnd then
-    if A.macMetalRetryAt and now<A.macMetalRetryAt then return end
-    local mode=R.JS_Window_EnableMetal(hwnd)
-    if mode==1 then
-      A.macMetalRetryAt=now+1
-      if A.macMetalNotice~=hwnd then
-        A.macMetalNotice=hwnd
-        Language.mb("現在のMetal設定ではグラフを重ね描画できません。REAPERの高度なUI設定でMetalを無効にするか、描画互換モードを選び、必要に応じてREAPERを再起動してください。", "LOUDNESS TRACE",0)
-      end
-      unlink();return
-    end
-    A.macCheckedArrange=hwnd;A.macMetalNotice=nil;A.macMetalRetryAt=nil
-  end
-  if A.arrange~=hwnd then dispose_bitmap(); A.arrange=hwnd end
-  configure_composite_delay(hwnd)
+  ChildGraph.forward()
   local ok,width,vh=R.JS_Window_GetClientSize(hwnd)
-  if not ok or width<100 or vh<30 then unlink(); return end
-  local y=floor(R.GetMediaTrackInfo_Value(A.track,"I_TCPY"))
-  local height=floor(R.GetMediaTrackInfo_Value(A.track,"I_TCPH"))
+  if not ok or width<100 or vh<30 then unlink();return end
+  local y=floor(R.GetMediaTrackInfo_Value(A.track,'I_TCPY'))
+  local height=floor(R.GetMediaTrackInfo_Value(A.track,'I_TCPH'))
   A.graphClip=A.graphClip or {}
   local destY,visible,sourceY=Core.graph_clip(R,A.track,hwnd,width,vh,y,height,A.graphClip)
-  if visible<1 or height<1 or R.GetMediaTrackInfo_Value(A.track,"B_SHOWINTCP")==0 then unlink(); return end
-  if width>12000 or height>4000 then unlink(); return end
-  if A.bw~=width or A.bh~=height or not A.bitmap or not A.backBitmap or not A.baseBitmap then
-    dispose_bitmap(); A.arrange=hwnd; configure_composite_delay(hwnd)
-    A.bitmap=R.JS_LICE_CreateBitmap(true,width,height)
-    A.backBitmap=R.JS_LICE_CreateBitmap(true,width,height)
-    A.baseBitmap=R.JS_LICE_CreateBitmap(true,width,height)
-    if not A.bitmap or not A.backBitmap or not A.baseBitmap then error("描画用ビットマップを作成できません。") end
-    R.JS_LICE_Clear(A.bitmap,argb(C.bg))
-    A.bw,A.bh=width,height
+  if visible<1 or height<1 or R.GetMediaTrackInfo_Value(A.track,'B_SHOWINTCP')==0 then unlink();return end
+  if width>12000 or height>4000 then unlink();return end
+  if A.bw~=width or A.bh~=height or not A.bitmap or not A.baseBitmap then
+    ChildGraph.resize(width,height)
   end
-  local screenX=R.JS_Window_ClientToScreen(hwnd,0,0)
+  local screenX,screenY=R.JS_Window_ClientToScreen(hwnd,0,0)
   local first,last=R.GetSet_ArrangeView2(A.project,false,screenX,screenX+width,0,0)
-  if last<=first then unlink(); return end
+  if last<=first then unlink();return end
+  if not ChildGraph.window then ChildGraph.create(hwnd) end
   local mouseX,mouseY=R.GetMousePosition()
-  local clientMouseX,clientMouseY=R.JS_Window_ScreenToClient(hwnd,mouseX,mouseY)
-  local hovering=clientMouseX>=0 and clientMouseX<width and clientMouseY>=destY and clientMouseY<destY+visible and R.JS_Window_FromPoint(mouseX,mouseY)==hwnd
-  local mx=hovering and floor(clientMouseX) or nil
+  local mx,my=R.JS_Window_ScreenToClient(hwnd,mouseX,mouseY)
+  if mx>=0 and mx<width and my>=destY and my<destY+visible then
+    local hit=R.JS_Window_FromPoint(mouseX,mouseY)
+    mx=(hit==hwnd or hit==ChildGraph.window) and floor(mx) or nil
+  else mx=nil end
   local playing=(R.GetPlayStateEx(A.project)&1)==1
   local cursor=playing and R.GetPlayPositionEx(A.project) or R.GetCursorPositionEx(A.project)
-  local cursorPixel=floor(Core.time_x(cursor,first,last,width))
-
-
-  local damage={}
-  local function dirty(x1,y1,x2,y2)
-    Core.graph_damage(damage,x1,y1,x2,y2,width,height)
-  end
-  local pointerInArrange=clientMouseX>=0 and clientMouseX<width and clientMouseY>=0 and clientMouseY<vh and R.JS_Window_FromPoint(mouseX,mouseY)==hwnd
-  local arrangeMouseX=pointerInArrange and floor(clientMouseX) or nil
-  local previousMouse=A.lastArrangeMouseX
-  local seek=A.graphCursorPixel and math.abs(cursorPixel-A.graphCursorPixel)>32
-  local transport=A.graphTransport
-  local jumped=false
-  if seek and playing and transport and transport.playing then
-    local elapsed=max(0,now-transport.time)
-    local expected=elapsed*R.Master_GetPlayRate(A.project)
-    jumped=math.abs(cursor-transport.position-expected)>max(.05,elapsed*.25)
-  end
-  transport=transport or {};A.graphTransport=transport
-  transport.position,transport.time,transport.playing=cursor,now,playing
-  local down=R.JS_Mouse_GetState and (R.JS_Mouse_GetState(1)&1)~=0
-  local clicked=down and not A.graphMouseDown
-  local activated=false
-  local foreground=R.JS_Window_GetForeground and R.JS_Window_GetForeground()
-  if foreground and foreground~=A.graphForeground then
-    local owner,active=foreground,false
-    for _=1,32 do
-      if owner==main then active=true;break end
-      local parent=R.JS_Window_GetParent and R.JS_Window_GetParent(owner)
-      if not parent or parent==0 or parent==owner then break end
-      owner=parent
-    end
-    activated=active and A.graphActive==false
-    A.graphForeground,A.graphActive=foreground,active
-  end
-  local rects
-  if activated or jumped or clicked and pointerInArrange then rects={{0,0,width,height}}
-  elseif arrangeMouseX~=previousMouse or arrangeMouseX and clientMouseY~=A.graphMouseY then
-    rects={}
-    local function band(left,right)
-      Core.graph_damage(rects,left-7,0,right+8,height,width,height)
-    end
-    if seek then
-      if previousMouse then band(previousMouse,previousMouse) end
-      if arrangeMouseX then band(arrangeMouseX,arrangeMouseX) end
-    else
-      local from=previousMouse or A.graphMouseX or arrangeMouseX
-      local to=arrangeMouseX or clientMouseX
-      band(min(from,to),max(from,to))
-    end
-  end
-  A.lastArrangeMouseX=arrangeMouseX
-  if rects and #rects>0 then
-    for _,r in ipairs(rects) do dirty(r[1],r[2],r[3],r[4]) end
-    local queue=A.graphRepair or {};A.graphRepair=queue
-    queue[#queue+1]={rects=rects,started=now,at=now+.03}
-  end
-  A.graphMouseX,A.graphMouseY,A.graphMouseDown=clientMouseX,clientMouseY,down
-  local queue=A.graphRepair
-  if queue then
-    for i=#queue,1,-1 do
-      local repair=queue[i]
-      if now>=repair.at then
-        for _,r in ipairs(repair.rects) do dirty(r[1],r[2],r[3],r[4]) end
-        if now>=repair.started+.32 then table.remove(queue,i)
-        else repair.at=repair.started+(now>=repair.started+.12 and .32 or .12) end
-      end
-    end
-    if #queue==0 then A.graphRepair=nil end
-  end
-
-  local contentKey=table.concat({width,height,first,last,A.revision,tostring(A.stale)},':')
-  local key=contentKey..':'..(mx or -1)..':'..cursorPixel
-  local layout=table.concat({width,height,destY,visible,sourceY},':')
-  local moved=not A.linked or layout~=A.layoutCache
-  local redraw=key~=A.cache and (A.cache=='' or seek or now-A.lastPaint>=.05)
+  local pixel=floor(Core.time_x(cursor,first,last,width))
+  local seek=A.graphCursorPixel and math.abs(pixel-A.graphCursorPixel)>32
+  local content=ChildGraph.content
+  local rebuild=A.cache=='' or not content or content.width~=width or content.height~=height
+    or content.first~=first or content.last~=last or content.revision~=A.revision or content.stale~=A.stale
+  local moved=not A.linked or ChildGraph.visible~=visible or ChildGraph.sourceY~=sourceY
+  local redraw=(rebuild or mx~=ChildGraph.mouseX or pixel~=A.graphCursorPixel) and (A.cache=='' or seek or now-A.lastPaint>=.05)
+  local damage=ChildGraph.damage
   if redraw then
-    local rebuild=A.cache=='' or A.graphContentKey~=contentKey
     if rebuild then
       A.drawBitmap=A.baseBitmap;chart(width,height,first,last);A.drawBitmap=nil
+      ChildGraph.version=(ChildGraph.version or 0)+1
+      content=content or {};ChildGraph.content=content
+      content.width,content.height,content.first,content.last,content.revision,content.stale=width,height,first,last,A.revision,A.stale
     end
-    R.JS_LICE_Blit(A.backBitmap,0,0,A.baseBitmap,0,0,width,height,1,'COPY')
-    A.drawBitmap=A.backBitmap
-    local rects=chart_overlay(width,height,first,last,mx)
-    A.drawBitmap=nil
-    R.JS_LICE_Blit(A.bitmap,0,0,A.backBitmap,0,0,width,height,1,'COPY')
-    if rebuild then dirty(0,0,width,height)
+    if not A.backBitmap then A.backBitmap=ChildGraph.acquire(width,height) end
+    local frames=ChildGraph.frames or {};ChildGraph.frames=frames
+    local frame=frames[A.backBitmap]
+    if not frame then frame={};frames[A.backBitmap]=frame end
+    if frame.version~=ChildGraph.version then
+      R.JS_LICE_Blit(A.backBitmap,0,0,A.baseBitmap,0,0,width,height,1,'COPY')
     else
-      for _,set in ipairs({A.graphRects or {},rects}) do
-        for _,r in ipairs(set) do dirty(r[1],r[2],r[3],r[4]) end
+      for _,r in ipairs(frame.rects) do
+        R.JS_LICE_Blit(A.backBitmap,r[1],r[2],A.baseBitmap,r[1],r[2],r[3]-r[1],r[4]-r[2],1,'COPY')
       end
     end
-    A.graphRects=rects;A.graphContentKey=contentKey;A.graphCursorPixel=cursorPixel;A.cache=key;A.lastPaint=now
-  end
-  if moved then
-    local old=A.paintRect
-    local code=R.JS_Composite(hwnd,0,destY,width,visible,A.bitmap,0,sourceY,width,visible,false)
-    if code~=1 then error('JS_Composite failed: '..tostring(code)) end
-    A.linked=true;A.layoutCache=layout;A.paintRect={top=destY,bottom=destY+visible,width=width}
-    if old then
-      if old.top<destY then R.JS_Window_InvalidateRect(hwnd,0,old.top,old.width,min(old.bottom,destY),false) end
-      if old.bottom>destY+visible then R.JS_Window_InvalidateRect(hwnd,0,max(old.top,destY+visible),old.width,old.bottom,false) end
+    A.drawBitmap=A.backBitmap
+    local rects=chart_overlay(width,height,first,last,mx,cursor)
+    A.drawBitmap=nil
+    frame.version,frame.rects=ChildGraph.version,rects
+    ChildGraph.publish(width,visible,sourceY)
+    if rebuild then Core.graph_damage(damage,0,0,width,height,width,height)
+    else
+      if A.graphRects then for _,r in ipairs(A.graphRects) do Core.graph_damage(damage,r[1],r[2],r[3],r[4],width,height) end end
+      for _,r in ipairs(rects) do Core.graph_damage(damage,r[1],r[2],r[3],r[4],width,height) end
     end
-    dirty(0,0,width,height)
+    A.graphRects,A.graphCursorPixel=rects,pixel
+    ChildGraph.mouseX=mx
+    A.cache,A.lastPaint=true,now
+  elseif moved then
+    assert(R.JS_Composite(ChildGraph.window,0,0,width,visible,A.bitmap,0,sourceY,width,visible,false)==1,'Cannot clip graph child image')
+    A.linked=true;ChildGraph.visible,ChildGraph.sourceY=visible,sourceY
   end
-  for _,r in ipairs(damage) do
+  local placed=ChildGraph.place(width,destY,visible,screenX,screenY)
+  if moved or placed then Core.graph_damage(damage,0,0,width,height,width,height) end
+  for i=1,#damage do
+    local r=damage[i];damage[i]=nil
     local top,bottom=max(sourceY,r[2]),min(sourceY+visible,r[4])
-    if bottom>top then Core.present_graph(hwnd,A.bitmap,r[1],r[3],destY+top-sourceY,top,bottom-top) end
+    if bottom>top then R.JS_Window_InvalidateRect(ChildGraph.window,r[1],top-sourceY,r[3],bottom-sourceY,false) end
+  end
+end
+local function overlay(now)
+  if ChildGraph.failed then
+    if not S.visible or not valid_track() then unlink() end
+    return
+  end
+  local ok,err=pcall(ChildGraph.update,now)
+  if not ok then
+    dispose_bitmap();ChildGraph.failed=tostring(err);BLT.logError(err)
+    BLT.notice=Language.text('グラフ描画を停止しました。グラフを一度非表示にすると再試行できます。')
+    BLT.noticeBad,BLT.noticeUntil=true,now+5
+    wake_visuals()
   end
 end
 
