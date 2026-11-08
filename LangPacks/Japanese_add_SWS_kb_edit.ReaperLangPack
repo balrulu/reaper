@@ -1,7 +1,7 @@
 #NAME:日本語 [JP] - For v7.85 + SWS
 ; @description 日本語 [JP] - REAPER + SWS
 ; @author Balrulu
-; @version 7.85.0
+; @version 7.85.1
 ; @changelog Japanese translation for REAPER v7.85 + SWS
 
 ; NOTE: this is the best starting point for making a new langpack.
@@ -4329,8 +4329,8 @@ D4901E1576C36907=トラックの上部から新規トラック挿入を可能に
 1AA4198DCD5FD638=テンポ調整時、インポートされたメディアを自動ストレッチするように設定
 5297592F118C7274=生PCMオーディオ（.SD2等）をインポートする際、再生が正しく行われない可能性を警告
 ;^7CCEF3446F2CADF7=Create folder tracks for imported directories
-2F27C19D361104B1=一般的な読み込み時:
-47AA835071912B3A=メディアエクスプローラー（テンポマッチ有効）からの読み込み時:
+2F27C19D361104B1=通常の読み込み時:
+47AA835071912B3A=メディアエクスプローラー\n（テンポマッチ有効時）:
 C1F802AE7FD2CD1A=テンポ情報が埋め込まれたメディア:
 EDDE80002054B940=テンポが推定されたメディア:
 DAB0FBC37CF53037=空のプロジェクトをメディアに埋め込まれたテンポに合わせるか確認
