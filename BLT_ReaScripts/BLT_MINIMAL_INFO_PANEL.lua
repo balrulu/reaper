@@ -1,5 +1,5 @@
 -- @description MINIMAL INFO PANEL
--- @version 0.2.40
+-- @version 0.2.41
 -- @author Balrulu
 -- @provides
 --   . > ../
@@ -3013,6 +3013,11 @@ function Core.check(s,key)
  end
  return true
 end
+function Core.paste_limit(text)
+ if type(text)~='string'or not text:find('[\r\n]$')then return end
+ local value=text:gsub('[\r\n]+$',''):gsub('[%z\1-\9\11-\31]','')
+ return utf8.len(value)
+end
 function Core.parse(key,text)
  if key=='name' then
   if type(text)~='string' or not utf8.len(text) or text:find('[%z\r\n]') or #text>4096 then return nil,'名前は改行なし・4096バイト以内で入力してください。' end
@@ -4193,6 +4198,28 @@ local function ime_frame()
  local I,ctx,b=IME.api,IME.ctx,E.bounds
  local _,_,_,originX,originY=gfx.inputContext()
  local focus=IME.frames==0
+ local flags=I.InputTextFlags_AutoSelectAll
+ local mods=I.GetKeyMods(ctx);local callback
+ if E.key=='name'and(((mods&I.Mod_Ctrl)~=0 and I.IsKeyPressed(ctx,I.Key_V,true))
+  or(mods&I.Mod_Shift)~=0 and I.IsKeyPressed(ctx,I.Key_Insert,true))then
+  local limit=Core.paste_limit(I.GetClipboardText(ctx))
+  if limit then
+   if(mods&I.Mod_Ctrl)==0 or(mods&I.Mod_Alt)~=0 and not BLT_MAC then
+    local index=0
+    while true do
+     local has,char=I.GetInputQueueCharacter(ctx,index);if not has then break end
+     if char>=32 and char~=127 and(char<0xE000 or char>0xF8FF)then limit=limit+1 end
+     index=index+1
+    end
+   end
+   if IME.pasteContext~=ctx then
+    IME.pasteFilter=I.CreateFunctionFromEEL('remaining-=1;remaining<0 && EventChar==32 ? EventChar=0;')
+    I.Attach(ctx,IME.pasteFilter);IME.pasteContext=ctx
+   end
+   callback=IME.pasteFilter;I.Function_SetValue(callback,'remaining',limit)
+   flags=flags|I.InputTextFlags_CallbackCharFilter
+  end
+ end
  I.PushStyleVar(ctx,I.StyleVar_FramePadding,0,0)
  I.PushStyleVar(ctx,I.StyleVar_FrameRounding,0);I.PushStyleVar(ctx,I.StyleVar_FrameBorderSize,0)
  I.PushStyleColor(ctx,I.Col_FrameBg,rgba(C.field));I.PushStyleColor(ctx,I.Col_Text,rgba((A.count or 0)>1 and C.warn or C.text))
@@ -4202,9 +4229,9 @@ local function ime_frame()
  local y=originY+b.y+max(0,(b.h-I.GetTextLineHeight(ctx))*.5)+offset
  I.SetCursorScreenPos(ctx,originX+b.x,floor(y*dpi+.5)/dpi)
  I.SetNextItemWidth(ctx,b.w);if focus then I.SetKeyboardFocusHere(ctx)end
- local _,text=I.InputText(ctx,'##item_strip_'..E.key,E.text,I.InputTextFlags_AutoSelectAll)
+ local _,text=I.InputText(ctx,'##item_strip_'..E.key,E.text,flags,callback)
  E.text=text
- local mods=I.GetKeyMods(ctx);E.absolute=(mods&I.Mod_Ctrl)~=0 or ((gfx.mouse_cap or 0)&4)~=0 or (BLT_MAC and (mods&I.Mod_Super)~=0)
+ E.absolute=(mods&I.Mod_Ctrl)~=0 or ((gfx.mouse_cap or 0)&4)~=0 or (BLT_MAC and (mods&I.Mod_Super)~=0)
  local cancel=I.IsKeyPressed(ctx,I.Key_Escape,false)
  local confirmed=I.IsKeyPressed(ctx,I.Key_Enter,false)or I.IsKeyPressed(ctx,I.Key_KeypadEnter,false)
  local done=confirmed or I.IsItemDeactivated(ctx)
