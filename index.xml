@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<index version="1" name="BLT ReaScripts" commit="9be6744f1ee27d5d44e41546d2f29aa7e71cca44">
+<index version="1" name="BLT ReaScripts" commit="3bc5ec4820f94e879500816e9429134d55e21ba7">
   <category name="BLT">
     <reapack name="BLT_SPATIAL_FIELD.jsfx" type="effect" desc="BLT SPATIAL FIELD">
       <version name="0.5.4" author="Balrulu" time="2026-10-05T05:08:58Z">
@@ -215,7 +215,6 @@
 }
 ]]></description>
       </metadata>
-      
       <version name="0.6.21" author="Balrulu" time="2026-11-07T19:49:33Z">
         <changelog><![CDATA[BLT SERIES Beta TEST UPLOAD]]></changelog>
         <source main="main" file="../BLT_LOOP_RM_STUDIO.lua">https://github.com/balrulu/reaper/raw/9be6744f1ee27d5d44e41546d2f29aa7e71cca44/BLT_ReaScripts/BLT_LOOP_RM_STUDIO.lua</source>
@@ -231,7 +230,6 @@
 }
 ]]></description>
       </metadata>
-      
       <version name="0.8.21" author="Balrulu" time="2026-11-07T19:49:33Z">
         <changelog><![CDATA[BLT SERIES Beta TEST UPLOAD]]></changelog>
         <source main="main" file="../BLT_LOUDNESS_TRACE.lua">https://github.com/balrulu/reaper/raw/9be6744f1ee27d5d44e41546d2f29aa7e71cca44/BLT_ReaScripts/BLT_LOUDNESS_TRACE.lua</source>
@@ -340,9 +338,10 @@
   </category>
   <category name="LangPacks">
     <reapack name="Japanese_add_SWS_kb_edit.ReaperLangPack" type="langpack" desc="日本語 [JP] - REAPER + SWS">
-      <version name="7.85.0" author="Balrulu" time="2026-11-06T15:28:33Z">
+      
+      <version name="7.85.1" author="Balrulu" time="2026-11-08T18:15:02Z">
         <changelog><![CDATA[Japanese translation for REAPER v7.85 + SWS]]></changelog>
-        <source>https://github.com/balrulu/reaper/raw/babc60c5bfa877f3afe8069399e7f41c8dd5a86f/LangPacks/Japanese_add_SWS_kb_edit.ReaperLangPack</source>
+        <source>https://github.com/balrulu/reaper/raw/3bc5ec4820f94e879500816e9429134d55e21ba7/LangPacks/Japanese_add_SWS_kb_edit.ReaperLangPack</source>
       </version>
     </reapack>
   </category>
