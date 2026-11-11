@@ -25,7 +25,9 @@ jobs:
           fetch-depth: 0
 
       - name: Install Pandoc
-        run: sudo apt-get install -yy pandoc
+        run: |
+          sudo apt-get update -o Acquire::Retries=5
+          sudo apt-get install -y -o Acquire::Retries=5 pandoc
 
       - name: Set up Ruby
         uses: ruby/setup-ruby@v1
