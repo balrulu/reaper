@@ -1,5 +1,5 @@
 -- @description MARKER REGION DESK
--- @version 0.6.21
+-- @version 0.6.22
 -- @author Balrulu
 -- @provides
 --   . > ../
@@ -4046,10 +4046,15 @@ local function rebuild()
   rebuild_selection()
   local s=Core.scope;A.scope_state={s.kind,s.query,s.sort,s.desc,s.exclude_loop}
 end
-local function refresh(project,snapshot)
+local function refresh(project,snapshot,keep_view)
+  local offset=keep_view and A.offset or 0
+  local top=keep_view and A.items[offset+1]
   A.project=project or R.EnumProjects(-1,"");A.snapshot=snapshot or Core.collect(A.project);A.items=Core.targets(A.snapshot)
   A.revision=R.GetProjectStateChangeCount(A.project)
-  A.offset=0;A.focus=nil;A.generation=(A.generation or 0)+1
+  if top then
+    for i,v in ipairs(A.items) do if v.guid==top.guid then offset=i-1;break end end
+  end
+  A.offset=min(offset,max(0,#A.items-LIST_ROWS));A.focus=nil;A.generation=(A.generation or 0)+1
   rebuild()
 end
 local function scope_change(key,value)
@@ -4069,9 +4074,9 @@ local function sync_selection()
   local project=R.EnumProjects(-1,"")
   local current=Core.collect(project)
   local s=Core.scope;local previous=A.scope_state or {}
-  local changed=project~=A.project or #current~=#(A.snapshot or {})
-    or s.kind~=previous[1] or s.query~=previous[2] or s.sort~=previous[3]
+  local scope_changed=s.kind~=previous[1] or s.query~=previous[2] or s.sort~=previous[3]
     or s.desc~=previous[4] or s.exclude_loop~=previous[5]
+  local changed=project~=A.project or #current~=#(A.snapshot or {}) or scope_changed
   local state_changed=false;local newly_selected=nil
   for i,v in ipairs(current) do
     local old=A.snapshot and A.snapshot[i]
@@ -4081,7 +4086,7 @@ local function sync_selection()
   end
   if changed then
     if project~=A.project then A.anchor_guid=nil;A.focus_guid=nil end
-    refresh(project,current)
+    refresh(project,current,project==A.project and not scope_changed)
   elseif state_changed then
     local by_guid={};for _,v in ipairs(current) do by_guid[v.guid]=v end
     for i,v in ipairs(A.items) do A.items[i]=by_guid[v.guid] end
