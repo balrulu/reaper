@@ -1,5 +1,5 @@
 -- @description ENVELOPE CANVAS ITEM
--- @version 0.7.17
+-- @version 0.7.18
 -- @author Balrulu
 -- @provides
 --   . > ../
@@ -3942,7 +3942,11 @@ function M.sample(s,p,age) return p.x+p.vx*age+sin(age*.63+p.phase)*p.sway,p.y-p
 return M
 end)()
 local gfx,Host,U,shell,menu,canvas,controls,C
-local function create_media_gate(api,graphics)
+-- BEGIN BLT MEDIA GATE 1.0.0
+local create_media_gate=(function()
+-- BLT media availability 1.0.0. Embedded in standalone scripts.
+local function create_media_gate(api,graphics,options)
+ options=options or {}
  local M={waiting=false,epoch=0};local P=setmetatable({}, {__index=api})
  local accessors={};local next_check=0;local ready=true;local settle=0;local last_active
  local function valid(project,p,kind)
@@ -3964,7 +3968,6 @@ local function create_media_gate(api,graphics)
   return nil
  end
  local function offline(project,take)
-  -- targets() resolves or validates each pointer in this same defer pass.
   if not take then return false end
   if api.TakeIsMIDI and api.TakeIsMIDI(take) then return false end
   if not api.GetMediaItemTake_Source then return false end
@@ -3987,6 +3990,17 @@ local function create_media_gate(api,graphics)
  end
  local fields={'info','v','source','snapshot','plans','items','list','queue','entries','reader','data','p','left','right','parts','sources','source_items'}
  local function targets(project,all_items)
+  if options.selectedOnly then
+   local takes={};local invalid=false
+   local all=all_items or(M.all_items and M.state and M.state.job)
+   local count=all and api.CountMediaItems(project)or api.CountSelectedMediaItems(project)
+   for i=0,count-1 do
+    local item=all and api.GetMediaItem(project,i)or api.GetSelectedMediaItem(project,i)
+    if not item then invalid=true
+    else local take=api.GetActiveTake(item);if take then takes[take]=true end end
+   end
+   return takes,invalid
+  end
   local takes,seen,items={},{},{};local invalid=false
   local function item(p,fresh)
    if p and items[p] then return end
@@ -4011,7 +4025,8 @@ local function create_media_gate(api,graphics)
   end
   local a=M.state
   if a then
-    for _,key in ipairs({'job','analysis','batch','source_job','wave_job','spectrum_job','pjob','xjob','ajob'}) do visit(a[key],0) end
+   for _,key in ipairs({'job','analysis','batch','source_job','wave_job','spectrum_job','pjob','xjob','ajob'}) do visit(a[key],0) end
+   if a.display_mode=='spectrogram' then visit(a.spectrum_sources,0)end
    if a.job or a.batch or a.source_job then visit(a.items,0);visit(a.queue,0) end
   end
   if (all_items or (M.all_items and M.state and M.state.job)) and api.CountMediaItems and api.GetMediaItem then
@@ -4040,7 +4055,13 @@ local function create_media_gate(api,graphics)
   end
   return ready
  end
+ function M.available()
+  return not M.waiting or M.ready()
+ end
  function M.tick()
+  local a=M.state
+  local working=next(accessors) or a and (a.job or a.analysis or a.detector or a.batch or a.source_job or a.wave_job or a.spectrum_job or a.zoom_job or a.pjob or a.xjob or a.ajob)
+  if not working and not M.waiting then next_check=0;return ready end
   local active=application_active()
   if active~=last_active then next_check=0;last_active=active end
   return M.ready()
@@ -4048,6 +4069,7 @@ local function create_media_gate(api,graphics)
  function M.message(section)
   return api.GetExtState(section,'ui_language')=='EN' and 'Waiting for media to come online…' or 'メディアのオンライン復帰を待っています…'
  end
+ if options.selectedOnly then return M end
  local function signature(take)
   if not (api.GetMediaItemTake_Item and api.GetItemStateChunk) then return nil end
   local item=api.GetMediaItemTake_Item(take);if not item then return nil end
@@ -4089,6 +4111,9 @@ local function create_media_gate(api,graphics)
  end
  return M,P
 end
+return create_media_gate
+end)()
+-- END BLT MEDIA GATE
 local mediaGraphics={}
 local Media,reaper=create_media_gate(reaper,mediaGraphics)
 
@@ -4607,7 +4632,7 @@ function B.cleanup(fn,...)
  return ok,result
 end
 end
-local Core={VERSION='0.7.17',SECTION='BLT_ENVELOPE_CANVAS_ITEM',MAX_POINTS=1024}
+local Core={VERSION='0.7.18',SECTION='BLT_ENVELOPE_CANVAS_ITEM',MAX_POINTS=1024}
 local min,max,abs,floor,ceil=math.min,math.max,math.abs,math.floor,math.ceil
 local function clamp(v,a,b) return max(a,min(b,v)) end
 local function finite(v) return type(v)=='number' and v==v and abs(v)<math.huge end
@@ -5021,9 +5046,9 @@ end
 function Core.valid(project,item,take)
  return item and take and R.ValidatePtr2(project,item,'MediaItem*') and R.ValidatePtr2(project,take,'MediaItem_Take*') and R.GetActiveTake(item)==take
 end
-function Core.info(project,item,fresh)
+function Core.info(project,item,fresh,audio_take)
  if not item or (not fresh and not R.ValidatePtr2(project,item,'MediaItem*')) then return nil end
- local take=R.GetActiveTake(item);if not take or R.TakeIsMIDI(take) then return nil end
+ local take=audio_take or R.GetActiveTake(item);if not take or not audio_take and R.TakeIsMIDI(take) then return nil end
  local source=R.GetMediaItemTake_Source(take);if not source then return nil end
  local file=R.GetMediaSourceFileName(source,'');local len=R.GetMediaItemInfo_Value(item,'D_LENGTH')
  local rate=R.GetMediaItemTakeInfo_Value(take,'D_PLAYRATE');local channels=R.GetMediaSourceNumChannels(source)
@@ -5032,8 +5057,14 @@ function Core.info(project,item,fresh)
  return {project=project,item=item,take=take,source=source,file=file,guid=guid,name=R.GetTakeName(take) or '',len=len,rate=rate,
   pos=R.GetMediaItemInfo_Value(item,'D_POSITION'),offset=R.GetMediaItemTakeInfo_Value(take,'D_STARTOFFS'),channels=channels}
 end
-function Core.first(project)
- for i=0,R.CountSelectedMediaItems(project)-1 do local v=Core.info(project,R.GetSelectedMediaItem(project,i),true);if v then return v end end
+function Core.first(project,ready)
+ for i=0,R.CountSelectedMediaItems(project)-1 do
+  local item=R.GetSelectedMediaItem(project,i);local take=item and R.GetActiveTake(item)
+  if take and not R.TakeIsMIDI(take)then
+   if ready and not ready()then return nil,true end
+   local v=Core.info(project,item,true,take);if v then return v end
+  end
+ end
 end
 function Core.chunk(item)
  local ok,s=R.GetItemStateChunk(item,'',false);if not ok or not s or s=='' then error('対象の復元データを取得できません。',0) end;return s
@@ -5836,8 +5867,8 @@ function UI.start_wave(preserve_spectrum)
 end
 
 function UI.wave_step()
- if not Media.ready() then return end
  local j=A.wave_job;if not j then return end
+ if not Media.ready() then return end
  if not Core.valid(j.v.project,j.v.item,j.v.take) then UI.stop_wave();return end
  local now=R.time_precise();local budget=now+.006
  repeat
@@ -6604,21 +6635,25 @@ function UI.sync_item_mute(chunk)
  if A.record then A.record.before=sync(A.record.before);A.record.after=sync(A.record.after) end
 end
 function UI.poll(now)
- if not Media.ready() then return end
+ if not Media.available() then return end
  local project=R.EnumProjects(-1,'')
  if A.busy or now<A.poll_at and (not A.v or project==A.v.project) then return end;A.poll_at=now+.05
- local revision=A.v and project==A.v.project and R.GetProjectStateChangeCount(project)
+ local revision=R.GetProjectStateChangeCount(project)
  if A.v and project==A.v.project and revision==A.revision then
   local count=R.CountSelectedMediaItems(project)
   local same=count==0 and R.ValidatePtr2(project,A.v.item,'MediaItem*') or
    count>0 and R.GetSelectedMediaItem(project,0)==A.v.item
   if same and R.GetActiveTake(A.v.item)==A.v.take then return end
  end
- local selected=Core.first(project)
+ local selected,waiting=Core.first(project,Media.ready)
+ if waiting then return end
  if not selected then
   -- Keep the last valid audio target through empty/MIDI-only selection, while
   -- still polling external edits and undo on that target.
-  if A.v and A.v.project==project then selected=Core.info(project,A.v.item) end
+  if A.v and A.v.project==project then
+   if revision==A.revision and R.ValidatePtr2(project,A.v.item,'MediaItem*')and R.GetActiveTake(A.v.item)==A.v.take then selected=A.v
+   else if not Media.ready()then return end;selected=Core.info(project,A.v.item)end
+  end
   if not selected then if A.v then UI.load_selection(false) end;return end
  end
  if not A.v or project~=A.v.project or selected.item~=A.v.item or selected.take~=A.v.take or selected.guid~=A.v.guid then

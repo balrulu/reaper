@@ -1,5 +1,5 @@
 -- @description VARIANT FORGE
--- @version 0.6.15
+-- @version 0.6.17
 -- @author Balrulu
 -- @provides
 --   . > ../
@@ -2006,7 +2006,11 @@ function BLTPresetLimits.show(english)
  reaper.MB(english and 'Preset capacity limit exceeded. Export presets individually instead of as a bundle.' or '容量上限オーバーです。一括ではなく個別に保存してください。','BLT PRESET',0)
 end
 
-local function create_media_gate(api,graphics)
+-- BEGIN BLT MEDIA GATE 1.0.0
+local create_media_gate=(function()
+-- BLT media availability 1.0.0. Embedded in standalone scripts.
+local function create_media_gate(api,graphics,options)
+ options=options or {}
  local M={waiting=false,epoch=0};local P=setmetatable({}, {__index=api})
  local accessors={};local next_check=0;local ready=true;local settle=0;local last_active
  local function valid(project,p,kind)
@@ -2050,6 +2054,17 @@ local function create_media_gate(api,graphics)
  end
  local fields={'info','v','source','snapshot','plans','items','list','queue','entries','reader','data','p','left','right','parts','sources','source_items'}
  local function targets(project,all_items)
+  if options.selectedOnly then
+   local takes={};local invalid=false
+   local all=all_items or(M.all_items and M.state and M.state.job)
+   local count=all and api.CountMediaItems(project)or api.CountSelectedMediaItems(project)
+   for i=0,count-1 do
+    local item=all and api.GetMediaItem(project,i)or api.GetSelectedMediaItem(project,i)
+    if not item then invalid=true
+    else local take=api.GetActiveTake(item);if take then takes[take]=true end end
+   end
+   return takes,invalid
+  end
   local takes,seen,items={},{},{};local invalid=false
   local function item(p,fresh)
    if p and items[p] then return end
@@ -2074,7 +2089,8 @@ local function create_media_gate(api,graphics)
   end
   local a=M.state
   if a then
-   for _,key in ipairs({'job','analysis','batch','source_job','wave_job','pjob','xjob','ajob'}) do visit(a[key],0) end
+   for _,key in ipairs({'job','analysis','batch','source_job','wave_job','spectrum_job','pjob','xjob','ajob'}) do visit(a[key],0) end
+   if a.display_mode=='spectrogram' then visit(a.spectrum_sources,0)end
    if a.job or a.batch or a.source_job then visit(a.items,0);visit(a.queue,0) end
   end
   if (all_items or (M.all_items and M.state and M.state.job)) and api.CountMediaItems and api.GetMediaItem then
@@ -2103,7 +2119,13 @@ local function create_media_gate(api,graphics)
   end
   return ready
  end
+ function M.available()
+  return not M.waiting or M.ready()
+ end
  function M.tick()
+  local a=M.state
+  local working=next(accessors) or a and (a.job or a.analysis or a.detector or a.batch or a.source_job or a.wave_job or a.spectrum_job or a.zoom_job or a.pjob or a.xjob or a.ajob)
+  if not working and not M.waiting then next_check=0;return ready end
   local active=application_active()
   if active~=last_active then next_check=0;last_active=active end
   return M.ready()
@@ -2111,6 +2133,7 @@ local function create_media_gate(api,graphics)
  function M.message(section)
   return api.GetExtState(section,'ui_language')=='EN' and 'Waiting for media to come online…' or 'メディアのオンライン復帰を待っています…'
  end
+ if options.selectedOnly then return M end
  local function signature(take)
   if not (api.GetMediaItemTake_Item and api.GetItemStateChunk) then return nil end
   local item=api.GetMediaItemTake_Item(take);if not item then return nil end
@@ -2152,6 +2175,9 @@ local function create_media_gate(api,graphics)
  end
  return M,P
 end
+return create_media_gate
+end)()
+-- END BLT MEDIA GATE
 local Media,reaper=create_media_gate(reaper,gfx)
 
 local WindowGeometry=gfx.geometryAPI()
@@ -2574,6 +2600,166 @@ LanguageCatalog.en['生成を中止し、今回のコピーを削除しました
 LanguageCatalog.en['生成対象が変更されたため中止しました。']='Cancelled because the generation targets changed.'
 
 local Language=create_language(reaper,"BLT_VARIANT_FORGE",LanguageCatalog)
+-- BEGIN BLT PORTABLE PATHS 1.0.0
+local BLTPaths=(function()
+-- BLT portable paths 1.0.0. Embedded in standalone scripts.
+local M = {}
+local function windows(api) return (api.GetOS() or ''):match('Win') ~= nil end
+local function slash(path)
+  path = tostring(path or ''):gsub('\\', '/')
+  local prefix = path:sub(1, 2) == '//' and '//' or ''
+  return prefix .. path:sub(#prefix + 1):gsub('/+', '/'):gsub('/+$', '')
+end
+function M.absolute(path)
+  if type(path) ~= 'string' then return false end
+  local value = path:gsub('\\', '/')
+  return value:sub(1, 1) == '/' or value:match('^%a:/') ~= nil
+end
+function M.native(api, path, relative)
+  if type(path) ~= 'string' or path:find('[%z\r\n]') then return false end
+  if path == '' then return relative == true end
+  if windows(api) then
+    if path:match('^%a:[/\\]') or path:match('^[/\\][/\\][^/\\]+[/\\][^/\\]+') then return true end
+    return relative == true and not path:match('^[/\\]') and not path:match('^%a:')
+  end
+  if path:match('^%a:') or path:find('\\', 1, true) then return false end
+  return path:sub(1, 1) == '/' or relative == true
+end
+local function child(value)
+  if value == '' or value:sub(1, 1) == '/' or value:find('\\', 1, true) or value:find('[%z\r\n:]') then return end
+  for part in value:gmatch('[^/]+') do if part == '.' or part == '..' then return end end
+  return value
+end
+function M.join(base, relative)
+  local value = child(relative)
+  if value then return slash(base) .. '/' .. value end
+end
+function M.encode(api, path)
+  if type(path) ~= 'string' or path == '' or path:sub(1, 10) == '@resource/' then return path end
+  local root, value = slash(api.GetResourcePath()), slash(path)
+  local a, b = root, value
+  if windows(api) then a, b = a:lower(), b:lower() end
+  if b:sub(1, #a + 1) == a .. '/' then
+    local relative = child(value:sub(#root + 2))
+    if relative then return '@resource/' .. relative end
+  end
+  return path
+end
+function M.decode(api, path)
+  if type(path) ~= 'string' then return end
+  if path:sub(1, 10) ~= '@resource/' then return path end
+  local relative = child(path:sub(11))
+  if relative then return slash(api.GetResourcePath()) .. '/' .. relative end
+end
+function M.exists(api, path)
+  if not path or path == '' or not M.native(api, path, false) then return false end
+  if api.file_exists then return api.file_exists(path) == true end
+  local file = io.open(path, 'rb');if not file then return false end
+  file:close();return true
+end
+function M.readable(api, path)
+  if not path or path == '' or not M.native(api, path, false) then return false end
+  local file = io.open(path, 'rb');if not file then return false end
+  file:close();return true
+end
+function M.executable(api, path)
+  path = M.decode(api, path)
+  if type(path) ~= 'string' or path == '' or path:find('[%z\r\n]') then return end
+  if not windows(api) and path:lower():match('%.exe$') then return end
+  if M.absolute(path) then return M.exists(api, path) and path or nil end
+  if path:match('^[%w_.%-]+$') then return path end
+end
+function M.directory(api, path)
+  if type(path) ~= 'string' or path == '' or type(api.JS_File_Stat) ~= 'function' then return false end
+  local result = table.pack(pcall(api.JS_File_Stat, path))
+  return result[1] and result[2] == 0 and type(result[10]) == 'number' and (result[10] & 0xF000) == 0x4000
+end
+function M.file(api, path, folders)
+  local value = M.decode(api, path)
+  if M.exists(api, value) then return value end
+  if type(path) ~= 'string' or path:sub(1, 10) == '@resource/' then return end
+  local normalized = slash(path)
+  for _, folder in ipairs(folders or {}) do
+    local prefix = '/' .. folder .. '/'
+    local at = normalized:lower():find(prefix:lower(), 1, true)
+    local relative = at and child(normalized:sub(at + #prefix))
+    if relative then
+      local candidate = slash(api.GetResourcePath()) .. '/' .. folder .. '/' .. relative
+      if M.exists(api, candidate) then return candidate end
+    end
+  end
+end
+local environments = {}
+function M.environment(api)
+  local root = slash(api.GetResourcePath())
+  if environments[root] ~= nil then return environments[root] or nil end
+  local path = root .. '/UserPlugins/.blt-environment-id'
+  local function read()
+    local file = io.open(path, 'rb');if not file then return end
+    local value = file:read(129);file:close()
+    if value and #value >= 16 and #value <= 128 and value:match('^[%x{}%-]+$') then return value end
+  end
+  local value = read()
+  if not value and api.genGuid then
+    pcall(function()
+      if api.RecursiveCreateDirectory then api.RecursiveCreateDirectory(root .. '/UserPlugins', 0) end
+      local token = api.genGuid();assert(type(token) == 'string' and token:match('^[%x{}%-]+$'))
+      local file = assert(io.open(path, 'wb'));local ok = file:write(token);local closed = file:close()
+      if ok and closed then value = read() end
+    end)
+  end
+  environments[root] = value or false
+  return value
+end
+local confirmed = {}
+function M.confirm(path) confirmed[path] = true end
+function M.output(api, path, owner)
+  if not M.native(api, path, true) then return false end
+  if path == '' or not M.absolute(path) or confirmed[path] then return true end
+  if owner and owner ~= '' then return owner == M.environment(api) end
+  return M.directory(api, path)
+end
+function M.registry(api, identify)
+  local file = io.open(api.GetResourcePath() .. '/reaper-kb.ini', 'rb')
+  if not file then return {} end
+  local raw = file:read('*a');file:close()
+  local result = {data = raw}
+  for line in raw:gmatch('[^\r\n]+') do
+    local command, path = line:match('^SCR%s+%d+%s+0%s+(%S+)%s+.*%s+"([^"]+)"%s*$')
+    if not command then command, path = line:match('^SCR%s+%d+%s+0%s+(%S+)%s+.*%s+(%S+)%s*$') end
+    local name = path and slash(path):match('([^/]+)$')
+    local id = name and identify(name:lower():gsub(' ', '_'))
+    if id then
+      if not M.absolute(path) then path = api.GetResourcePath() .. '/Scripts/' .. path end
+      result[id] = result[id] or {}
+      result[id][#result[id] + 1] = {path = path, command = '_' .. command:gsub('^_', '')}
+    end
+  end
+  return result
+end
+function M.action(api, id, stored, command, entries, identify, verify)
+  local choices, seen = {}, {}
+  for _, row in ipairs(entries[id] or {}) do
+    if M.readable(api, row.path) and (not verify or verify(id, row.path)) then
+      if row.command == command then return row.path, row.command end
+      local key = slash(row.path);if windows(api) then key = key:lower() end
+      if not seen[key] then choices[#choices + 1] = row;seen[key] = true end
+    end
+  end
+  if #choices == 1 then return choices[1].path, choices[1].command end
+  if #choices > 1 then return nil, 'Multiple registered copies; run the intended action once.' end
+  local path = M.decode(api, stored)
+  local name = path and slash(path):match('([^/]+)$')
+  if name and identify(name:lower():gsub(' ', '_')) == id then
+    path = M.file(api, stored, {'Scripts'})
+    if path and M.readable(api, path) and (not verify or verify(id, path)) then return path, '' end
+  end
+  return nil, 'Script not found; run the installed action once to enable restoration again.'
+end
+return M
+end)()
+-- END BLT PORTABLE PATHS
+
 local R=reaper
 local CanvasGraphics={}
 function CanvasGraphics.new(gfx,font)
@@ -3557,12 +3743,21 @@ function B.publicError(value,fallback)
  if text:match('^%s*$') then return fallback or '処理中にエラーが発生しました。' end
  return text
 end
+-- BEGIN BLT TABLE EQUALITY 1.0.0
 function B.same(a,b)
- if type(a)~=type(b) then return false end
- if type(a)~='table' then return a==b end
- for k,v in pairs(a) do if not B.same(v,b[k]) then return false end end
- for k in pairs(b) do if a[k]==nil then return false end end;return true
+ local kind=type(a)
+ if kind~=type(b)then return false end
+ if kind~='table'then return a==b end
+ for k,v in pairs(a)do
+  local other=b[k]
+  if type(v)=='table'then
+   if not B.same(v,other)then return false end
+  elseif v~=other or type(v)~=type(other)then return false end
+ end
+ for k in pairs(b)do if a[k]==nil then return false end end
+ return true
 end
+-- END BLT TABLE EQUALITY
 function B.shape(v,base)
  if type(v)~=type(base) then return false end
  if type(v)=='table' then
@@ -4267,7 +4462,7 @@ end
 return B
 end)()
 
-local Core={VERSION='0.6.15',SOURCE_SR=48000,SOURCE_HOP=48,SOURCE_BLOCK=12000,SOURCE_PREVIEW_BINS=1400,SOURCE_MAX_REGIONS=16384,
+local Core={VERSION='0.6.17',SOURCE_SR=48000,SOURCE_HOP=48,SOURCE_BLOCK=12000,SOURCE_PREVIEW_BINS=1400,SOURCE_MAX_REGIONS=16384,
  GENERATED_TAG='P_EXT:BLT_VARIANT_FORGE',TEMP_TAG='P_EXT:BLT_VARIANT_FORGE_TEMP',SECTION='BLT_VARIANT_FORGE',EQ_FIXED_CACHE={}}
 Core.STALE_TEMP_PROJECTS={};Core.RUN_ID='';Core.TEMP_HEARTBEAT_TTL=8;Core.TEMP_HEARTBEAT_KEY='temp_live_registry_v1';Core.temp_heartbeat_at=0
 local abs,min,max,floor,ceil=math.abs,math.min,math.max,math.floor,math.ceil
@@ -5749,8 +5944,13 @@ function Core.open_project_by_guid(guid,hint)
  return nil
 end
 function Core.load_pending_bake_deletes()
- local raw=R.GetExtState(Core.SECTION,'pending_bake_delete_v1');local out={}
- for line in tostring(raw or ''):gmatch('[^\n]+') do
+ local out={};local owner=BLTPaths.environment(R)
+ local raw=R.GetExtState(Core.SECTION,'pending_bake_delete_v2')
+ local saved,body=raw:match('^BLT_LOCAL_QUEUE_V2|([^|]+)|(.*)$')
+ if not owner or saved~=owner then raw='' else raw=body end
+ if R.GetExtState(Core.SECTION,'pending_bake_delete_v1')~='' then BLT.store(Core.SECTION,'pending_bake_delete_v1','',true)end
+ if R.GetExtState(Core.SECTION,'pending_bake_delete_v2')~=''and(not owner or saved~=owner)then BLT.store(Core.SECTION,'pending_bake_delete_v2','',true)end
+ for line in tostring(raw or ''):gmatch('[^;]+') do
   local guid_hex,watch,path_hex=line:match('^([%x]*):([01]):([%x]+)$')
   if not guid_hex then guid_hex,path_hex=line:match('^([%x]*):([%x]+)$');watch='0' end
   local guid,path=hex_decode(guid_hex),hex_decode(path_hex)
@@ -5763,7 +5963,8 @@ function Core.save_pending_bake_deletes(records)
  for _,record in ipairs(records or {}) do
   if record.path and record.path~='' then lines[#lines+1]=hex_encode(record.project_guid or '')..':'..(record.watch_referenced and '1' or '0')..':'..hex_encode(record.path) end
  end
- BLT.store(Core.SECTION,'pending_bake_delete_v1',table.concat(lines,'\n'),true)
+ local owner=BLTPaths.environment(R)
+ BLT.store(Core.SECTION,'pending_bake_delete_v2',owner and #lines>0 and ('BLT_LOCAL_QUEUE_V2|'..owner..'|'..table.concat(lines,';'))or'',true)
 end
 function Core.queue_pending_bake_deletes(records,paths,project,watch_referenced)
  records=records or Core.load_pending_bake_deletes();local guid=Core.project_guid(project);local seen={}
@@ -6033,17 +6234,20 @@ function Core.generation_targets_valid(snapshot)
 end
 function Core.folder_state(project,previous)
  local revision=R.GetProjectStateChangeCount(project)
- if previous then
+ local count=R.CountTracks(project)
+ local guid=R.GetProjectGUID and R.GetProjectGUID(project)
+ if previous and previous.project==project and previous.track_count==count then
+  local stable=type(guid)=='string'and guid~=''and previous.project_guid==guid and previous.revision==revision
   local valid=true
   for _,entry in ipairs(previous.entries)do
    local track=entry.track
-   if not R.ValidatePtr2(project,track,'MediaTrack*')or previous.revision~=revision and R.GetTrackGUID(track)~=entry.guid then valid=false;break end
+   if not stable and(not R.ValidatePtr2(project,track,'MediaTrack*')or R.GetTrackGUID(track)~=entry.guid)then valid=false;break end
    entry.compact=R.GetMediaTrackInfo_Value(track,'I_FOLDERCOMPACT')
   end
-  if valid then previous.revision=revision;return previous end
+  if valid then previous.revision,previous.project_guid=revision,guid;return previous end
  end
- local state={project=project,revision=revision,entries={}}
- for i=0,R.CountTracks(project)-1 do
+ local state={project=project,revision=revision,track_count=count,project_guid=guid,entries={}}
+ for i=0,count-1 do
   local track=R.GetTrack(project,i)
   if R.GetMediaTrackInfo_Value(track,'I_FOLDERDEPTH')>0 then
    state.entries[#state.entries+1]={track=track,guid=R.GetTrackGUID(track),compact=R.GetMediaTrackInfo_Value(track,'I_FOLDERCOMPACT')}
@@ -7093,8 +7297,8 @@ function UI.rebuild_source_queue()
  for _,v in ipairs(A.items or {}) do UI.source_status_from_cache(v) end
 end
 function UI.source_queue_start_next()
- if not Media.ready() then return end
  if A.source_job or A.job or A.source_queue_done then return end
+ if A.source_queue_i<=#A.source_queue and not Media.ready() then return end
  while A.source_queue_i<=#A.source_queue do
   local v=A.source_queue[A.source_queue_i];A.source_queue_i=A.source_queue_i+1
   if v and v.source_key and not A.source_cache[v.source_key] then
@@ -7997,7 +8201,7 @@ function UI.regenerate()
  end
 end
 function UI.work_step()
- if not Media.ready() then return end
+ if (A.job or A.source_job) and not Media.ready() then return end
  if A.job then UI.step_generation();return end
  Core.touch_temp_heartbeat(false)
  UI.retry_stale_temp_items(false)
@@ -8189,7 +8393,7 @@ function UI.waveform_item()
  return (A.wave_guid and A.item_by_guid[A.wave_guid]) or (A.items and A.items[1]) or nil
 end
 function UI.source_wave_data(v)
- if not Media.ready() then return end
+ if not Media.available() then return end
  if not v then return nil,false end
  local key=v.source_key
  if key then
@@ -9280,7 +9484,7 @@ function UI.loop()
   UI.flush_persist(false)
   UI.poll_target_lock(now)
 
-  if Media.ready() and not A.job and not A.source_job and now>A.poll then
+  if Media.available() and not A.job and not A.source_job and now>A.poll then
    A.poll=now+.35
    local project=R.EnumProjects(-1,'');local revision=R.GetProjectStateChangeCount(project);local selection_signature=Core.selection_signature(project)
    if project~=A.project or selection_signature~=A.selection_signature or revision~=A.revision then

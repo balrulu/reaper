@@ -1,5 +1,5 @@
 -- @description SPECTRAL NORMALIZER
--- @version 0.6.14
+-- @version 0.6.15
 -- @author Balrulu
 -- @provides
 --   . > ../
@@ -3367,7 +3367,11 @@ function M.sample(s,p,age) return p.x+p.vx*age+sin(age*.63+p.phase)*p.sway,p.y-p
 return M
 end)()
 local gfx,Host,U,shell,menu,canvas,controls,C,fonts
-local function create_media_gate(api,graphics)
+-- BEGIN BLT MEDIA GATE 1.0.0
+local create_media_gate=(function()
+-- BLT media availability 1.0.0. Embedded in standalone scripts.
+local function create_media_gate(api,graphics,options)
+ options=options or {}
  local M={waiting=false,epoch=0};local P=setmetatable({}, {__index=api})
  local accessors={};local next_check=0;local ready=true;local settle=0;local last_active
  local function valid(project,p,kind)
@@ -3389,7 +3393,6 @@ local function create_media_gate(api,graphics)
   return nil
  end
  local function offline(project,take)
-  -- targets() resolves or validates each pointer in this same defer pass.
   if not take then return false end
   if api.TakeIsMIDI and api.TakeIsMIDI(take) then return false end
   if not api.GetMediaItemTake_Source then return false end
@@ -3412,6 +3415,17 @@ local function create_media_gate(api,graphics)
  end
  local fields={'info','v','source','snapshot','plans','items','list','queue','entries','reader','data','p','left','right','parts','sources','source_items'}
  local function targets(project,all_items)
+  if options.selectedOnly then
+   local takes={};local invalid=false
+   local all=all_items or(M.all_items and M.state and M.state.job)
+   local count=all and api.CountMediaItems(project)or api.CountSelectedMediaItems(project)
+   for i=0,count-1 do
+    local item=all and api.GetMediaItem(project,i)or api.GetSelectedMediaItem(project,i)
+    if not item then invalid=true
+    else local take=api.GetActiveTake(item);if take then takes[take]=true end end
+   end
+   return takes,invalid
+  end
   local takes,seen,items={},{},{};local invalid=false
   local function item(p,fresh)
    if p and items[p] then return end
@@ -3436,7 +3450,8 @@ local function create_media_gate(api,graphics)
   end
   local a=M.state
   if a then
-   for _,key in ipairs({'job','analysis','batch','source_job','wave_job','pjob','xjob','ajob'}) do visit(a[key],0) end
+   for _,key in ipairs({'job','analysis','batch','source_job','wave_job','spectrum_job','pjob','xjob','ajob'}) do visit(a[key],0) end
+   if a.display_mode=='spectrogram' then visit(a.spectrum_sources,0)end
    if a.job or a.batch or a.source_job then visit(a.items,0);visit(a.queue,0) end
   end
   if (all_items or (M.all_items and M.state and M.state.job)) and api.CountMediaItems and api.GetMediaItem then
@@ -3465,7 +3480,13 @@ local function create_media_gate(api,graphics)
   end
   return ready
  end
+ function M.available()
+  return not M.waiting or M.ready()
+ end
  function M.tick()
+  local a=M.state
+  local working=next(accessors) or a and (a.job or a.analysis or a.detector or a.batch or a.source_job or a.wave_job or a.spectrum_job or a.zoom_job or a.pjob or a.xjob or a.ajob)
+  if not working and not M.waiting then next_check=0;return ready end
   local active=application_active()
   if active~=last_active then next_check=0;last_active=active end
   return M.ready()
@@ -3473,6 +3494,7 @@ local function create_media_gate(api,graphics)
  function M.message(section)
   return api.GetExtState(section,'ui_language')=='EN' and 'Waiting for media to come online…' or 'メディアのオンライン復帰を待っています…'
  end
+ if options.selectedOnly then return M end
  local function signature(take)
   if not (api.GetMediaItemTake_Item and api.GetItemStateChunk) then return nil end
   local item=api.GetMediaItemTake_Item(take);if not item then return nil end
@@ -3514,6 +3536,9 @@ local function create_media_gate(api,graphics)
  end
  return M,P
 end
+return create_media_gate
+end)()
+-- END BLT MEDIA GATE
 local mediaGraphics={}
 local Media,reaper=create_media_gate(reaper,mediaGraphics)
 local Core={VERSION='0.6.4',SECTION='BLT_SPECTRAL_NORMALIZER',MAX_POINTS=1024}
@@ -4272,8 +4297,8 @@ function App.finish_analysis(j)
 end
 
 function App.process(now)
- if not Media.ready() then return end
  local current=A.job;if not current then return end
+ if not Media.ready() then return end
  local ok,done=xpcall(function()
   local deadline=now+.014
   repeat if (current.kind=='analysis' and App.analysis_step(current) or current.kind~='analysis' and App.step(current)) then return true end until R.time_precise()>=deadline
@@ -4641,7 +4666,7 @@ UI.actions.tool_line=function()UI.set_tool('line')end
 for _,frequency in ipairs(UI.max_frequencies) do local value=frequency;UI.actions['max_'..value]=function()UI.set_maxfreq(value)end end
 for index=1,#Core.PRESETS do local value=index;UI.actions['intensity_'..value]=function()UI.apply_intensity(value)end end
 function App.poll_selection(now)
- if not Media.ready() then return end
+ if not Media.available() then return end
  local project=R.EnumProjects(-1,'')
  if A.job or now<A.selection_poll and project==A.selection_project then return end;A.selection_poll=now+.5
  if A.pending_job then
@@ -4653,6 +4678,7 @@ function App.poll_selection(now)
  end
  local revision=R.GetProjectStateChangeCount(project);local count=R.CountSelectedMediaItems(project);local item=count>0 and R.GetSelectedMediaItem(project,0) or nil;local take=item and R.GetActiveTake(item) or nil
  if project==A.selection_project and revision==A.selection_revision and count==A.selection_count and item==A.selection_item and take==A.selection_take then return end
+ if not Media.ready()then return end
  A.selection_project,A.selection_revision,A.selection_count,A.selection_item,A.selection_take=project,revision,count,item,take
  local info='音声アイテム未選択';local detail='';local nyquist=nil
  if count>0 then

@@ -1,5 +1,5 @@
 -- @description COLOR PALETTE
--- @version 0.6.12
+-- @version 0.6.13
 -- @author Balrulu
 -- @provides
 --   . > ../
@@ -3717,12 +3717,21 @@ function B.publicError(value,fallback)
  if text:match('^%s*$') then return fallback or '処理中にエラーが発生しました。' end
  return text
 end
+-- BEGIN BLT TABLE EQUALITY 1.0.0
 function B.same(a,b)
- if type(a)~=type(b) then return false end
- if type(a)~='table' then return a==b end
- for k,v in pairs(a) do if not B.same(v,b[k]) then return false end end
- for k in pairs(b) do if a[k]==nil then return false end end;return true
+ local kind=type(a)
+ if kind~=type(b)then return false end
+ if kind~='table'then return a==b end
+ for k,v in pairs(a)do
+  local other=b[k]
+  if type(v)=='table'then
+   if not B.same(v,other)then return false end
+  elseif v~=other or type(v)~=type(other)then return false end
+ end
+ for k in pairs(b)do if a[k]==nil then return false end end
+ return true
 end
+-- END BLT TABLE EQUALITY
 function B.shape(v,base)
  if type(v)~=type(base) then return false end
  if type(v)=='table' then

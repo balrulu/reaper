@@ -1,5 +1,5 @@
 -- @description LOUDNESS TRACE
--- @version 0.8.21
+-- @version 0.8.22
 -- @author Balrulu
 -- @provides
 --   . > ../
@@ -3180,9 +3180,16 @@ local awakeUntil=0
 local function wake_visuals() awakeUntil=reaper.time_precise()+6.5 end
 local UI={}
 
-local function create_media_gate(api,graphics)
- local M={waiting=false}
- local next_check=0;local ready=true;local settle=0;local last_active
+-- BEGIN BLT MEDIA GATE 1.0.0
+local create_media_gate=(function()
+-- BLT media availability 1.0.0. Embedded in standalone scripts.
+local function create_media_gate(api,graphics,options)
+ options=options or {}
+ local M={waiting=false,epoch=0};local P=setmetatable({}, {__index=api})
+ local accessors={};local next_check=0;local ready=true;local settle=0;local last_active
+ local function valid(project,p,kind)
+  return p and (not api.ValidatePtr2 or api.ValidatePtr2(project,p,kind))
+ end
  local function application_active()
   if graphics and graphics.getchar then
    local flags=graphics.getchar(65537)
@@ -3199,7 +3206,6 @@ local function create_media_gate(api,graphics)
   return nil
  end
  local function offline(project,take)
-  -- targets() resolves or validates each pointer in this same defer pass.
   if not take then return false end
   if api.TakeIsMIDI and api.TakeIsMIDI(take) then return false end
   if not api.GetMediaItemTake_Source then return false end
@@ -3220,14 +3226,49 @@ local function create_media_gate(api,graphics)
   end
   return false
  end
+ local fields={'info','v','source','snapshot','plans','items','list','queue','entries','reader','data','p','left','right','parts','sources','source_items'}
  local function targets(project,all_items)
-  local takes={};local invalid=false
-  local all=all_items or (M.all_items and M.state and M.state.job)
-  local count=all and api.CountMediaItems(project) or api.CountSelectedMediaItems(project)
-  for i=0,count-1 do
-   local item=all and api.GetMediaItem(project,i) or api.GetSelectedMediaItem(project,i)
-   if not item then invalid=true
-   else local take=api.GetActiveTake(item);if take then takes[take]=true end end
+  if options.selectedOnly then
+   local takes={};local invalid=false
+   local all=all_items or(M.all_items and M.state and M.state.job)
+   local count=all and api.CountMediaItems(project)or api.CountSelectedMediaItems(project)
+   for i=0,count-1 do
+    local item=all and api.GetMediaItem(project,i)or api.GetSelectedMediaItem(project,i)
+    if not item then invalid=true
+    else local take=api.GetActiveTake(item);if take then takes[take]=true end end
+   end
+   return takes,invalid
+  end
+  local takes,seen,items={},{},{};local invalid=false
+  local function item(p,fresh)
+   if p and items[p] then return end
+   if not p or (not fresh and not valid(project,p,'MediaItem*')) then invalid=true;return end
+   items[p]=true
+   local take=api.GetActiveTake and api.GetActiveTake(p)
+   if take then takes[take]=true end
+  end
+  local function visit(v,depth)
+   if type(v)~='table' or seen[v] or depth>12 then return end;seen[v]=true
+   if v.project and v.project~=project then invalid=true;return end
+   if v.item then item(v.item) end
+   if v.take then
+    if takes[v.take] or valid(project,v.take,'MediaItem_Take*') then takes[v.take]=true else invalid=true end
+   end
+   if v.temp_take and (takes[v.temp_take] or valid(project,v.temp_take,'MediaItem_Take*')) then takes[v.temp_take]=true end
+   for _,key in ipairs(fields) do visit(v[key],depth+1) end
+   for _,entry in ipairs(v) do if type(entry)=='table' then visit(entry,depth+1) end end
+  end
+  if api.CountSelectedMediaItems and api.GetSelectedMediaItem then
+   for i=0,api.CountSelectedMediaItems(project)-1 do item(api.GetSelectedMediaItem(project,i),true) end
+  end
+  local a=M.state
+  if a then
+   for _,key in ipairs({'job','analysis','batch','source_job','wave_job','spectrum_job','pjob','xjob','ajob'}) do visit(a[key],0) end
+   if a.display_mode=='spectrogram' then visit(a.spectrum_sources,0)end
+   if a.job or a.batch or a.source_job then visit(a.items,0);visit(a.queue,0) end
+  end
+  if (all_items or (M.all_items and M.state and M.state.job)) and api.CountMediaItems and api.GetMediaItem then
+   for i=0,api.CountMediaItems(project)-1 do item(api.GetMediaItem(project,i),true) end
   end
   return takes,invalid
  end
@@ -3247,12 +3288,18 @@ local function create_media_gate(api,graphics)
   local waiting=not invalid and (blocked or now<settle)
   ready=not waiting
   if waiting~=M.waiting then
-   M.waiting=waiting
+   M.waiting=waiting;if not waiting then M.epoch=M.epoch+1 end
    if M.onchange then M.onchange() end
   end
   return ready
  end
+ function M.available()
+  return not M.waiting or M.ready()
+ end
  function M.tick()
+  local a=M.state
+  local working=next(accessors) or a and (a.job or a.analysis or a.detector or a.batch or a.source_job or a.wave_job or a.spectrum_job or a.zoom_job or a.pjob or a.xjob or a.ajob)
+  if not working and not M.waiting then next_check=0;return ready end
   local active=application_active()
   if active~=last_active then next_check=0;last_active=active end
   return M.ready()
@@ -3260,12 +3307,55 @@ local function create_media_gate(api,graphics)
  function M.message(section)
   return api.GetExtState(section,'ui_language')=='EN' and 'Waiting for media to come online…' or 'メディアのオンライン復帰を待っています…'
  end
- return M
+ if options.selectedOnly then return M end
+ local function signature(take)
+  if not (api.GetMediaItemTake_Item and api.GetItemStateChunk) then return nil end
+  local item=api.GetMediaItemTake_Item(take);if not item then return nil end
+  local ok,chunk=api.GetItemStateChunk(item,'',false)
+  return ok and chunk or nil
+ end
+ if api.CreateTakeAudioAccessor then
+  function P.CreateTakeAudioAccessor(take)
+   local aa=api.CreateTakeAudioAccessor(take)
+   if aa then accessors[aa]={take=take,project=api.EnumProjects(-1,''),signature=signature(take),revision=api.GetProjectStateChangeCount and api.GetProjectStateChangeCount(api.EnumProjects(-1,'')),epoch=M.epoch} end
+   return aa
+  end
+ end
+ if api.CreateTrackAudioAccessor then
+  function P.CreateTrackAudioAccessor(track)
+   local aa=api.CreateTrackAudioAccessor(track);local project=api.EnumProjects(-1,'')
+   if aa then accessors[aa]={track=track,project=project,revision=api.GetProjectStateChangeCount(project),epoch=M.epoch} end
+   return aa
+  end
+ end
+ local function resume(aa)
+  local state=accessors[aa]
+  if not state or state.epoch==M.epoch or M.waiting then return end
+  state.epoch=M.epoch
+  if api.EnumProjects(-1,'')~=state.project then return end
+  local unchanged=state.take and valid(state.project,state.take,'MediaItem_Take*') and state.signature and signature(state.take)==state.signature
+  if state.take and state.revision and api.GetProjectStateChangeCount(state.project)~=state.revision then unchanged=false end
+  if state.track then unchanged=valid(state.project,state.track,'MediaTrack*') and api.GetProjectStateChangeCount(state.project)==state.revision end
+  if unchanged and api.AudioAccessorUpdate then api.AudioAccessorUpdate(aa) end
+ end
+ if api.AudioAccessorStateChanged then
+  function P.AudioAccessorStateChanged(aa) resume(aa);return api.AudioAccessorStateChanged(aa) end
+ end
+ if api.GetAudioAccessorSamples then
+  function P.GetAudioAccessorSamples(...) local aa=...;resume(aa);return api.GetAudioAccessorSamples(...) end
+ end
+ if api.DestroyAudioAccessor then
+  function P.DestroyAudioAccessor(aa) accessors[aa]=nil;return api.DestroyAudioAccessor(aa) end
+ end
+ return M,P
 end
+return create_media_gate
+end)()
+-- END BLT MEDIA GATE
 
-local Media=create_media_gate(reaper,mediaGraphics)
+local Media=create_media_gate(reaper,mediaGraphics,{selectedOnly=true})
 
-local VERSION="0.8.21"
+local VERSION="0.8.22"
 local MAX_HISTORY_ROWS=126000
 local MAX_SAVE_BYTES=12*1024*1024
 local Core = {}
@@ -4495,12 +4585,21 @@ function B.publicError(value,fallback)
  if text:match('^%s*$') then return fallback or '処理中にエラーが発生しました。' end
  return text
 end
+-- BEGIN BLT TABLE EQUALITY 1.0.0
 function B.same(a,b)
- if type(a)~=type(b) then return false end
- if type(a)~='table' then return a==b end
- for k,v in pairs(a) do if not B.same(v,b[k]) then return false end end
- for k in pairs(b) do if a[k]==nil then return false end end;return true
+ local kind=type(a)
+ if kind~=type(b)then return false end
+ if kind~='table'then return a==b end
+ for k,v in pairs(a)do
+  local other=b[k]
+  if type(v)=='table'then
+   if not B.same(v,other)then return false end
+  elseif v~=other or type(v)~=type(other)then return false end
+ end
+ for k in pairs(b)do if a[k]==nil then return false end end
+ return true
 end
+-- END BLT TABLE EQUALITY
 function B.shape(v,base)
  if type(v)~=type(base) then return false end
  if type(v)=='table' then

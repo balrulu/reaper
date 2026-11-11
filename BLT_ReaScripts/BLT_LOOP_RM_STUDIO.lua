@@ -1,5 +1,5 @@
 -- @description LOOP RM STUDIO
--- @version 0.6.21
+-- @version 0.6.24
 -- @author Balrulu
 -- @provides
 --   . > ../
@@ -3296,7 +3296,11 @@ function M.new(host,api,text,language,C)
 end
 return M
 end)()
-local function create_media_gate(api,graphics)
+-- BEGIN BLT MEDIA GATE 1.0.0
+local create_media_gate=(function()
+-- BLT media availability 1.0.0. Embedded in standalone scripts.
+local function create_media_gate(api,graphics,options)
+ options=options or {}
  local M={waiting=false,epoch=0};local P=setmetatable({}, {__index=api})
  local accessors={};local next_check=0;local ready=true;local settle=0;local last_active
  local function valid(project,p,kind)
@@ -3318,7 +3322,6 @@ local function create_media_gate(api,graphics)
   return nil
  end
  local function offline(project,take)
-  -- targets() resolves or validates each pointer in this same defer pass.
   if not take then return false end
   if api.TakeIsMIDI and api.TakeIsMIDI(take) then return false end
   if not api.GetMediaItemTake_Source then return false end
@@ -3341,6 +3344,17 @@ local function create_media_gate(api,graphics)
  end
  local fields={'info','v','source','snapshot','plans','items','list','queue','entries','reader','data','p','left','right','parts','sources','source_items'}
  local function targets(project,all_items)
+  if options.selectedOnly then
+   local takes={};local invalid=false
+   local all=all_items or(M.all_items and M.state and M.state.job)
+   local count=all and api.CountMediaItems(project)or api.CountSelectedMediaItems(project)
+   for i=0,count-1 do
+    local item=all and api.GetMediaItem(project,i)or api.GetSelectedMediaItem(project,i)
+    if not item then invalid=true
+    else local take=api.GetActiveTake(item);if take then takes[take]=true end end
+   end
+   return takes,invalid
+  end
   local takes,seen,items={},{},{};local invalid=false
   local function item(p,fresh)
    if p and items[p] then return end
@@ -3365,7 +3379,8 @@ local function create_media_gate(api,graphics)
   end
   local a=M.state
   if a then
-   for _,key in ipairs({'job','analysis','batch','source_job','wave_job','pjob','xjob','ajob'}) do visit(a[key],0) end
+   for _,key in ipairs({'job','analysis','batch','source_job','wave_job','spectrum_job','pjob','xjob','ajob'}) do visit(a[key],0) end
+   if a.display_mode=='spectrogram' then visit(a.spectrum_sources,0)end
    if a.job or a.batch or a.source_job then visit(a.items,0);visit(a.queue,0) end
   end
   if (all_items or (M.all_items and M.state and M.state.job)) and api.CountMediaItems and api.GetMediaItem then
@@ -3394,7 +3409,13 @@ local function create_media_gate(api,graphics)
   end
   return ready
  end
+ function M.available()
+  return not M.waiting or M.ready()
+ end
  function M.tick()
+  local a=M.state
+  local working=next(accessors) or a and (a.job or a.analysis or a.detector or a.batch or a.source_job or a.wave_job or a.spectrum_job or a.zoom_job or a.pjob or a.xjob or a.ajob)
+  if not working and not M.waiting then next_check=0;return ready end
   local active=application_active()
   if active~=last_active then next_check=0;last_active=active end
   return M.ready()
@@ -3402,6 +3423,7 @@ local function create_media_gate(api,graphics)
  function M.message(section)
   return api.GetExtState(section,'ui_language')=='EN' and 'Waiting for media to come online…' or 'メディアのオンライン復帰を待っています…'
  end
+ if options.selectedOnly then return M end
  local function signature(take)
   if not (api.GetMediaItemTake_Item and api.GetItemStateChunk) then return nil end
   local item=api.GetMediaItemTake_Item(take);if not item then return nil end
@@ -3443,6 +3465,9 @@ local function create_media_gate(api,graphics)
  end
  return M,P
 end
+return create_media_gate
+end)()
+-- END BLT MEDIA GATE
 local mediaGraphics={}
 local Media,reaper=create_media_gate(reaper,mediaGraphics)
 
@@ -4043,7 +4068,169 @@ LanguageCatalog.en["全体"]="All"
 LanguageCatalog.en["選択アイテム（ブロック）"]="Selected item blocks"
 LanguageCatalog.en["選択アイテムから配置範囲を作成"]="Build ranges from selected items"
 
+LanguageCatalog.en['現在の環境で保存先フォルダーを選び直してください。']='Choose the output folder on this computer.'
+LanguageCatalog.en['現在のOSで使用できる保存フォルダーを指定してください。']='Choose an output folder supported by this OS.'
 local Language=create_language(reaper,"BLT_LOOP_RM_STUDIO",LanguageCatalog)
+-- BEGIN BLT PORTABLE PATHS 1.0.0
+local BLTPaths=(function()
+-- BLT portable paths 1.0.0. Embedded in standalone scripts.
+local M = {}
+local function windows(api) return (api.GetOS() or ''):match('Win') ~= nil end
+local function slash(path)
+  path = tostring(path or ''):gsub('\\', '/')
+  local prefix = path:sub(1, 2) == '//' and '//' or ''
+  return prefix .. path:sub(#prefix + 1):gsub('/+', '/'):gsub('/+$', '')
+end
+function M.absolute(path)
+  if type(path) ~= 'string' then return false end
+  local value = path:gsub('\\', '/')
+  return value:sub(1, 1) == '/' or value:match('^%a:/') ~= nil
+end
+function M.native(api, path, relative)
+  if type(path) ~= 'string' or path:find('[%z\r\n]') then return false end
+  if path == '' then return relative == true end
+  if windows(api) then
+    if path:match('^%a:[/\\]') or path:match('^[/\\][/\\][^/\\]+[/\\][^/\\]+') then return true end
+    return relative == true and not path:match('^[/\\]') and not path:match('^%a:')
+  end
+  if path:match('^%a:') or path:find('\\', 1, true) then return false end
+  return path:sub(1, 1) == '/' or relative == true
+end
+local function child(value)
+  if value == '' or value:sub(1, 1) == '/' or value:find('\\', 1, true) or value:find('[%z\r\n:]') then return end
+  for part in value:gmatch('[^/]+') do if part == '.' or part == '..' then return end end
+  return value
+end
+function M.join(base, relative)
+  local value = child(relative)
+  if value then return slash(base) .. '/' .. value end
+end
+function M.encode(api, path)
+  if type(path) ~= 'string' or path == '' or path:sub(1, 10) == '@resource/' then return path end
+  local root, value = slash(api.GetResourcePath()), slash(path)
+  local a, b = root, value
+  if windows(api) then a, b = a:lower(), b:lower() end
+  if b:sub(1, #a + 1) == a .. '/' then
+    local relative = child(value:sub(#root + 2))
+    if relative then return '@resource/' .. relative end
+  end
+  return path
+end
+function M.decode(api, path)
+  if type(path) ~= 'string' then return end
+  if path:sub(1, 10) ~= '@resource/' then return path end
+  local relative = child(path:sub(11))
+  if relative then return slash(api.GetResourcePath()) .. '/' .. relative end
+end
+function M.exists(api, path)
+  if not path or path == '' or not M.native(api, path, false) then return false end
+  if api.file_exists then return api.file_exists(path) == true end
+  local file = io.open(path, 'rb');if not file then return false end
+  file:close();return true
+end
+function M.readable(api, path)
+  if not path or path == '' or not M.native(api, path, false) then return false end
+  local file = io.open(path, 'rb');if not file then return false end
+  file:close();return true
+end
+function M.executable(api, path)
+  path = M.decode(api, path)
+  if type(path) ~= 'string' or path == '' or path:find('[%z\r\n]') then return end
+  if not windows(api) and path:lower():match('%.exe$') then return end
+  if M.absolute(path) then return M.exists(api, path) and path or nil end
+  if path:match('^[%w_.%-]+$') then return path end
+end
+function M.directory(api, path)
+  if type(path) ~= 'string' or path == '' or type(api.JS_File_Stat) ~= 'function' then return false end
+  local result = table.pack(pcall(api.JS_File_Stat, path))
+  return result[1] and result[2] == 0 and type(result[10]) == 'number' and (result[10] & 0xF000) == 0x4000
+end
+function M.file(api, path, folders)
+  local value = M.decode(api, path)
+  if M.exists(api, value) then return value end
+  if type(path) ~= 'string' or path:sub(1, 10) == '@resource/' then return end
+  local normalized = slash(path)
+  for _, folder in ipairs(folders or {}) do
+    local prefix = '/' .. folder .. '/'
+    local at = normalized:lower():find(prefix:lower(), 1, true)
+    local relative = at and child(normalized:sub(at + #prefix))
+    if relative then
+      local candidate = slash(api.GetResourcePath()) .. '/' .. folder .. '/' .. relative
+      if M.exists(api, candidate) then return candidate end
+    end
+  end
+end
+local environments = {}
+function M.environment(api)
+  local root = slash(api.GetResourcePath())
+  if environments[root] ~= nil then return environments[root] or nil end
+  local path = root .. '/UserPlugins/.blt-environment-id'
+  local function read()
+    local file = io.open(path, 'rb');if not file then return end
+    local value = file:read(129);file:close()
+    if value and #value >= 16 and #value <= 128 and value:match('^[%x{}%-]+$') then return value end
+  end
+  local value = read()
+  if not value and api.genGuid then
+    pcall(function()
+      if api.RecursiveCreateDirectory then api.RecursiveCreateDirectory(root .. '/UserPlugins', 0) end
+      local token = api.genGuid();assert(type(token) == 'string' and token:match('^[%x{}%-]+$'))
+      local file = assert(io.open(path, 'wb'));local ok = file:write(token);local closed = file:close()
+      if ok and closed then value = read() end
+    end)
+  end
+  environments[root] = value or false
+  return value
+end
+local confirmed = {}
+function M.confirm(path) confirmed[path] = true end
+function M.output(api, path, owner)
+  if not M.native(api, path, true) then return false end
+  if path == '' or not M.absolute(path) or confirmed[path] then return true end
+  if owner and owner ~= '' then return owner == M.environment(api) end
+  return M.directory(api, path)
+end
+function M.registry(api, identify)
+  local file = io.open(api.GetResourcePath() .. '/reaper-kb.ini', 'rb')
+  if not file then return {} end
+  local raw = file:read('*a');file:close()
+  local result = {data = raw}
+  for line in raw:gmatch('[^\r\n]+') do
+    local command, path = line:match('^SCR%s+%d+%s+0%s+(%S+)%s+.*%s+"([^"]+)"%s*$')
+    if not command then command, path = line:match('^SCR%s+%d+%s+0%s+(%S+)%s+.*%s+(%S+)%s*$') end
+    local name = path and slash(path):match('([^/]+)$')
+    local id = name and identify(name:lower():gsub(' ', '_'))
+    if id then
+      if not M.absolute(path) then path = api.GetResourcePath() .. '/Scripts/' .. path end
+      result[id] = result[id] or {}
+      result[id][#result[id] + 1] = {path = path, command = '_' .. command:gsub('^_', '')}
+    end
+  end
+  return result
+end
+function M.action(api, id, stored, command, entries, identify, verify)
+  local choices, seen = {}, {}
+  for _, row in ipairs(entries[id] or {}) do
+    if M.readable(api, row.path) and (not verify or verify(id, row.path)) then
+      if row.command == command then return row.path, row.command end
+      local key = slash(row.path);if windows(api) then key = key:lower() end
+      if not seen[key] then choices[#choices + 1] = row;seen[key] = true end
+    end
+  end
+  if #choices == 1 then return choices[1].path, choices[1].command end
+  if #choices > 1 then return nil, 'Multiple registered copies; run the intended action once.' end
+  local path = M.decode(api, stored)
+  local name = path and slash(path):match('([^/]+)$')
+  if name and identify(name:lower():gsub(' ', '_')) == id then
+    path = M.file(api, stored, {'Scripts'})
+    if path and M.readable(api, path) and (not verify or verify(id, path)) then return path, '' end
+  end
+  return nil, 'Script not found; run the installed action once to enable restoration again.'
+end
+return M
+end)()
+-- END BLT PORTABLE PATHS
+
 local R=reaper
 local Presets={items={},revision=0}
 do
@@ -4108,12 +4295,21 @@ function B.publicError(value,fallback)
  if text:match('^%s*$') then return fallback or '処理中にエラーが発生しました。' end
  return text
 end
+-- BEGIN BLT TABLE EQUALITY 1.0.0
 function B.same(a,b)
- if type(a)~=type(b) then return false end
- if type(a)~='table' then return a==b end
- for k,v in pairs(a) do if not B.same(v,b[k]) then return false end end
- for k in pairs(b) do if a[k]==nil then return false end end;return true
+ local kind=type(a)
+ if kind~=type(b)then return false end
+ if kind~='table'then return a==b end
+ for k,v in pairs(a)do
+  local other=b[k]
+  if type(v)=='table'then
+   if not B.same(v,other)then return false end
+  elseif v~=other or type(v)~=type(other)then return false end
+ end
+ for k in pairs(b)do if a[k]==nil then return false end end
+ return true
 end
+-- END BLT TABLE EQUALITY
 function B.shape(v,base)
  if type(v)~=type(base) then return false end
  if type(v)=='table' then
@@ -4969,7 +5165,11 @@ end
 function Core.native_format(project)
  local ok,encoded=R.GetSetProjectInfo_String(project,'RENDER_FORMAT','',false)
  assert(ok,'REAPER本体の出力形式を取得できません。')
- local sink=Core.unbase64(encoded or '')
+ if Core.native_format_encoded~=encoded or not Core.native_format_sink then
+  local sink=Core.unbase64(encoded or '')
+  Core.native_format_encoded,Core.native_format_sink=encoded,sink
+ end
+ local sink=Core.native_format_sink
  assert(sink:sub(1,4)=='evaw','REAPER本体の出力形式をWAVに設定してください。')
  local bits=sink:byte(5)
  assert(bits==16 or bits==24 or bits==32,'対応形式はWAV 16/24 bit PCM・32 bit floatです。')
@@ -6253,7 +6453,7 @@ function UI.options(selected_key)
   exclude_selected_region=A.exclude_selected_region,embed_loop_region=A.embed_loop_region}
 end
 function UI.preflight()
- if not Media.ready() then return end
+ if not Media.available() then return end
  local selected=UI.selected_rows();local start,ending=UI.bounds()
  A.start,A.finish=start,ending;A.plans={}
  if #selected==0 or not finite(start) or not finite(ending) or ending<=start then
@@ -6280,7 +6480,9 @@ function UI.load_project(project)
  end
  A.project=project;A.selected=nil;A.selected_regions={};A.region_selection_signature=nil;A.region_selection_problem=nil
  local function get(key,default) local _,v=R.GetProjExtState(project,PROJECT_SECTION,key);return v~='' and v or default end
- A.filename=get('filename','$region');A.directory=get('directory','')
+ local savedDirectory=get('directory','')
+ A.filename=get('filename','$region');A.directory=BLTPaths.decode(R,savedDirectory)or savedDirectory;A.directory_origin=get('directory_origin','')
+ if savedDirectory:sub(1,10)=='@resource/'and BLTPaths.native(R,A.directory,false)then BLTPaths.confirm(A.directory);A.directory_origin=BLTPaths.environment(R)or''end
  if A.directory=='' then A.directory=R.GetProjectPathEx(project,'') end
  A.encoding=get('encoding','UTF-8');if A.encoding~='UTF-8' and A.encoding~='CP932' then A.encoding='UTF-8' end
  for k,default in pairs({sr=48000,bits=24,channels=2}) do A[k]=tonumber(get(k,tostring(default))) or default end
@@ -6327,13 +6529,17 @@ function UI.load_project(project)
  A.revision=nil
 end
 function UI.save_settings()
+ if A.use_default_directory then A.directory_origin=''
+ elseif (not A.directory_origin or A.directory_origin=='')and BLTPaths.output(R,A.directory,nil)then A.directory_origin=BLTPaths.environment(R)or''end
  if not A.project or (R.ValidatePtr and not R.ValidatePtr(A.project,'ReaProject*')) then return end
  A.length_values[A.unit]=A.length
  A.interval_values[A.interval_unit]=A.interval
  for _,k in ipairs({'filename','directory','sr','bits','channels','encoding','use_default_directory','use_default_filename','use_format','embed_markers','embed_regions','exclude_selected_region','embed_loop_region','omit_name','xfade_seconds','add_mode','unit','interval_unit','count','relative_lock','auto_audition','marker_color','region_color','sustain_color'}) do
   local val=tostring(A[k]);local _,old=R.GetProjExtState(A.project,PROJECT_SECTION,k)
+  if k=='directory'then val=A.use_default_directory and''or BLTPaths.encode(R,A.directory)end
   if old~=val then R.SetProjExtState(A.project,PROJECT_SECTION,k,val) end
  end
+ local _,origin=R.GetProjExtState(A.project,PROJECT_SECTION,'directory_origin');if origin~=(A.directory_origin or'')then R.SetProjExtState(A.project,PROJECT_SECTION,'directory_origin',A.directory_origin or'')end
  for unit,value in pairs(A.length_values) do
   local key='length_'..unit;local val=tostring(value);local _,old=R.GetProjExtState(A.project,PROJECT_SECTION,key)
   if old~=val then R.SetProjExtState(A.project,PROJECT_SECTION,key,val) end
@@ -6362,7 +6568,7 @@ function UI.poll(now,force,render_prepare)
   UI.load_project(active);force=true
  end
  if (A.busy and not render_prepare) or (not force and now<A.poll_at) then return end
- if not Media.ready() then return end;A.poll_at=now+.12
+ if not Media.available() then return end;A.poll_at=now+.12
  local project=R.EnumProjects(-1,'')
  if project~=A.project then UI.load_project(project);force=true end
  local _,dir=R.GetSetProjectInfo_String(project,'RENDER_FILE','',false)
@@ -6397,7 +6603,7 @@ function UI.choose_directory()
    local dir=path:match('^(.*)[/\\][^/\\]*$')
    assert(dir and dir~='','保存先のディレクトリパスを取得できません。')
    if dir:match('^%a:$') then dir=dir..'\\' end
-   A.directory=dir;UI.refresh()
+   A.directory=dir;BLTPaths.confirm(dir);A.directory_origin=BLTPaths.environment(R)or'';UI.refresh()
   end
  else UI.begin_edit('field_directory',A,'directory',nil) end
 end
@@ -6604,6 +6810,7 @@ function UI.output_path(p,batch_index,batch_count)
  local directory,name,manual_pattern
  if not A.use_default_directory then
   directory=A.directory
+  assert(BLTPaths.output(R,directory,A.directory_origin),'現在の環境で保存先フォルダーを選び直してください。')
   assert(directory~='' and not directory:find('[%c;$]'),'出力フォルダーが不正です。')
   assert(directory:match('^%a:[/\\]') or directory:match('^[/\\]'),'出力フォルダーは絶対パスで指定してください。')
  end
@@ -6851,7 +7058,11 @@ local function normalized_text_value(key,value)
  if key=='filename' then
   value=Core.manual_render_pattern(value)
   if not value then return nil,'ファイル名に使用できない文字があります。' end
- elseif key=='directory' and value=='' then return nil,'保存フォルダーを入力してください。' end
+ elseif key=='directory' then
+  if value==''then return nil,'保存フォルダーを入力してください。'end
+  if not BLTPaths.native(R,value,false)then return nil,'現在のOSで使用できる保存フォルダーを指定してください。'end
+  BLTPaths.confirm(value);A.directory_origin=BLTPaths.environment(R)or''
+ end
  return value
 end
 
@@ -6882,15 +7093,14 @@ function UI.preview_refresh(signature)
  UI.dirty()
 end
 function UI.preview_tick(now)
- if not Media.ready() then return end
  if A.busy or now<(A.preview_at or 0) then return end
  A.preview_at=now+.35
  local signature=UI.preview_signature_now()
  if signature~=A.preview_signature then UI.preview_refresh(signature) end
 end
 function UI.preview_step()
- if not Media.ready() then return end
  local j=A.pjob;if not j then return end
+ if not Media.ready() then return end
  local ok,done=pcall(Core.loop_adjust_step,j)
  if not ok then
   Core.loop_audio_close(j);A.pjob=nil;A.seam=nil;A.seam_hold=nil;A.seam_refreshing=false
@@ -6962,32 +7172,389 @@ BLT.factorySettings={};for k in ('filename directory sr bits channels encoding u
 function BLT.pick(obj,keys) local v=BLT.valueView or {};BLT.valueView=v;for k in pairs(keys) do v[k]=obj[k] end;return v end
 -- Shared BLT app restoration protocol. Each app owns one registry ID.
 local BLTRestore=(function()
--- BLT app restoration 1.1.0. Embedded in standalone apps.
-local M = {version = '1.1.0'}
+-- BLT app restoration 1.2.1. Embedded in standalone apps.
+-- BEGIN BLT PORTABLE PATHS 1.0.0
+local BLTPaths=(function()
+-- BLT portable paths 1.0.0. Embedded in standalone scripts.
+local M = {}
+local function windows(api) return (api.GetOS() or ''):match('Win') ~= nil end
+local function slash(path)
+  path = tostring(path or ''):gsub('\\', '/')
+  local prefix = path:sub(1, 2) == '//' and '//' or ''
+  return prefix .. path:sub(#prefix + 1):gsub('/+', '/'):gsub('/+$', '')
+end
+function M.absolute(path)
+  if type(path) ~= 'string' then return false end
+  local value = path:gsub('\\', '/')
+  return value:sub(1, 1) == '/' or value:match('^%a:/') ~= nil
+end
+function M.native(api, path, relative)
+  if type(path) ~= 'string' or path:find('[%z\r\n]') then return false end
+  if path == '' then return relative == true end
+  if windows(api) then
+    if path:match('^%a:[/\\]') or path:match('^[/\\][/\\][^/\\]+[/\\][^/\\]+') then return true end
+    return relative == true and not path:match('^[/\\]') and not path:match('^%a:')
+  end
+  if path:match('^%a:') or path:find('\\', 1, true) then return false end
+  return path:sub(1, 1) == '/' or relative == true
+end
+local function child(value)
+  if value == '' or value:sub(1, 1) == '/' or value:find('\\', 1, true) or value:find('[%z\r\n:]') then return end
+  for part in value:gmatch('[^/]+') do if part == '.' or part == '..' then return end end
+  return value
+end
+function M.join(base, relative)
+  local value = child(relative)
+  if value then return slash(base) .. '/' .. value end
+end
+function M.encode(api, path)
+  if type(path) ~= 'string' or path == '' or path:sub(1, 10) == '@resource/' then return path end
+  local root, value = slash(api.GetResourcePath()), slash(path)
+  local a, b = root, value
+  if windows(api) then a, b = a:lower(), b:lower() end
+  if b:sub(1, #a + 1) == a .. '/' then
+    local relative = child(value:sub(#root + 2))
+    if relative then return '@resource/' .. relative end
+  end
+  return path
+end
+function M.decode(api, path)
+  if type(path) ~= 'string' then return end
+  if path:sub(1, 10) ~= '@resource/' then return path end
+  local relative = child(path:sub(11))
+  if relative then return slash(api.GetResourcePath()) .. '/' .. relative end
+end
+function M.exists(api, path)
+  if not path or path == '' or not M.native(api, path, false) then return false end
+  if api.file_exists then return api.file_exists(path) == true end
+  local file = io.open(path, 'rb');if not file then return false end
+  file:close();return true
+end
+function M.readable(api, path)
+  if not path or path == '' or not M.native(api, path, false) then return false end
+  local file = io.open(path, 'rb');if not file then return false end
+  file:close();return true
+end
+function M.executable(api, path)
+  path = M.decode(api, path)
+  if type(path) ~= 'string' or path == '' or path:find('[%z\r\n]') then return end
+  if not windows(api) and path:lower():match('%.exe$') then return end
+  if M.absolute(path) then return M.exists(api, path) and path or nil end
+  if path:match('^[%w_.%-]+$') then return path end
+end
+function M.directory(api, path)
+  if type(path) ~= 'string' or path == '' or type(api.JS_File_Stat) ~= 'function' then return false end
+  local result = table.pack(pcall(api.JS_File_Stat, path))
+  return result[1] and result[2] == 0 and type(result[10]) == 'number' and (result[10] & 0xF000) == 0x4000
+end
+function M.file(api, path, folders)
+  local value = M.decode(api, path)
+  if M.exists(api, value) then return value end
+  if type(path) ~= 'string' or path:sub(1, 10) == '@resource/' then return end
+  local normalized = slash(path)
+  for _, folder in ipairs(folders or {}) do
+    local prefix = '/' .. folder .. '/'
+    local at = normalized:lower():find(prefix:lower(), 1, true)
+    local relative = at and child(normalized:sub(at + #prefix))
+    if relative then
+      local candidate = slash(api.GetResourcePath()) .. '/' .. folder .. '/' .. relative
+      if M.exists(api, candidate) then return candidate end
+    end
+  end
+end
+local environments = {}
+function M.environment(api)
+  local root = slash(api.GetResourcePath())
+  if environments[root] ~= nil then return environments[root] or nil end
+  local path = root .. '/UserPlugins/.blt-environment-id'
+  local function read()
+    local file = io.open(path, 'rb');if not file then return end
+    local value = file:read(129);file:close()
+    if value and #value >= 16 and #value <= 128 and value:match('^[%x{}%-]+$') then return value end
+  end
+  local value = read()
+  if not value and api.genGuid then
+    pcall(function()
+      if api.RecursiveCreateDirectory then api.RecursiveCreateDirectory(root .. '/UserPlugins', 0) end
+      local token = api.genGuid();assert(type(token) == 'string' and token:match('^[%x{}%-]+$'))
+      local file = assert(io.open(path, 'wb'));local ok = file:write(token);local closed = file:close()
+      if ok and closed then value = read() end
+    end)
+  end
+  environments[root] = value or false
+  return value
+end
+local confirmed = {}
+function M.confirm(path) confirmed[path] = true end
+function M.output(api, path, owner)
+  if not M.native(api, path, true) then return false end
+  if path == '' or not M.absolute(path) or confirmed[path] then return true end
+  if owner and owner ~= '' then return owner == M.environment(api) end
+  return M.directory(api, path)
+end
+function M.registry(api, identify)
+  local file = io.open(api.GetResourcePath() .. '/reaper-kb.ini', 'rb')
+  if not file then return {} end
+  local raw = file:read('*a');file:close()
+  local result = {data = raw}
+  for line in raw:gmatch('[^\r\n]+') do
+    local command, path = line:match('^SCR%s+%d+%s+0%s+(%S+)%s+.*%s+"([^"]+)"%s*$')
+    if not command then command, path = line:match('^SCR%s+%d+%s+0%s+(%S+)%s+.*%s+(%S+)%s*$') end
+    local name = path and slash(path):match('([^/]+)$')
+    local id = name and identify(name:lower():gsub(' ', '_'))
+    if id then
+      if not M.absolute(path) then path = api.GetResourcePath() .. '/Scripts/' .. path end
+      result[id] = result[id] or {}
+      result[id][#result[id] + 1] = {path = path, command = '_' .. command:gsub('^_', '')}
+    end
+  end
+  return result
+end
+function M.action(api, id, stored, command, entries, identify, verify)
+  local choices, seen = {}, {}
+  for _, row in ipairs(entries[id] or {}) do
+    if M.readable(api, row.path) and (not verify or verify(id, row.path)) then
+      if row.command == command then return row.path, row.command end
+      local key = slash(row.path);if windows(api) then key = key:lower() end
+      if not seen[key] then choices[#choices + 1] = row;seen[key] = true end
+    end
+  end
+  if #choices == 1 then return choices[1].path, choices[1].command end
+  if #choices > 1 then return nil, 'Multiple registered copies; run the intended action once.' end
+  local path = M.decode(api, stored)
+  local name = path and slash(path):match('([^/]+)$')
+  if name and identify(name:lower():gsub(' ', '_')) == id then
+    path = M.file(api, stored, {'Scripts'})
+    if path and M.readable(api, path) and (not verify or verify(id, path)) then return path, '' end
+  end
+  return nil, 'Script not found; run the installed action once to enable restoration again.'
+end
+return M
+end)()
+-- END BLT PORTABLE PATHS
+local M = {version = '1.2.1'}
 local SECTION = 'BLT_APP_RESTORE'
 M.launcher = [=[
+-- BEGIN BLT PORTABLE PATHS 1.0.0
+local BLTPaths=(function()
+-- BLT portable paths 1.0.0. Embedded in standalone scripts.
+local M = {}
+local function windows(api) return (api.GetOS() or ''):match('Win') ~= nil end
+local function slash(path)
+  path = tostring(path or ''):gsub('\\', '/')
+  local prefix = path:sub(1, 2) == '//' and '//' or ''
+  return prefix .. path:sub(#prefix + 1):gsub('/+', '/'):gsub('/+$', '')
+end
+function M.absolute(path)
+  if type(path) ~= 'string' then return false end
+  local value = path:gsub('\\', '/')
+  return value:sub(1, 1) == '/' or value:match('^%a:/') ~= nil
+end
+function M.native(api, path, relative)
+  if type(path) ~= 'string' or path:find('[%z\r\n]') then return false end
+  if path == '' then return relative == true end
+  if windows(api) then
+    if path:match('^%a:[/\\]') or path:match('^[/\\][/\\][^/\\]+[/\\][^/\\]+') then return true end
+    return relative == true and not path:match('^[/\\]') and not path:match('^%a:')
+  end
+  if path:match('^%a:') or path:find('\\', 1, true) then return false end
+  return path:sub(1, 1) == '/' or relative == true
+end
+local function child(value)
+  if value == '' or value:sub(1, 1) == '/' or value:find('\\', 1, true) or value:find('[%z\r\n:]') then return end
+  for part in value:gmatch('[^/]+') do if part == '.' or part == '..' then return end end
+  return value
+end
+function M.join(base, relative)
+  local value = child(relative)
+  if value then return slash(base) .. '/' .. value end
+end
+function M.encode(api, path)
+  if type(path) ~= 'string' or path == '' or path:sub(1, 10) == '@resource/' then return path end
+  local root, value = slash(api.GetResourcePath()), slash(path)
+  local a, b = root, value
+  if windows(api) then a, b = a:lower(), b:lower() end
+  if b:sub(1, #a + 1) == a .. '/' then
+    local relative = child(value:sub(#root + 2))
+    if relative then return '@resource/' .. relative end
+  end
+  return path
+end
+function M.decode(api, path)
+  if type(path) ~= 'string' then return end
+  if path:sub(1, 10) ~= '@resource/' then return path end
+  local relative = child(path:sub(11))
+  if relative then return slash(api.GetResourcePath()) .. '/' .. relative end
+end
+function M.exists(api, path)
+  if not path or path == '' or not M.native(api, path, false) then return false end
+  if api.file_exists then return api.file_exists(path) == true end
+  local file = io.open(path, 'rb');if not file then return false end
+  file:close();return true
+end
+function M.readable(api, path)
+  if not path or path == '' or not M.native(api, path, false) then return false end
+  local file = io.open(path, 'rb');if not file then return false end
+  file:close();return true
+end
+function M.executable(api, path)
+  path = M.decode(api, path)
+  if type(path) ~= 'string' or path == '' or path:find('[%z\r\n]') then return end
+  if not windows(api) and path:lower():match('%.exe$') then return end
+  if M.absolute(path) then return M.exists(api, path) and path or nil end
+  if path:match('^[%w_.%-]+$') then return path end
+end
+function M.directory(api, path)
+  if type(path) ~= 'string' or path == '' or type(api.JS_File_Stat) ~= 'function' then return false end
+  local result = table.pack(pcall(api.JS_File_Stat, path))
+  return result[1] and result[2] == 0 and type(result[10]) == 'number' and (result[10] & 0xF000) == 0x4000
+end
+function M.file(api, path, folders)
+  local value = M.decode(api, path)
+  if M.exists(api, value) then return value end
+  if type(path) ~= 'string' or path:sub(1, 10) == '@resource/' then return end
+  local normalized = slash(path)
+  for _, folder in ipairs(folders or {}) do
+    local prefix = '/' .. folder .. '/'
+    local at = normalized:lower():find(prefix:lower(), 1, true)
+    local relative = at and child(normalized:sub(at + #prefix))
+    if relative then
+      local candidate = slash(api.GetResourcePath()) .. '/' .. folder .. '/' .. relative
+      if M.exists(api, candidate) then return candidate end
+    end
+  end
+end
+local environments = {}
+function M.environment(api)
+  local root = slash(api.GetResourcePath())
+  if environments[root] ~= nil then return environments[root] or nil end
+  local path = root .. '/UserPlugins/.blt-environment-id'
+  local function read()
+    local file = io.open(path, 'rb');if not file then return end
+    local value = file:read(129);file:close()
+    if value and #value >= 16 and #value <= 128 and value:match('^[%x{}%-]+$') then return value end
+  end
+  local value = read()
+  if not value and api.genGuid then
+    pcall(function()
+      if api.RecursiveCreateDirectory then api.RecursiveCreateDirectory(root .. '/UserPlugins', 0) end
+      local token = api.genGuid();assert(type(token) == 'string' and token:match('^[%x{}%-]+$'))
+      local file = assert(io.open(path, 'wb'));local ok = file:write(token);local closed = file:close()
+      if ok and closed then value = read() end
+    end)
+  end
+  environments[root] = value or false
+  return value
+end
+local confirmed = {}
+function M.confirm(path) confirmed[path] = true end
+function M.output(api, path, owner)
+  if not M.native(api, path, true) then return false end
+  if path == '' or not M.absolute(path) or confirmed[path] then return true end
+  if owner and owner ~= '' then return owner == M.environment(api) end
+  return M.directory(api, path)
+end
+function M.registry(api, identify)
+  local file = io.open(api.GetResourcePath() .. '/reaper-kb.ini', 'rb')
+  if not file then return {} end
+  local raw = file:read('*a');file:close()
+  local result = {data = raw}
+  for line in raw:gmatch('[^\r\n]+') do
+    local command, path = line:match('^SCR%s+%d+%s+0%s+(%S+)%s+.*%s+"([^"]+)"%s*$')
+    if not command then command, path = line:match('^SCR%s+%d+%s+0%s+(%S+)%s+.*%s+(%S+)%s*$') end
+    local name = path and slash(path):match('([^/]+)$')
+    local id = name and identify(name:lower():gsub(' ', '_'))
+    if id then
+      if not M.absolute(path) then path = api.GetResourcePath() .. '/Scripts/' .. path end
+      result[id] = result[id] or {}
+      result[id][#result[id] + 1] = {path = path, command = '_' .. command:gsub('^_', '')}
+    end
+  end
+  return result
+end
+function M.action(api, id, stored, command, entries, identify, verify)
+  local choices, seen = {}, {}
+  for _, row in ipairs(entries[id] or {}) do
+    if M.readable(api, row.path) and (not verify or verify(id, row.path)) then
+      if row.command == command then return row.path, row.command end
+      local key = slash(row.path);if windows(api) then key = key:lower() end
+      if not seen[key] then choices[#choices + 1] = row;seen[key] = true end
+    end
+  end
+  if #choices == 1 then return choices[1].path, choices[1].command end
+  if #choices > 1 then return nil, 'Multiple registered copies; run the intended action once.' end
+  local path = M.decode(api, stored)
+  local name = path and slash(path):match('([^/]+)$')
+  if name and identify(name:lower():gsub(' ', '_')) == id then
+    path = M.file(api, stored, {'Scripts'})
+    if path and M.readable(api, path) and (not verify or verify(id, path)) then return path, '' end
+  end
+  return nil, 'Script not found; run the installed action once to enable restoration again.'
+end
+return M
+end)()
+-- END BLT PORTABLE PATHS
 local r=reaper
 local section='BLT_APP_RESTORE'
 if r.GetExtState(section,'startup_done')=='1'then return end
 r.SetExtState(section,'startup_done','1',false)
-r.SetExtState(section,'launcher_checked','1.1.0',false)
-local count=math.min(128,tonumber(r.GetExtState(section,'count'))or 0)
-local index=1
-local function step()
- while index<=count do
-  local id=r.GetExtState(section,'app_'..index);index=index+1
-  if id~=''and r.GetExtState(section,id..'_open')=='1'and r.GetExtState(section,id..'_running')~='1'then
-   local ok,err=pcall(function()
-    local path=r.GetExtState(section,id..'_path')
-    local f=io.open(path,'rb');if not f then return end;f:close()
-    local command=r.NamedCommandLookup(r.GetExtState(section,id..'_command'))
-    if command==0 then command=r.AddRemoveReaScript(true,0,path,true)end
-    if command and command>0 then r.Main_OnCommand(command,0)end
-   end)
-   if not ok then r.ShowConsoleMsg('BLT restore: '..id..': '..tostring(err)..'\n')end
-   r.defer(step);return
-  end
+r.SetExtState(section,'launcher_checked','1.2.1',false)
+local function save(key,value,persist)
+ if r.GetExtState(section,key)~=value then r.SetExtState(section,key,value,persist)end
+end
+local aliases={}
+local function canonical(name)
+ local id=name:match('^(blt_[%w_]+)%.lua$');return id and id:upper()
+end
+local function identify(name)
+ if aliases[name]==false then return nil end
+ return aliases[name]or canonical(name)
+end
+local function verify(id,path)
+ local name=path:gsub('\\','/'):match('([^/]+)$')or''
+ if canonical(name:lower():gsub(' ','_'))==id then return true end
+ local file=io.open(path,'rb');if not file then return false end
+ local text=file:read(4194304)or'';file:close()
+ return text:find(".new('"..id.."')",1,true)~=nil or text:find('.new("'..id..'")',1,true)~=nil
+end
+local count=math.max(0,math.min(128,tonumber(r.GetExtState(section,'count'))or 0))
+local pending={}
+for i=1,count do
+ local id=r.GetExtState(section,'app_'..i)
+ if id:match('^BLT_[A-Z_]+$')and r.GetExtState(section,id..'_open')=='1'and r.GetExtState(section,id..'_running')~='1'then pending[#pending+1]=id end
+end
+for _,id in ipairs(pending)do
+ local path=BLTPaths.decode(r,r.GetExtState(section,id..'_path'))or''
+ local name=path:gsub('\\','/'):match('([^/]+)$')
+ if name then
+  name=name:lower():gsub(' ','_')
+  if aliases[name]and aliases[name]~=id then aliases[name]=false elseif aliases[name]~=false then aliases[name]=id end
  end
+end
+local entries,index=nil,1
+local function step()
+ local id=pending[index];index=index+1
+ if not id then return end
+ if r.GetExtState(section,id..'_open')=='1'and r.GetExtState(section,id..'_running')~='1'then
+  local ok,err=pcall(function()
+   entries=entries or BLTPaths.registry(r,identify)
+   local path,command=BLTPaths.action(r,id,r.GetExtState(section,id..'_path'),r.GetExtState(section,id..'_command'),entries,identify,verify)
+   if not path then
+    save(id..'_open','0',true);save(id..'_path','',true);save(id..'_command','',true)
+    if r.ShowConsoleMsg then r.ShowConsoleMsg('BLT restore: '..id..': '..command..'\n')end
+    return
+   end
+   local cmd=command~=''and r.NamedCommandLookup(command)or 0
+   if not cmd or cmd<=0 then cmd=r.AddRemoveReaScript(true,0,path,true)end
+   if not cmd or cmd<=0 then save(id..'_open','0',true);return end
+   save(id..'_path',BLTPaths.encode(r,path),true)
+   local named=r.ReverseNamedCommandLookup(cmd)or''
+   save(id..'_command',named~=''and'_'..named:gsub('^_','')or'',true)
+   r.Main_OnCommand(cmd,0)
+  end)
+  if not ok and r.ShowConsoleMsg then r.ShowConsoleMsg('BLT restore: '..id..': '..tostring(err)..'\n')end
+ end
+ r.defer(step)
 end
 r.defer(step)
 ]=]
@@ -7003,16 +7570,6 @@ local function bytes(path,data)
 end
 local function write(path,data)
  local previous=read(path);if previous==data then return end
- if previous then
-  local suffix=0
-  while true do
-   local backup=path..'.blt-backup'..(suffix==0 and '' or '-'..suffix)
-   local saved=read(backup)
-   if not saved then bytes(backup,previous);break end
-   if saved==previous then break end
-   suffix=suffix+1;assert(suffix<=100,'Too many BLT startup backups')
-  end
- end
  local ok,err=pcall(bytes,path,data)
  if not ok then
   if previous then
@@ -7061,7 +7618,7 @@ function M.new(id)
    assert(count<128,'BLT restore registry is full')
    save(api,'app_'..(count+1),id,true);save(api,'count',tostring(count+1),true)
   end
-  save(api,id..'_path',path,true)
+  save(api,id..'_path',BLTPaths.encode(api,path),true)
   local named=api.ReverseNamedCommandLookup(command)or''
   save(api,id..'_command',named~=''and'_'..named:gsub('^_','')or'',true)
   save(api,id..'_open','1',true);save(api,id..'_running','1',false)
