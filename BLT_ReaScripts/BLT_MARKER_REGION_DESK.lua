@@ -1,5 +1,5 @@
 -- @description MARKER REGION DESK
--- @version 0.6.22
+-- @version 0.6.23
 -- @author Balrulu
 -- @provides
 --   . > ../
@@ -383,8 +383,8 @@ function M.new(g,clock,palette)
   if self.released then self.capture=nil end
   if self.editor then self.editor:frame() end
  end
- function U:interaction(id,x,y,w,h,enabled)
-  enabled=enabled~=false and not self.blocked and not (self.editor and self.editor.edit);local s=self:state(id);local hot=enabled and self:inside(x,y,w,h)
+ function U:interaction(id,x,y,w,h,enabled,allowWhileEditing)
+  enabled=enabled~=false and not self.blocked and (allowWhileEditing or not (self.editor and self.editor.edit));local s=self:state(id);local hot=enabled and self:inside(x,y,w,h)
   if enabled then self.order[#self.order+1]=id end
   if hot and self.pressed then self.capture=id;self.focus=id;self.hit=true end
   local held=enabled and self.capture==id and self.down
@@ -903,11 +903,13 @@ function M.new(api,title,width,height,section)
   elseif not retiredImages[image] then retiredImages[image]={frame=gradientFrame,time=api.time_precise()} end
  end
  function H:retainImages()
+  if not self.windowBegun or self.resumeResources then return end
   if not next(imageCache) then return end
   local draw=I.GetForegroundDrawList(ctx)
   for image in pairs(imageCache) do I.DrawList_AddImage(draw,image,0,0,0,0,0,0,1,1,0) end
  end
  function H:retainResources()
+  if not self.windowBegun or self.resumeResources then return end
   self:retainImages()
   for _,record in ipairs(records) do I.PushFont(ctx,record.font,record.retainSize);I.PopFont(ctx) end
  end
@@ -1411,8 +1413,11 @@ function M.new(api,title,width,height,section)
   local shown,open=I.Begin(ctx,self.title,true,I.WindowFlags_NoScrollbar|I.WindowFlags_NoScrollWithMouse|I.WindowFlags_NoTitleBar|I.WindowFlags_NoMove|focusFlag)
   I.PopStyleColor(ctx);I.PopStyleVar(ctx,3)
   self.windowBegun=shown
-  if gradientFrame%60==1 then self:retainResources() end
   self.shown=shown;self.open=open
+  -- A hidden viewport may leave bitmap updates pending in the renderer.
+  -- Let one visible frame consume them before touching cached textures again.
+  self.resumeResources=shown and previouslyShown==false
+  if gradientFrame%60==1 then self:retainResources() end
   if shown and previouslyShown==false then self.visibilitySettle=4 end
   self.resourceHold=self.imageHold or not shown or (self.visibilitySettle or 0)>0
   if not shown then return false end
@@ -1469,7 +1474,7 @@ function M.new(api,title,width,height,section)
     end
    end
   end
-  return true
+  return not self.resumeResources
  end
  function H:finish()
   local ok,why=pcall(function()
@@ -2121,6 +2126,7 @@ function M.new(host,api,options)
 end
 return M
 end)()
+
 BLT.Shell=(function()
 local M={}
 local ChromeRaster,ShellText=BLT.ChromeRaster,BLT.ShellText
@@ -5245,7 +5251,7 @@ local function draw()
  local message=A.blt_status or (#A.items==0 and 'マーカー／リージョンがありません。' or string.format('%d件  選択 %d件',#A.items,A.selected_count or 0))
  local bad=A.blt_bad
  if BLT.notice then message,bad=BLT.notice,BLT.noticeBad end
- shell:footer(message,bad,W,H+22,'0.6.15')
+ shell:footer(message,bad,W,H+22,'0.6.23')
  shell:drawBar();drawContext()
  U.scale,U.ox,U.oy=density*scale,ox,oy
 end

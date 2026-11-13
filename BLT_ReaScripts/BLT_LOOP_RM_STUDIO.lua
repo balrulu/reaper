@@ -1181,11 +1181,13 @@ function M.new(api,title,width,height,section)
   elseif not retiredImages[image] then retiredImages[image]={frame=gradientFrame,time=api.time_precise()} end
  end
  function H:retainImages()
+  if not self.windowBegun or self.resumeResources then return end
   if not next(imageCache) then return end
   local draw=I.GetForegroundDrawList(ctx)
   for image in pairs(imageCache) do I.DrawList_AddImage(draw,image,0,0,0,0,0,0,1,1,0) end
  end
  function H:retainResources()
+  if not self.windowBegun or self.resumeResources then return end
   self:retainImages()
   for _,record in ipairs(records) do I.PushFont(ctx,record.font,record.retainSize);I.PopFont(ctx) end
  end
@@ -1689,8 +1691,11 @@ function M.new(api,title,width,height,section)
   local shown,open=I.Begin(ctx,self.title,true,I.WindowFlags_NoScrollbar|I.WindowFlags_NoScrollWithMouse|I.WindowFlags_NoTitleBar|I.WindowFlags_NoMove|focusFlag)
   I.PopStyleColor(ctx);I.PopStyleVar(ctx,3)
   self.windowBegun=shown
-  if gradientFrame%60==1 then self:retainResources() end
   self.shown=shown;self.open=open
+  -- A hidden viewport may leave bitmap updates pending in the renderer.
+  -- Let one visible frame consume them before touching cached textures again.
+  self.resumeResources=shown and previouslyShown==false
+  if gradientFrame%60==1 then self:retainResources() end
   if shown and previouslyShown==false then self.visibilitySettle=4 end
   self.resourceHold=self.imageHold or not shown or (self.visibilitySettle or 0)>0
   if not shown then return false end
@@ -1747,7 +1752,7 @@ function M.new(api,title,width,height,section)
     end
    end
   end
-  return true
+  return not self.resumeResources
  end
  function H:finish()
   local ok,why=pcall(function()
