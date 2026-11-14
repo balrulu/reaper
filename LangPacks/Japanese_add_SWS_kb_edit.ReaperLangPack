@@ -1,8 +1,8 @@
-#NAME:日本語 [JP] - For v7.85 + SWS
+#NAME:日本語 [JP] - For v7.86 + SWS
 ; @description 日本語 [JP] - REAPER + SWS
 ; @author Balrulu
-; @version 7.85.1
-; @changelog Japanese translation for REAPER v7.85 + SWS
+; @version 7.86.0
+; @changelog Japanese translation for REAPER v7.86 + SWS
 
 ; NOTE: this is the best starting point for making a new langpack.
 ; As you translate a string, remove the ; from the beginning of the
@@ -442,6 +442,7 @@ BBB6CA2F694F3806=ゲイン:
 A43D5AFECAA46489=プレビュー
 E5BECCE8B6372D80=ズーム
 BE34D1D1CA3FF8A8=選択項目を編集
+6D34089DA0839FD4=カスタマイズリスト
 6BE8B83EA0A1A15E=アクション
 386DCB7A24A75D67=編集
 3AF66241CE595B8C=エンベロープ
@@ -1123,6 +1124,7 @@ DD0CE22D75D36ED1=トラック名
 978AC938BDD65877=トラック番号
 D82BC4186B1904CA=上
 ;8A3F14717826D8D1=Width
+D459FF8ECD354AD9=コマンドID
 20AFB48FFE418F4F=選択
 6037A596D672320D=ショートカット
 B762E77EB85D7B6C=×
@@ -1206,6 +1208,7 @@ DB927D2B0D27A97F=プライマリ
 8CF4F0AFD0B7C40A=ファイル名
 ADE62F1CFD2974B6=スキャン中...
 2A6ED1B48E88BCC9=ステータス
+A30211799ECFF867=作成
 F0CDBE121A8CBFA9=バッチコンバーター
 7FC8C4AE92742E10=キャンセル済み
 283B45E9974ECF06=変換中
@@ -1522,7 +1525,6 @@ C3DA8AF753A58B0F=ウィンドウを閉じる際にデフォルトのCCレーン�
 4D852D31543F53D5=CC 選択をノート選択に追従させる
 50B1DD4586A4B192=調号を変更
 BC585B6FF340DD35=チャンネルプレッシャー
-A30211799ECFF867=作成
 E78FFFE5EA715BBB=連符を生成...
 9936FD536FA95041=調号を削除
 5FD74DE73CBAB0FA=表示のクオンタイズ設定...
@@ -2138,8 +2140,13 @@ DDAB6253F0B71B7C=自動レンダー
 67DB0C104E15ABAD=開いているプロジェクトのリストを保存...
 75381D695414DB95=トラックを削除(s)
 14AB0E343C321037=すべてのトラックを表示
-6D34089DA0839FD4=カスタマイズリスト
-D459FF8ECD354AD9=コマンドID
+44C7D9889FEBDAE5=無視
+0444991335203938=解析中...
+5B7A5177E1B9CD10=状態
+16021B2387E0B7D6=サイズ
+804FB26B8D7907DE=アクションなし
+E4BD36D8356AED1D=テイクマーカー色を設定
+4A170FAC1550C1AE=更新
 
 [DLG_102] ; IDD_MAIN
 246546A2AD3EB0B4=REAPER (初期化中)
@@ -4326,14 +4333,14 @@ D4901E1576C36907=トラックの上部から新規トラック挿入を可能に
 7968AEE3F4FE417B=埋め込みスライス情報を含むメディア
 0E6A4821C2AD49FB=ファイルを次の形式でインポート:
 5C0EAD3BA3080616=テールをカット:
-1AA4198DCD5FD638=テンポ調整時、インポートされたメディアを自動ストレッチするように設定
-5297592F118C7274=生PCMオーディオ（.SD2等）をインポートする際、再生が正しく行われない可能性を警告
-;^7CCEF3446F2CADF7=Create folder tracks for imported directories
 2F27C19D361104B1=通常の読み込み時:
 47AA835071912B3A=メディアエクスプローラー\n（テンポマッチ有効時）:
 C1F802AE7FD2CD1A=テンポ情報が埋め込まれたメディア:
 EDDE80002054B940=テンポが推定されたメディア:
 DAB0FBC37CF53037=空のプロジェクトをメディアに埋め込まれたテンポに合わせるか確認
+1AA4198DCD5FD638=テンポ調整時、インポートされたメディアを自動ストレッチするように設定
+5297592F118C7274=生PCMオーディオ（.SD2等）をインポートする際、再生が正しく行われない可能性を警告
+;^7CCEF3446F2CADF7=Create folder tracks for imported directories
 
 [DLG_452] ; IDD_EMPTYITEMINFO
 263CA781AB655851=空のソース
@@ -5589,10 +5596,10 @@ AF409E72A1B5E929=次のポップ/クリックを検索
 [DLG_605] ; IDD_IMPORT_RPL_PROMPT
 06CF976E1A99D721='%.300s'には既に存在するプリセット'%.300s'があります。
 62DF25CF9DA8F0A1=.RPLインポート: 重複するプリセット名
-44C7D9889FEBDAE5=無視
 75FC6C1D19279FFF=新しい名前でインポート
 1061FD0CF98C9D46=残りの重複に適用
 ;^F257E1E83F5C7699=Replace
+44C7D9889FEBDAE5=無視
 
 [DLG_606] ; IDD_CONTAINER_HOST
 ;^08329D07B4EB939C=+
@@ -5867,6 +5874,14 @@ C5E256AB49C85CF1=色を選択
 6E81E0DEA62F5E0F=選択項目をリセット...
 ;^6D34089DA0839FD4=Customization list
 ;^D43B88702E996ED9=Filter:
+
+[DLG_632] ; IDD_PACKAGE_IMPORT
+0E64DD48AAF9CCCA=パッケージをインストール
+D5539AE05DD0D5EA=パッケージ内の全ファイルを削除
+E2A1F71E95785466=ウェブサイトを開く
+;^0444991335203938=Analyzing...
+;^F09E4B5C35AA14B9=Cancel
+;^D9B12705AD844C62=List1
 
 [MENU_102] ; IDR_MENU1
 76AC8A0EF584639A=新規プロジェクト...(&N)
@@ -8651,7 +8666,6 @@ A561B455F5DE58BB=このキーは既に他のアクションに使われていま
 01792771EC36C8FB=このキーは利用できない登録アクションにマップされています：
 C306DC3992BF20C5=このキーは存在しないアクションにマップされています。
 343573884A47DD66=上書きしますか？
-5B7A5177E1B9CD10=状態
 CF845C32713C57C5=ReaScriptパス
 38BD9E8EBB25B104=選択して閉じる
 3F0C4A774B49AF33=実行して閉じる
@@ -8665,6 +8679,7 @@ EB0131ECDA17D24C=カスタムアクションを編集
 E4850748DBD946C8=カスタムアクションを作成
 ;^6037A596D672320D=Shortcut
 ;^7DA8EA3426CA11D3=Description
+5B7A5177E1B9CD10=状態
 D459FF8ECD354AD9=コマンドID
 ;^BAC64C1B2E060EE5=Close
 ;^20AFB48FFE418F4F=Select
@@ -8774,13 +8789,15 @@ B831D5D1617AC496=プロジェクトタブ: FXモニタリング中にプロジ�
 3673709955FCCF12=選択したアイテムのソースをメディアエクスプローラーで開く ▲▼ Open selected item source media in Media Explorer
 E68AEE77D1716E0F=選択したアイテムのソースのディレクトリを開く ▲▼ Open selected item source media in explorer/finder
 BE5FFB15ABD5DCEF=ファイル: 環境設定をエクスポート... ▲▼ File: Export configuration...
-5074E861DD4F4BFA=ファイル: 環境設定をインポート... ▲▼ File: Import configuration...
 D008FC1B5EBC6C22=ファイル: プロジェクトをレンダリング... ▲▼ File: Render project to disk...
 D3871A3C13ED8BDE=ファイル: 直近のレンダリング設定でレンダリング ▲▼ File: Render project, using the most recent render settings
 6F7E2982ECE48086=ファイル: 直近のレンダリング設定でドライラン（テスト）レンダリング ▲▼ File: Dry run render project, using the most recent render settings
 8E1795444FEE47D9=ファイル: 直近のレンダリング設定を使用し、新しいターゲットファイル名でレンダリング... ▲▼ File: Render project, using the most recent render settings, with a new target file name...
 B3E64A86A52269E4=ファイル: 直近のレンダリング設定でレンダリング（完了後にダイアログを自動で閉じる） ▲▼ File: Render project, using the most recent render settings, auto-close render dialog
 42CC78B8FDB3DD61=ファイル: 直近のレンダリング設定でレンダリングキューに追加 ▲▼ File: Add project to render queue, using the most recent render settings
+6F492C01FA6F4F78=ファイル: レンダリング時にファイルごとの統計を[each_outfile].render_stats.htmlに書き出す ▲▼ File: Export per-file statistics to [each_outfile].render_stats.html when rendering
+880DD0A9145F07FF=ファイル: レンダリング時に統合統計を[outfile].render_stats.htmlに書き出す ▲▼ File: Export combined statistics to [outfile].render_stats.html when rendering
+8D7C50A703800EC5=ファイル: レンダリング時に統計をファイルに書き出さない ▲▼ File: Do not export statistics to file when rendering
 2CFE1DAEC7CDADE4=ファイル: 最新のレンダーで生成された統計チャートをウェブブラウザで開く ▲▼ File: Open render statistics charts from most recent render in web browser
 42FDBDF2FC6D8E99=ファイル: 最新のレンダーで生成された統計チャートをウェブブラウザで開く (ファイルパスを非表示) ▲▼ File: Open render statistics charts from most recent render in web browser (hide file paths)
 2181C6BF0C8F0937=ファイル: 最新のレンダーで生成された統計チャートをウェブブラウザで開く (プロジェクトのリージョン/マーカーを非表示) ▲▼ File: Open render statistics charts from most recent render in web browser (hide project regions/markers)
@@ -11226,9 +11243,7 @@ A724F6AA892C6837=グリッド: 1/16に設定 ▲▼ Grid: Set to 1/16
 43BC6E6F21CDC3F8=グリッド: 4に設定 ▲▼ Grid: Set to 4
 322A7281794EFF1B=グリッド: アレンジビューとMIDIエディターで同じグリッドを使用 ▲▼ Grid: Use the same grid division in arrange view and MIDI editor
 F8E6A0B81A77C5E9=全MIDIデバイスリセット ▲▼ Reset all MIDI devices
-6F492C01FA6F4F78=ファイル: レンダリング時にファイルごとの統計を[each_outfile].render_stats.htmlに書き出す ▲▼ File: Export per-file statistics to [each_outfile].render_stats.html when rendering
-880DD0A9145F07FF=ファイル: レンダリング時に統合統計を[outfile].render_stats.htmlに書き出す ▲▼ File: Export combined statistics to [outfile].render_stats.html when rendering
-8D7C50A703800EC5=ファイル: レンダリング時に統計をファイルに書き出さない ▲▼ File: Do not export statistics to file when rendering
+B7D5731B253D8C4B=ファイル: 設定/パッケージをインポート... ▲▼ B7D5731B253D8C4B=File: Import configuration/package...
 
 [actions_fmt]
 6A859719FE602A01=トラック: %s の音量を設定（MIDI CC/OSCのみ） ▲▼ Track: Set volume for %s (MIDI CC/OSC only)
@@ -11534,6 +11549,7 @@ FE13FA09B64BB8F0=クリックでアイテムグループに既定色を使用
 ;^F83662614F595302=User 2
 ;^F83663614F5954B5=User 3
 ;^F8365C614F5948D0=User 4
+CAACFC388AA1D94E=クリックでテイクマーカーに既定色を使用
 
 [comp]
 E63708A9651FBB9A=コンプ名
@@ -11590,7 +11606,6 @@ D71428A988ED3FE8=1 個のファイルをインストール
 BD7CFFF2A0861E1A= / %d 個のファイルを変更
 3BC962712055D904= / 1 個のファイルを【削除】
 BC15D33B8E7A1967= / %d 個のファイルを【削除】
-18347C10C98CD94D=設定をインポートするにはREAPERを再起動する必要があります。開いているプロジェクトを保存するよう促され、インストール前に設定内容を確認できます。続行しますか？
 5ED4338681DE1E25=設定をインポートしますか？
 ;^C004CD40F2057E29=FX chains
 ;^91E2929E89C73B1C=Automation Items
@@ -11600,6 +11615,13 @@ BC15D33B8E7A1967= / %d 個のファイルを【削除】
 ;^D840E3186B2B9581=OK
 9A6E97866E0A5FC5=アクション
 ;^ADE62F1CFD2974B6=Scanning...
+A76EC2C1BFC59545=設定をインポートするにはREAPERの再起動が必要です。\r\n\r\n開いているプロジェクトの保存を確認した後、インストール前に設定内容を確認できます。\r\n\r\n続行しますか？
+;^16021B2387E0B7D6=Size
+
+[configimport]
+3B53D42663744CDC=変更なし
+;^F257E1E83F5C7699=Replace
+;^A30211799ECFF867=Create
 
 [container]
 5127EC430BC32336=空にリセット
@@ -12234,6 +12256,8 @@ E87EC19EC81CC9D5=%s [コンテナ %d]
 CDA9DE9108D1F50E=ADL：カット %d のソースファイルインデックスが不正です
 
 [explorer]
+;D84DF2186B36395A=KB
+;D85B8A186B41C5FE=GB
 89440B8014C901E6=PC
 11456A4D80ECCB83=ドキュメント
 99CB34B0BFFC0115=デスクトップ
@@ -12253,8 +12277,6 @@ DD023FF1C69D2E8E=%d/%d を更新中
 FE6A18EFBAD835C1=列を左端へ移動
 839912BDB876AE43=列を左端へ移動: %s
 1BA8B535C6016EE3=列プリセットを保存
-;D84DF2186B36395A=KB
-;D85B8A186B41C5FE=GB
 50E0883209C08CF2=<ディスクなし>
 B82238E409966185=<ネットワーク>
 F929ED9B10754F1E=<CD-ROM>
@@ -12312,13 +12334,13 @@ B7CE5F33B6618667=ファイル %s を更新できません
 BD627BDE5F9EBC6D=Cmd+Opt+ドラッグで選択範囲を新規ファイルへレンダー
 871B26BD632C6F08=Ctrl+Alt+ドラッグで選択範囲を新規ファイルへレンダー
 290F19666031F9BC=ファイル %d/%d を確認中
+;^361AF2206DE0E16A=bytes
+;^D847A2186B3145BC=MB
 ;^A752FB9BC4EC6C8C=Initializing...
 ;^5D3E4AAB7C030AF2=Peak Volume
 ;^CA95C3C55E05662B=Reverse
 ;^7BEA3E437EB3A717=Sort column
 ;^895BB684C276CD93=Preset name:
-;^361AF2206DE0E16A=bytes
-;^D847A2186B3145BC=MB
 ;^09D15F38080A7701=Media
 ;^A2BF58A6DFD853DC=Project
 ;^6037A596D672320D=Shortcut
@@ -12340,7 +12362,7 @@ BD627BDE5F9EBC6D=Cmd+Opt+ドラッグで選択範囲を新規ファイルへレ�
 ;^5181B7110326CFAB=Add Metadata Column
 ;^2D64A463B95C3074=Media Explorer
 
-[explorer_DLG_101] ; IDD_MAIN
+[explorer_DLG_101] ; IDD_EXPLORER_MAIN
 5CA1E00000000000=1 1.2
 D7F1122F4DDE0EEB=シーク
 2D64A463B95C3074=メディアエクスプローラ
@@ -12353,7 +12375,7 @@ D7F1122F4DDE0EEB=シーク
 ;^D8D27C186BA6D499=dB
 ;^44D502BC3E71FBB7=Channels
 
-[explorer_DLG_134] ; IDD_DBBUILD
+[explorer_DLG_134] ; IDD_EXPLORER_DBBUILD
 ED2B6582378E3E60=%d 個のデータベースを更新中
 F337D108662369F8=検索対象:
 9FFD446C2869A48C=サブフォルダ
@@ -12362,14 +12384,14 @@ B21641943ECEAEFD=データベースを作成中
 ;^ADE62F1CFD2974B6=Scanning...
 ;^F09E4B5C35AA14B9=Cancel
 
-[explorer_DLG_135] ; IDD_GETDATEFORMAT
+[explorer_DLG_135] ; IDD_EXPLORER_GETDATEFORMAT
 F5A3743A7F52CBDE=日付形式
 DD0EAE222C9E234C=フォーマット:
 5CCF29276707CF11=(ワイルドカードヘルプ)
 ;^D840E3186B2B9581=OK
 ;^F09E4B5C35AA14B9=Cancel
 
-[explorer_DLG_136] ; IDD_USERMETADATACOL
+[explorer_DLG_136] ; IDD_EXPLORER_USERMETADATACOL
 ;^5181B7110326CFAB=Add Metadata Column
 ;AB261865FC58BF54=Key:
 ;^5017DF9DE95C6EEB=Description:
@@ -12377,7 +12399,7 @@ DD0EAE222C9E234C=フォーマット:
 ;^D840E3186B2B9581=OK
 ;^F09E4B5C35AA14B9=Cancel
 
-[explorer_DLG_137] ; IDD_XFADE_CONFIG
+[explorer_DLG_137] ; IDD_EXPLORER_XFADE_CONFIG
 FCDD65E8EFA5A5A0=フェードイン/アウト設定
 09B82441504ED0CE=再生時にフェードイン
 E828A02A9BAAF6FB=停止時にフェードアウト
@@ -12387,7 +12409,7 @@ E828A02A9BAAF6FB=停止時にフェードアウト
 ;^D840E3186B2B9581=OK
 ;^F09E4B5C35AA14B9=Cancel
 
-[explorer_DLG_138] ; IDD_MIDI_NOTE
+[explorer_DLG_138] ; IDD_EXPLORER_MIDI_NOTE
 6AAAA36830890EE1=MIDIノートを割り当て
 696A412FD4A19F9F=開始ノート:
 1B938F36A67382AD=下限ノート:
@@ -12395,7 +12417,7 @@ AA37A34B39AD9C21=上限ノート:
 ;^D840E3186B2B9581=OK
 ;^F09E4B5C35AA14B9=Cancel
 
-[explorer_DLG_139] ; IDD_IMG_METADATA
+[explorer_DLG_139] ; IDD_EXPLORER_IMG_METADATA
 0C1AA77FB4ED665B=画像ファイルメタデータ
 1A41C453655C341A=画像タイプ:
 48B17911A89D74AE=画像メタデータを削除
@@ -12405,7 +12427,7 @@ AA37A34B39AD9C21=上限ノート:
 ;^D840E3186B2B9581=OK
 ;^F09E4B5C35AA14B9=Cancel
 
-[explorer_MENU_103] ; IDR_CONTEXTMENU
+[explorer_MENU_103] ; IDR_EXPLORER_CONTEXTMENU
 ;02F53425A72D971D=CtxMenu-tree_shortcut
 FAC51C984FC55BD7=ショートカットを削除
 D816316E790561DA=フォルダーから新規データベースを作成
@@ -12549,7 +12571,7 @@ DDE11B287BA6C8A0=フォルダーを削除
 ;^231C15D6AF7233E9=Remove missing files from database
 ;^A281F8F3044B9C7B=Rename folder
 
-[explorer_MENU_104] ; IDR_MENU1
+[explorer_MENU_104] ; IDR_EXPLORER_MENU1
 ;^8B5A889ADCE5D728=&Media Explorer
 ;^2D64A463B95C3074=Media Explorer
 ;^F8A52835BFC72E29=Create new database from current folder
@@ -12674,7 +12696,7 @@ C22D827E2CB7D166=調
 ;^E321075F38B5E684=+/- 12 semitones
 ;^25CEC9ABF6C6F508=Customize menus...
 
-[explorer_MENU_105] ; IDR_DEFTOOLBAR
+[explorer_MENU_105] ; IDR_EXPLORER_DEFTOOLBAR
 AC70BB3427408DC9=自動再生
 38E212B2E5D542C7=バーで開始
 AAF6790D36B0FF1F=テンポ一致
@@ -12999,7 +13021,6 @@ DCFEAB8BD451EB5C=アクションリストを表示 ▲▼ Show action list
 ;^A142C6C8FF74C3E6=Fade-in/fade-out settings...
 
 [explorer_col]
-16021B2387E0B7D6=サイズ
 9DA8FF10F4C4999C=更新日時
 ;ED84587E4546A608=Fav
 0ECB8159131DEF0A=マーク
@@ -13022,6 +13043,7 @@ CAAC933BF043F70F=列順序のプリセットを保存...
 4DCE70FF6168B1FE=列順序のプリセットをロード
 D4FA54F3D390BC8D=列順序のプリセットを削除
 ;^9A01878F90736611=File
+16021B2387E0B7D6=サイズ
 ;^2D126F1D4BD6B8C7=Type
 ;^FAF92150674645B7=Title
 ;^DB6AFFF8CBB64A68=Artist
@@ -13651,6 +13673,11 @@ A241BBBAA9D69D2B=未割り当てアクション:
 ;^9A6E97866E0A5FC5=Action
 
 [import]
+0690CB215CEA613F=メディアにテンポ/スライス情報が埋め込まれています。読み込み方法:
+5DEDA3BF1C2D464B=埋め込まれたメディアテンポは%s BPMです:
+44C83506DBFCB62C=埋め込まれたメディアテンポはおそらく%s BPMです:
+2F9DF5BA4E5A2FD9=推定されたメディアテンポは%s BPMです:
+359A077C0FA0F018=注: メディアエクスプローラーのテンポマッチが有効です。
 75C55F7F18E25742=NINJAMインポートオプション
 9C0CBF91B3A756B8=%d 個のインターバルファイルから隙間のないメディアを連結作成（強く推奨）
 F2DB7183BF18E607=%d 個のMIDIトラックを新しいREAPERトラックに展開
@@ -13676,11 +13703,6 @@ BA12C7DB9E7AAEF8=ログ行の解析エラー！
 ;^F3E8B70013B3D5F0=A single loopable media item with transient markers
 ;^FFFF2ED7AE6E59E1=Ignore slice and embedded tempo information
 BD7850245F5A79EE=インポート
-0690CB215CEA613F=メディアにテンポ/スライス情報が埋め込まれています。読み込み方法:
-5DEDA3BF1C2D464B=埋め込まれたメディアテンポは%s BPMです:
-44C83506DBFCB62C=埋め込まれたメディアテンポはおそらく%s BPMです:
-2F9DF5BA4E5A2FD9=推定されたメディアテンポは%s BPMです:
-359A077C0FA0F018=注: メディアエクスプローラーのテンポマッチが有効です。
 
 [infoblock]
 1F89B20EFD74303F=非ソロ
@@ -14372,6 +14394,7 @@ A5DD886F0B75CC0D="%s" を上書きしますか？
 ;^043FBD1700F7067B=Render Warning
 ;^82E42D2FF8D25A8D=Could not get channel info for effects (are they multichannel?)
 ;^A752FB9BC4EC6C8C=Initializing...
+1AC1E2208F6CF412=インストール時の注意事項
 
 [menu]
 615DF6D7CF507235=テイク %d
@@ -18444,7 +18467,6 @@ CE0CF4D128075F28=粗調整（逆方向）
 2197CECC8AC337BC=アイテムのドラッグ項目へパススルー
 AB7933CA6DA05B30=アイテムのクリック項目へパススルー
 A5193527E6752A2E=アイテムのダブルクリック項目へパススルー
-804FB26B8D7907DE=アクションなし
 ;^DDDAF906972AD14A=Horizontal zoom
 ;^66E6846A693D7807=Remove from selection
 ;^20F7E9591DA69ED6=Move
@@ -18504,6 +18526,10 @@ A5193527E6752A2E=アイテムのダブルクリック項目へパススルー
 ;^22F2CC2A38A97EDC=Event properties...
 ;^BE2BA41449E3678C=Add CC event
 ;^5ECA3B6DF8877E70=Adjust
+804FB26B8D7907DE=アクションなし
+BEAFC804F317A49D=範囲付きテイクマーカーを追加
+06E29C64DC0DCAF6=スナップを無視して範囲付きテイクマーカーを追加
+;^E4BD36D8356AED1D=Set take marker color
 
 [mp3]
 C042633C475B9971=MP3（LAMEによるエンコーダー）
@@ -18685,6 +18711,68 @@ A6F5715C7DFDA0E9=OPUS 解析エラー: ファイルに9チャンネル以上含�
 ;^6355A67DF71FA0FB=VBR
 ;^D9220AE04A08F86B=Error opening file
 
+[packageimport]
+31F2FC9DF0CBDDAC=インストール中です。キャンセルしますか？変更が一部適用されたままになる場合があります。
+B23298936ACBE8BE=REAPERは次の処理を実行します:
+D7117F541A6354FD=%d個のファイルを削除 [%s]
+A1B3E89D2FDC1AF2=%d個の新規ファイルをインストール [%s]
+6E2E59F4EE0A9885=%d個の既存ファイルを更新 [%s]
+9A936DA360C6AC74=注: 実行可能なプログラムやスクリプトを含むファイルがインストール/更新されます。これらはコンピューターに害を及ぼす可能性があります。\r\nインストール前に、信頼できる提供元からダウンロードしたパッケージであることを確認してください。
+A179D03D7B621D20=続行しますか？
+5ACE006CF40194A6=インストールに失敗した可能性があります。%d件のエラーが発生しました
+5D5D5118559F1D5A=%d個のファイルをUserPluginsにインストールしました。
+A3C8182060002908=変更を反映するにはREAPERの再起動が必要な場合があります。
+D21C456D0A071895=今すぐREAPERを再起動しますか？未保存のプロジェクトがある場合は保存を確認します。
+;^725278CFF3575289=Confirm
+;^BAC64C1B2E060EE5=Close
+
+[packageinstall]
+D87C6456279A28A6=インストール
+B92EA0CA5D66BCC0=ファイルがパッケージと一致
+7A01340F869FC7C9=パッケージ側のサイズが小さい
+E2838BF934EDF9E8=パッケージ側のサイズが大きい
+3765A2DFB19AF89D=パッケージ内のファイルと異なる
+4BEC31A979F5330B=新規ファイル
+AB09F1E6EB0D82C4=ZIPエラー
+A7B202DDF4563173=アンインストール
+4802AC103AE51841=閉じる［変更なし］
+EC9C3D118AFECC1C=変更を適用
+289320DC2EDDC30C=インストールまたは更新
+1DF0772024F5D620=インストール/更新しない
+D64A6EBA1074F900=削除 / アンインストール
+82C1B932D0D3DA3E=パッケージ名: %s
+56BFB78C61D0E307=パッケージ名が指定されていません。
+23F873B6DCD8FE43=インストール先プロファイル: %s
+12EDD72AFEF82A2A=パッケージ作成者: %s
+B842C95EDE225FC3=バージョン: %s
+D8B38453623AEE72=URL: %s
+CE921113C91060CA=パッケージ内の未対応ファイル%d個はここに表示されません。
+360FD0746F84432A=パッケージ内の%d個のファイルは内蔵の上限を超えるため、ここに表示されません。
+046463A487AA7CD0=パッケージ内の%d個のファイルはOS/アーキテクチャが異なるため、ここに表示されません。
+EAE1F115FB7C61F9=情報: 
+1FFFF75FA9352D37=注: OS/アーキテクチャ固有のコンポーネントが指定されていますが、このシステムに一致するものがありません。パッケージが正しくインストールされない可能性があります。
+A1B4A7944AA2BB22=CRCエラー: ZIPファイルが破損しています
+A8175C1E5B5B40A7=インストール済み
+35F16B6838394A3E=更新済み
+2AAB634A6660C230=最終処理エラー
+596636D9DC9838FA=展開エラー
+896CF75BF872DF2D=スキップ
+AE048E9BFAC20CA5=削除済み
+F268F78000F1890E=削除エラー
+7EFE068627B16E96=ZIPファイルの読み込みエラー
+B0118744E8B03F06=一時ファイルの作成エラー
+F8C6B9B171D29B93=ファイルオープンエラー:\r\n\r\n%s
+02AF6BC57AD29BF7=ReaperPkgの読み込みエラー
+;^44C7D9889FEBDAE5=Ignore
+;^4A170FAC1550C1AE=Update
+;^F812C7145E261C23=Remove
+;^804FB26B8D7907DE=No action
+;^8CF4F0AFD0B7C40A=Filename
+;^9A6E97866E0A5FC5=Action
+;^5B7A5177E1B9CD10=State
+;^16021B2387E0B7D6=Size
+;^0444991335203938=Analyzing...
+
 [pan]
 ;^08323C07B4EAEEC9=L
 3BEB0AE437FA2F12=C
@@ -18803,12 +18891,12 @@ D4A529A0DD35A4AD=オートメーションアイテムを読み込み
 ;^B41F2FB851FBE597=Rename Automation Item
 
 [popclick]
-0444991335203938=解析中...
 4423859EEFE68261=感度 %
 1EF7B08B479D20E0=周波数カットオフ
 F828CDE3EA27186F=フロア dB
 E8BEC24C14C17016=修復長
 5D1DDD1C7EAB5F63=プレビュー尺
+0444991335203938=解析中...
 
 [portable]
 9AD7B58BCF084FA3=ポータブル版のREAPERを実行しています。\r\n\r\nシステムのVST/CLAP/LV2パスをスキャンしますか？\r\n\r\n「いいえ」を選択した場合、後でパスを手動で追加する必要があります。
@@ -19551,8 +19639,8 @@ FA3FBBA0B7D7E042=外部エディター
 6388A67DF74AFA94=VST
 ;^598D95450BED5823=ReWire
 ;^2C626DCBF2E2019A=ReaScript
-;^7E11B9683132FA9E=Keyboard
 ;^6D34089DA0839FD4=Customization list
+;^7E11B9683132FA9E=Keyboard
 
 [prefs_localize]
 BE05D38CB8F64567=ここで言語パックやオプションを変更した後、REAPERを再起動が必要な可能性があります
@@ -19622,6 +19710,9 @@ A116495A42DD0EDF=オーディオアイテムの先頭
 B1E6855EF0EF358C=最後の余韻以外を切り落とす
 316242E10A374B88=最後の余韻のみ切り落とす
 FC0E08250AD06B61=全ての余韻を切り落とす
+CD5C21D1ECD5D247=常にストレッチ
+97A1BFEEA97A1C76=ストレッチしない
+C8E3BFA67E26CE4B=ストレッチするか確認
 AAA11519CE4B6D78=別々のトラックに挿入
 7C780A1AEAE75643=単一トラックに順番に挿入
 52ED394E44E8AE09=自動判定（長さを見て判断）
@@ -19630,9 +19721,6 @@ AAA11519CE4B6D78=別々のトラックに挿入
 ;^0E040CE3B4E6A59F=A single loopable media item that adjusts to project tempo
 ;^F3E8B70013B3D5F0=A single loopable media item with transient markers
 ;^FFFF2ED7AE6E59E1=Ignore slice and embedded tempo information
-CD5C21D1ECD5D247=常にストレッチ
-97A1BFEEA97A1C76=ストレッチしない
-C8E3BFA67E26CE4B=ストレッチするか確認
 
 [prefs_media_help]
 8A58AA14648ACB16=REAPERが非アクティブなときにプロジェクトメディアを非アクティブに設定し、他のプログラムがメディアにアクセス/変更できるようにします。
@@ -22121,9 +22209,9 @@ CFA8A78072D5F1FB=手動補正
 28E346BB77013ED8=トラックピッチ
 4C83098561FA9AB8=オクターブシフト
 59D315C7F451EBE4=重複セグメント
-4A170FAC1550C1AE=更新
 F1CE0D5759C597B7=抑制:
 ;^CA2A325DBD0A1A47=Custom1
+4A170FAC1550C1AE=更新
 ;^F10F4B1B4D6DC250=Clear
 
 [reatune_DLG_104] ; IDD_CORRECT
@@ -23838,12 +23926,12 @@ C8A8D1DE39277BF0=パスが指定されていないため、メディアのコピ
 9BF2862B3B3C90BE=メディアのコピー付きでプロジェクトを保存
 8B985B499A6FAF73=メディアのコピー中にエラーが発生しました。ユーザーが中止しました！
 8C9E08D02BE5C9E9=メディア付きプロジェクト保存中にエラーが発生しました
-DB773E3D6D958F52=このプロジェクトのメディアのコピー中にエラーが発生しました:
-515AF746DB344C2B=%d 個のファイルについて、使用されていないファイル名を見つけることができませんでした
-1572253A9006D7C2=%d 個のファイルをコピー／移動できませんでした
-A72489997DD870D1=%d 個のファイルはコピーされましたが、プロジェクト内の更新に失敗しました（プラグインが SetFileName() をサポートしていませんか？）
-D0BD7075DBCF5BDC=%d 個のファイルはコピーされたとされていますが、プロジェクトに再インポートできませんでした
 ;^FD8C66831553CF14=REAPER
+B8E810AE2FA9EBE4=このプロジェクトのメディアコピー中にエラーが発生しました！
+0D49737E7CF3F0FE=既存のファイル名との重複により、%d個のファイルをコピー/移動できませんでした:
+77CD3A82BBA0FA68=%d個のファイルをコピー/移動できませんでした:
+468820803B133D55=%d個のファイルをプロジェクト内で更新できませんでした（プラグインがSetFileName()に対応していません）:
+5478049076097B33=%d個のファイルをプロジェクトに再インポートできませんでした:
 
 [scale]
 CEA684B164D5B08B=.ReaScale ファイルを選択:
@@ -25149,6 +25237,7 @@ B1CBBBC86D855EB0=設定はトラックマネージャーで選択中の %d 本�
 ;^21CF5C162D703404=This track
 ;^6208D6BE485CCB06=Group
 ;^752C4A64DBCA2F1B=Track %d
+253778E7225F896A=テイクマーカーを編集...
 
 [trackmgr]
 96C9C67E141E9E96=ピン
@@ -26276,6 +26365,8 @@ FE4AF742FB913EDC=テイクのミュートを変更 (VST3経由)
 ;^5440034E9A5FAF6B=Clear transient guides
 ;^FA775AC5C0D28AA4=Calculate transient guides
 ;^B3E3EB828D92742C=Set time selection
+F113A1C1830EEB9D=テイクマーカーを追加
+;^E4BD36D8356AED1D=Set take marker color
 
 [undohist]
 CBCF7F7CDF60CF24=--- 初期ステータス ---
