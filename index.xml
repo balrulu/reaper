@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<index version="1" name="BLT ReaScripts" commit="e9deed76caa84e410eda0cae560e0ceb70b52dee">
+<index version="1" name="BLT ReaScripts" commit="6e52d14552c6b9be4a6b00fee89514297beca731">
   <category name="BLT">
     <reapack name="BLT_SPATIAL_FIELD.jsfx" type="effect" desc="BLT SPATIAL FIELD">
       <version name="0.5.4" author="Balrulu" time="2026-10-05T05:08:58Z">
@@ -155,9 +155,10 @@
 }
 ]]></description>
       </metadata>
-      <version name="0.14.25" author="Balrulu" time="2026-11-11T16:33:52Z">
+      
+      <version name="0.14.27" author="Balrulu" time="2026-11-16T14:28:32Z">
         <changelog><![CDATA[BLT SERIES Beta TEST UPLOAD]]></changelog>
-        <source main="main" file="../BLT_DEDICATED_RENDER.lua">https://github.com/balrulu/reaper/raw/94f62ff8c5c4c9fdc8b0734d62b0fe4448d27d10/BLT_ReaScripts/BLT_DEDICATED_RENDER.lua</source>
+        <source main="main" file="../BLT_DEDICATED_RENDER.lua">https://github.com/balrulu/reaper/raw/6e52d14552c6b9be4a6b00fee89514297beca731/BLT_ReaScripts/BLT_DEDICATED_RENDER.lua</source>
       </version>
     </reapack>
     <reapack name="BLT_ENVELOPE_CANVAS_ITEM.lua" type="script" desc="ENVELOPE CANVAS ITEM">
@@ -215,9 +216,10 @@
 }
 ]]></description>
       </metadata>
-      <version name="0.6.24" author="Balrulu" time="2026-11-11T16:33:52Z">
+      
+      <version name="0.6.29" author="Balrulu" time="2026-11-16T14:28:32Z">
         <changelog><![CDATA[BLT SERIES Beta TEST UPLOAD]]></changelog>
-        <source main="main" file="../BLT_LOOP_RM_STUDIO.lua">https://github.com/balrulu/reaper/raw/94f62ff8c5c4c9fdc8b0734d62b0fe4448d27d10/BLT_ReaScripts/BLT_LOOP_RM_STUDIO.lua</source>
+        <source main="main" file="../BLT_LOOP_RM_STUDIO.lua">https://github.com/balrulu/reaper/raw/6e52d14552c6b9be4a6b00fee89514297beca731/BLT_ReaScripts/BLT_LOOP_RM_STUDIO.lua</source>
       </version>
     </reapack>
     <reapack name="BLT_LOUDNESS_TRACE.lua" type="script" desc="LOUDNESS TRACE">
@@ -230,9 +232,10 @@
 }
 ]]></description>
       </metadata>
-      <version name="0.8.22" author="Balrulu" time="2026-11-11T16:33:52Z">
+      
+      <version name="0.8.23" author="Balrulu" time="2026-11-16T14:28:32Z">
         <changelog><![CDATA[BLT SERIES Beta TEST UPLOAD]]></changelog>
-        <source main="main" file="../BLT_LOUDNESS_TRACE.lua">https://github.com/balrulu/reaper/raw/94f62ff8c5c4c9fdc8b0734d62b0fe4448d27d10/BLT_ReaScripts/BLT_LOUDNESS_TRACE.lua</source>
+        <source main="main" file="../BLT_LOUDNESS_TRACE.lua">https://github.com/balrulu/reaper/raw/6e52d14552c6b9be4a6b00fee89514297beca731/BLT_ReaScripts/BLT_LOUDNESS_TRACE.lua</source>
       </version>
     </reapack>
     <reapack name="BLT_MARKER_REGION_DESK.lua" type="script" desc="MARKER REGION DESK">
@@ -338,7 +341,6 @@
   </category>
   <category name="LangPacks">
     <reapack name="Japanese_add_SWS_kb_edit.ReaperLangPack" type="langpack" desc="日本語 [JP] - REAPER + SWS">
-      
       <version name="7.86.0" author="Balrulu" time="2026-11-14T16:03:07Z">
         <changelog><![CDATA[Japanese translation for REAPER v7.86 + SWS]]></changelog>
         <source>https://github.com/balrulu/reaper/raw/e9deed76caa84e410eda0cae560e0ceb70b52dee/LangPacks/Japanese_add_SWS_kb_edit.ReaperLangPack</source>
