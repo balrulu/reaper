@@ -1,5 +1,5 @@
 -- @description BLT DEDICATED RENDER
--- @version 0.14.25
+-- @version 0.14.27
 -- @author Balrulu
 -- @provides
 --   . > ../
@@ -2128,6 +2128,7 @@ function Embed.prepare(api,state,originalRegions,numbering,knownOutputs)
  local rate=api.Master_GetPlayRate and api.Master_GetPlayRate(p)or 1;check(rate>0,'再生レートが不正です。')
  local pad=(norm&(4<<16))==0 and(norm&(1<<16))~=0 and api.GetSetProjectInfo(p,'RENDER_PADSTART',0,false)or 0
  local source=api.GetSetProjectInfo(p,'RENDER_SETTINGS',0,false);local bounds=api.GetSetProjectInfo(p,'RENDER_BOUNDSFLAG',0,false)
+ local direct=(source&(32|64|4096))~=0
  local items={};for i=0,api.CountSelectedMediaItems(p)-1 do items[#items+1]=api.GetSelectedMediaItem(p,i)end
  local ui={};opts.selected_keys={}
  if api.GetNumRegionsOrMarkers and api.GetRegionOrMarker and api.GetRegionOrMarkerInfo_Value then
@@ -2203,7 +2204,7 @@ function Embed.prepare(api,state,originalRegions,numbering,knownOutputs)
   end
  end
  local function metadata(files)
-  return {files=files,units=units,rows=rows,options=opts,rate=rate,pad=pad,accept=function(path)return not state.s or Embed.accepts(state,path)end}
+  return {files=files,units=units,rows=rows,options=opts,rate=rate,pad=pad,direct=direct,accept=function(path)return not state.s or Embed.accepts(state,path)end}
  end
  local token='__BLT_RANGE__'
  local ending='__BLT_RANGE_END__'
@@ -2233,7 +2234,8 @@ function Embed.prepare(api,state,originalRegions,numbering,knownOutputs)
    if #current>0 then
     local test=LoopMetadata.plan(rows,unit.start,unit.finish,48000,opts)
     unit.loop=test.sustain~=nil
-    check(unit.loop or not any or(norm&(4<<16))~=0 or(norm&(16384|32768))==0,'無音トリムとリージョン埋め込みは開始位置を確定できません。トリムまたは埋め込みをOFFにしてください。')
+    unit.loop_key=test.sustain and test.sustain.key
+    check(unit.loop and not direct or not any or(norm&(4<<16))~=0 or(norm&(16384|32768))==0,'無音トリムとリージョン埋め込みは開始位置を確定できません。トリムまたは埋め込みをOFFにしてください。')
     for _,path in ipairs(current)do if Embed.supported(path)and not path:lower():match('%.wav$')then Embed.aiff_metadata(test)end end
    end
    for _,path in ipairs(current)do
@@ -2292,11 +2294,16 @@ local function exists(p)local f=io.open(p,'rb');if f then f:close();return true 
 local function spare(p)local i=1;while exists(p..i)do i=i+1 end;return p..i end
 function Embed.timeline(path,plan,w)
  local unit=check(plan.files[key(path)],'出力先の範囲が不明です：'..path)
- local projected={}
- for _,r in ipairs(plan.rows)do local v={};for k,x in pairs(r)do v[k]=x end
-  v.start=r.start/plan.rate+plan.pad;v.finish=r.finish/plan.rate+plan.pad;projected[#projected+1]=v
- end
  if unit.window then return LoopMetadata.plan(plan.rows,unit.start,unit.window.finish,w.sr,plan.options)end
+ local projected={}
+ for _,r in ipairs(plan.rows)do
+  if not plan.direct or r.kind~='sustain' or r.key==unit.loop_key then
+   local v={};for k,x in pairs(r)do v[k]=x end
+   local first,last=r.start,r.finish
+   if plan.direct and r.kind=='sustain'then first=math.max(first,unit.start);last=math.min(last,unit.finish)end
+   v.start=first/plan.rate+plan.pad;v.finish=last/plan.rate+plan.pad;projected[#projected+1]=v
+  end
+ end
  local origin=unit.start/plan.rate;return LoopMetadata.plan(projected,origin,origin+w.frames/w.sr,w.sr,plan.options)
 end
 local function loop_slice(path,plan,w)
@@ -2459,7 +2466,7 @@ function Embed.write_aiff(path,plan,source)
  if not ok then if exists(temp)then os.remove(temp)end;error(err,0)end
 end
 
-local Model={VERSION='0.14.25',SOURCE_MASK=1|2|8|32|64|128|4096}
+local Model={VERSION='0.14.27',SOURCE_MASK=1|2|8|32|64|128|4096}
 Model.numbers={'RENDER_SETTINGS','RENDER_BOUNDSFLAG','RENDER_CHANNELS','RENDER_SRATE','RENDER_STARTPOS','RENDER_ENDPOS','RENDER_TAILFLAG','RENDER_TAILMS','RENDER_ADDTOPROJ','RENDER_DITHER','RENDER_NORMALIZE','RENDER_NORMALIZE_TARGET','RENDER_BRICKWALL','RENDER_FADEIN','RENDER_FADEOUT','RENDER_FADEINSHAPE','RENDER_FADEOUTSHAPE','RENDER_FADELPF','RENDER_PADSTART','RENDER_PADEND','RENDER_TRIMSTART','RENDER_TRIMEND','RENDER_DELAY'}
 Model.strings={'RENDER_FILE','RENDER_PATTERN','RENDER_EXTRAFILEDIR','RENDER_FORMAT2','RENDER_FORMAT'}
 Model.configs={'projrenderlimit','projrenderspeedcap','projrenderresample','projrenderrateinternal','renderclosewhendone','renderpeaks','projrenderqdelay','renderbsnew'}
@@ -3183,8 +3190,8 @@ end
 function M.prepare(api,m,j)
  j.loop=nil
  if not j.embed or not j.embed.options.embed_loop_region then return end
+ if Model.itemsource(m.state)or Model.razorsource(m.state)then return end
  for _,unit in ipairs(j.embed.units)do if unit.loop then
-  fail(not Model.itemsource(m.state)and not Model.razorsource(m.state),'アイテム／レイザー単位では、対象音声を変えずにループ用の前後余裕を追加できないため停止しました。リージョンまたは時間範囲で書き出してください。')
   fail(j.embed.rate==1,'ループ書き出しはプロジェクトの再生速度を1.0にしてください。')
   fail(m.state.n.RENDER_ADDTOPROJ==0,'ループ用の一時音声は尺が長く、自動追加すると配置に影響するため停止しました。「プロジェクトへ追加」をOFFにしてください。')
   if(m.state.n.RENDER_SETTINGS&512)~=0 then for _,value in pairs(m.state.meta)do fail(not value:find('%$[%a_]'),'埋込メタ情報のワイルドカードに一時ファイル名や拡張範囲が入る可能性があるため停止しました。ワイルドカードを固定値へ置き換えてください。')end end
@@ -3471,8 +3478,82 @@ local function confirmation(api,m,p)
  c.signature=table.concat(c.files,'\n')..'\0'..table.concat(c.conflicts,'\n')..'\0'..table.concat(c.missing,'\n')..':'..tostring(c.channels)
  return c
 end
-function Model.render(api,m,kind,approval)
- ensure(kind=='render','この操作はレンダー専用です。')
+local RenderMedia=(function()
+ local M={};local pending
+ function M.restore(api)
+  if not pending then return end
+  local errors={}
+  local function attempt(fn)local ok,err=pcall(fn);if not ok then errors[#errors+1]=tostring(err)end end
+  for _,entry in ipairs(pending.sources)do if not entry.restored then attempt(function()
+   if not api.ValidatePtr or api.ValidatePtr(entry.source,'PCM_source*')then
+    api.CF_SetMediaSourceOnline(entry.source,false)
+    ensure(not api.CF_GetMediaSourceOnline(entry.source),'メディアのオフライン状態を復元できません：'..entry.path)
+   end
+   entry.restored=true
+  end)end end
+  if pending.preference~=nil then attempt(function()
+   local value=pending.preference
+   if api.SNM_GetIntConfigVar('offlineinact',-1)~=value then
+    ensure(api.SNM_SetIntConfigVar('offlineinact',value),'非アクティブ時のメディア設定を復元できません。')
+    ensure(api.SNM_GetIntConfigVar('offlineinact',-1)==value,'非アクティブ時のメディア設定を復元できません。')
+   end
+   pending.preference=nil
+  end)end
+  ensure(#errors==0,table.concat(errors,'\n'));pending=nil
+ end
+ function M.run(api,project,fn)
+  M.restore(api)
+  ensure(api.EnumProjects(-1,'')==project,'別のプロジェクトです。REAPER設定を読込してください。')
+  local sources,seen={},{}
+  local function take_source(take)
+   if not take or api.TakeIsMIDI(take)then return end
+   local source=api.GetMediaItemTake_Source(take)
+   while source and not seen[source]do
+    seen[source]=true
+    local parent=api.GetMediaSourceParent(source)
+    if parent then source=parent
+    else
+     local path=api.GetMediaSourceFileName(source,'')
+     if path~=''then sources[#sources+1]={source=source,path=path}end
+     break
+    end
+   end
+  end
+  for i=0,api.CountMediaItems(project)-1 do
+   local item=api.GetMediaItem(project,i)
+   if api.GetMediaItemInfo_Value(item,'B_ALLTAKESPLAY')~=0 then
+    for t=0,api.CountTakes(item)-1 do take_source(api.GetTake(item,t))end
+   else take_source(api.GetActiveTake(item))end
+  end
+  if #sources==0 then return fn()end
+  ensure(api.CF_GetMediaSourceOnline and api.CF_SetMediaSourceOnline and api.SNM_GetIntConfigVar and api.SNM_SetIntConfigVar,
+   'メディアのオンライン確認にはSWS Extensionが必要です。')
+  local preference=api.SNM_GetIntConfigVar('offlineinact',-1)
+  ensure(preference>=0,'非アクティブ時のメディア設定を取得できません。')
+  pending={sources={}}
+  local result=table.pack(xpcall(function()
+   local offline={}
+   for _,entry in ipairs(sources)do if not api.CF_GetMediaSourceOnline(entry.source)then offline[#offline+1]=entry end end
+   if preference~=0 then
+    pending.preference=preference
+    ensure(api.SNM_SetIntConfigVar('offlineinact',0),'非アクティブ時のメディア設定を一時変更できません。')
+    ensure(api.SNM_GetIntConfigVar('offlineinact',-1)==0,'非アクティブ時のメディア設定を一時変更できません。')
+   end
+   for _,entry in ipairs(offline)do
+    pending.sources[#pending.sources+1]=entry;api.CF_SetMediaSourceOnline(entry.source,true)
+   end
+   for _,entry in ipairs(sources)do
+    ensure(api.CF_GetMediaSourceOnline(entry.source),'メディアをオンラインに戻せないためレンダーを中止しました：'..entry.path)
+   end
+   return fn()
+  end,tostring))
+  local restored,err=pcall(M.restore,api)
+  ensure(restored,(result[1]and''or tostring(result[2])..'\n')..tostring(err or''))
+  ensure(result[1],result[2]);return table.unpack(result,2,result.n)
+ end
+ return M
+end)()
+local function render(api,m,approval)
  local numbering=approval and approval.choice=='number'
  local ok,preflight=pcall(transaction,api,m,function(selection)return plan(api,m,selection,true,numbering,true)end,true)
  if not ok then
@@ -3569,6 +3650,10 @@ function Model.render(api,m,kind,approval)
   ensure(#restoreErrors==0,tostring(err or'')..'\n'..table.concat(restoreErrors,'\n'));ensure(ok,err);return result
  end,false)
  return result,not result.confirmation
+end
+function Model.render(api,m,kind,approval)
+ ensure(kind=='render','この操作はレンダー専用です。')
+ return RenderMedia.run(api,m.project,function()return render(api,m,approval)end)
 end
 function Model.completed(result,ok)
  return type(result)=='table'and ok==true and not result.cancelled and result.failed==0 and(result.total or 0)>0
@@ -5923,7 +6008,6 @@ local function clear_chrome_tooltip() BLT.clearTooltip() end
 LanguageCatalog.en['レンダー対象がありません。']='No render targets.'
 LanguageCatalog.en['トラックのチャンネル設定']='Track channel setting'
 LanguageCatalog.en['マルチチャンネル']='Multichannel'
-LanguageCatalog.en['アイテム／レイザー単位では、対象音声を変えずにループ用の前後余裕を追加できないため停止しました。リージョンまたは時間範囲で書き出してください。']='Stopped: item/razor rendering cannot add loop handles without changing the audio source. Render regions or a time range instead.'
 LanguageCatalog.en['ループ用の一時音声は尺が長く、自動追加すると配置に影響するため停止しました。「プロジェクトへ追加」をOFFにしてください。']='Stopped: the longer temporary loop audio would affect placement when added to the project. Turn off Add to project.'
 LanguageCatalog.en['埋込メタ情報のワイルドカードに一時ファイル名や拡張範囲が入る可能性があるため停止しました。ワイルドカードを固定値へ置き換えてください。']='Stopped: metadata wildcards may contain temporary filenames or extended ranges. Replace the wildcards with fixed text.'
 LanguageCatalog.en['ループ書き出しはプロジェクトの再生速度を1.0にしてください。']='Set the project play rate to1.0 for loop export.'
@@ -5960,6 +6044,10 @@ for jp,en in pairs({
  ['この操作はレンダー専用です。']='This operation only supports rendering.',
  ['この項目の変更にはSWSが必要です。']='Changing this setting requires SWS.',
  ['カラー判定にはSWS Extensionが必要です。']='Color mapping requires SWS Extension.',
+ ['メディアのオンライン確認にはSWS Extensionが必要です。']='SWS Extension is required to verify that media is online.',
+ ['非アクティブ時のメディア設定を取得できません。']='Cannot read the inactive-media preference.',
+ ['非アクティブ時のメディア設定を一時変更できません。']='Cannot temporarily disable automatic media offlining.',
+ ['非アクティブ時のメディア設定を復元できません。']='Cannot restore the inactive-media preference.',
  ['カスタムカラーを取得できません。']='Cannot read custom colors.',
  ['同じ色に異なるチャンネルが設定されています。']='The same color has conflicting channel assignments.',
  ['設定値を確認してください。カスタム範囲は終了を開始より後にしてください。']='Check settings. Custom bounds must end after they start.',
@@ -5975,6 +6063,8 @@ for jp,en in pairs({
  ['設定取得失敗：']='Cannot read setting: ',['設定変更失敗：']='Cannot update setting: ',
  ['メタデータ変更失敗：']='Cannot update metadata: ',['復元失敗：']='Cannot restore: ',
  ['設定の復元に失敗しました：']='Cannot restore settings: ',
+ ['メディアをオンラインに戻せないためレンダーを中止しました：']='Rendering stopped because media could not be brought online: ',
+ ['メディアのオフライン状態を復元できません：']='Cannot restore the media offline state: ',
  ['出力ファイル名が重複しています：']='Duplicate output filename: ',
  ['一時出力を削除できません：']='Cannot remove temporary output: ',
  ['予期しない出力が報告されました：']='Unexpected output reported: ',
@@ -7528,11 +7618,13 @@ A.sessionDue=R.time_precise()+.5
 local closed=false
 local function close()
  if closed then return end;closed=true
+ local mediaOK,mediaError=pcall(RenderMedia.restore,R)
  ItemLabels:close()
  if gfx_window_handle()then local ok,l,t,r,b=WindowGeometry.JS_Window_GetRect(gfx_window_handle());if ok then
   for k,v in pairs({window_x=l,window_y=t,window_w=r-l,window_h=b-t})do BLT.store(SECTION,k,tostring(v),true)end
  end end
  finish_edit(false);A.save_session();RenderGraphics.release();titlebar_cleanup();BLT.clearTooltip();gfx.quit()
+ if not mediaOK then error(mediaError,0)end
 end
 
 local BLTShortcuts=(function()

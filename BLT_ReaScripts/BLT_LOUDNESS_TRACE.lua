@@ -1,5 +1,5 @@
 -- @description LOUDNESS TRACE
--- @version 0.8.22
+-- @version 0.8.23
 -- @author Balrulu
 -- @provides
 --   . > ../
@@ -3360,7 +3360,7 @@ end)()
 
 local Media=create_media_gate(reaper,mediaGraphics,{selectedOnly=true})
 
-local VERSION="0.8.22"
+local VERSION="0.8.23"
 local MAX_HISTORY_ROWS=126000
 local MAX_SAVE_BYTES=12*1024*1024
 local Core = {}
@@ -4022,14 +4022,14 @@ function Core.trim_history(data,maxrows)
   end
   return removed
 end
-function Core.recompute(data,tick)
+function Core.recompute(data,tick,owned)
   local segments,all={},{};local range=Core.live_tree()
   for _,seg in ipairs(data.segments) do
     assert(seg.last>seg.first and #seg.rows>0,'保存区間が不正です。')
     local rows={}
     local a,b=Core.live_after(seg.rows,seg.first),Core.live_after(seg.rows,seg.last)-1
     for i=a,b do
-      local row=copy_row(seg.rows[i]);row.i=nil
+      local row=owned and seg.rows[i] or copy_row(seg.rows[i]);row.i=nil
       row.energy=(row.m and row.time-.4>=seg.first-1e-7) and (row.m<=-150 and 0 or 10^((row.m+.691)/10)) or nil
       local e=Core.history_energy(row,'s',seg.first);if e then range.add(e) end
       rows[#rows+1]=row;all[#all+1]=row
@@ -4109,73 +4109,76 @@ function Core.history_hash(chunks)
   local h=0xcbf29ce484222325;local bytes=0
   for _,chunk in ipairs(chunks) do
     bytes=bytes+#chunk
-    for i=1,#chunk do h=(h~chunk:byte(i))*0x100000001b3 end
+    local i,last=1,#chunk
+    while i+7<=last do
+      local a,b,c,d,e,f,g,j=chunk:byte(i,i+7)
+      h=(h~a)*0x100000001b3;h=(h~b)*0x100000001b3;h=(h~c)*0x100000001b3;h=(h~d)*0x100000001b3
+      h=(h~e)*0x100000001b3;h=(h~f)*0x100000001b3;h=(h~g)*0x100000001b3;h=(h~j)*0x100000001b3;i=i+8
+    end
+    while i<=last do h=(h~chunk:byte(i))*0x100000001b3;i=i+1 end
     h=(h~10)*0x100000001b3
   end
   return string.format('%016x',h),bytes
 end
-function Core.unpack(chunks,recover)
-  local data={segments={}};local current;local total=0
+function Core.unpack(chunks,recover,verified)
+  local data={segments={}};local current;local total=0;local bytes=0
   local info={skipped=0,split=0}
   local function bad(message,header)
     if not recover then error(message,0) end
-    info.skipped=info.skipped+1
-    if header then current=nil end
+    info.skipped=info.skipped+1;if header then current=nil end
   end
   for _,chunk in ipairs(chunks) do
     assert(type(chunk)=='string','保存データが不正です。')
+    bytes=bytes+#chunk;assert(bytes<=MAX_SAVE_BYTES,'保存データが上限を超えています。')
     local wire=chunk
     if wire:sub(1,5)=='BLT2|' then
       local hash,body=wire:match('^BLT2|([%x]+)|(.*)$')
-      if not hash or #hash~=16 or Core.history_hash({body})~=hash then
+      if not hash or #hash~=16 or (not verified and Core.history_hash({body})~=hash) then
         bad('保存グラフの整合性検証に失敗しました。',true);wire=''
-      else wire=body:gsub('|','\n') end
+      else wire=body end
     elseif wire=='' then
       if recover then info.skipped=info.skipped+1 end
     else bad('不明な保存データ形式です。',true);wire='' end
-    for line in wire:gmatch('[^\r\n]+') do
-      line=line:match('^%s*(.-)%s*$')
-      if line~='' then
-        local f={};for v in (line..','):gmatch('(.-),') do f[#f+1]=v:match('^%s*(.-)%s*$') end
-        if f[1]=='G' then
-          local a,b,stamp=tonumber(f[2]),tonumber(f[3]),tonumber(f[5])
-          if #f~=5 or not Core.finite(a) or not Core.finite(b) or b<=a or not Core.finite(stamp) or (f[4]~='0' and f[4]~='1') then
-            bad('保存範囲が不正です。',true)
-          elseif data.segments[#data.segments] and a<data.segments[#data.segments].last-1e-8 then
-            bad('保存範囲が重複しています。',true)
-          else
-            current={first=a,last=b,rows={},stale=f[4]=='1',stamp=stamp}
-            data.segments[#data.segments+1]=current
-          end
-        elseif f[1]=='R' then
-          local r={time=tonumber(f[2])};local valid=current and #f==6
-          local problem='保存データが不正です。'
-          if valid then
-            valid=Core.finite(r.time) and r.time>current.first and r.time<=current.last+1e-7
-            problem='保存時刻が範囲外です。'
-          end
-          if valid then
-            for j,k in ipairs({'s','m','rms','peak'}) do
-              local v=tonumber(f[j+2])
-              if f[j+2]~='x' and not Core.finite(v) then valid=false;problem='保存数値が不正です。';break end
-              r[k]=v
-            end
-          end
-          local prev=current and current.rows[#current.rows]
-          if valid and prev and r.time<=prev.time+1e-9 then valid=false;problem='保存時刻が逆転または重複しています。' end
-          if valid and prev and math.abs(r.time-prev.time-.1)>=1e-6 then
-            if not recover then error('保存カーブが途切れています。',0) end
-            -- Keep a genuine missing span as a gap. Never interpolate measurements.
-            local stop=current.last;current.last=prev.time
-            local first=max(prev.time,r.time-.1)
-            current={first=first,last=stop,rows={},stale=current.stale,stamp=current.stamp}
-            data.segments[#data.segments+1]=current;info.split=info.split+1
-          end
-          if valid then
-            current.rows[#current.rows+1]=r;total=total+1;assert(total<=MAX_HISTORY_ROWS,'保存データが上限を超えています。')
-          else bad(problem,false) end
-        else bad('不明な保存データ形式です。',false) end
+    for line in wire:gmatch('[^|\r\n]+') do
+      local kind=line:sub(1,2)
+      if line:find('%s') then
+        line=line:match('^%s*(.-)%s*$'):gsub('%s*,%s*',',');kind=line:sub(1,2)
       end
+      if kind=='G,' then
+        local av,bv,stale,sv=line:match('^G,([^,]+),([^,]+),([^,]+),([^,]+)$')
+        local a,b,stamp=tonumber(av),tonumber(bv),tonumber(sv)
+        if not Core.finite(a) or not Core.finite(b) or b<=a or not Core.finite(stamp) or (stale~='0' and stale~='1') then
+          bad('保存範囲が不正です。',true)
+        elseif data.segments[#data.segments] and a<data.segments[#data.segments].last-1e-8 then
+          bad('保存範囲が重複しています。',true)
+        else
+          current={first=a,last=b,rows={},stale=stale=='1',stamp=stamp}
+          data.segments[#data.segments+1]=current
+        end
+      elseif kind=='R,' then
+        local tv,sv,mv,rv,pv=line:match('^R,([^,]+),([^,]+),([^,]+),([^,]+),([^,]+)$')
+        local r={time=tonumber(tv),s=tonumber(sv),m=tonumber(mv),rms=tonumber(rv),peak=tonumber(pv)}
+        local valid=current and tv~=nil;local problem='保存データが不正です。'
+        if valid then
+          valid=Core.finite(r.time) and r.time>current.first and r.time<=current.last+1e-7
+          problem='保存時刻が範囲外です。'
+        end
+        if valid and ((sv~='x' and not Core.finite(r.s)) or (mv~='x' and not Core.finite(r.m))
+          or (rv~='x' and not Core.finite(r.rms)) or (pv~='x' and not Core.finite(r.peak))) then
+          valid=false;problem='保存数値が不正です。'
+        end
+        local prev=current and current.rows[#current.rows]
+        if valid and prev and r.time<=prev.time+1e-9 then valid=false;problem='保存時刻が逆転または重複しています。' end
+        if valid and prev and math.abs(r.time-prev.time-.1)>=1e-6 then
+          if not recover then error('保存カーブが途切れています。',0) end
+          local stop=current.last;current.last=prev.time
+          current={first=max(prev.time,r.time-.1),last=stop,rows={},stale=current.stale,stamp=current.stamp}
+          data.segments[#data.segments+1]=current;info.split=info.split+1
+        end
+        if valid then
+          current.rows[#current.rows+1]=r;total=total+1;assert(total<=MAX_HISTORY_ROWS,'保存データが上限を超えています。')
+        else bad(problem,false) end
+      elseif line~='' then bad('不明な保存データ形式です。',false) end
     end
   end
   local kept={}
@@ -4446,6 +4449,9 @@ local LanguageCatalog={en={
  ['グラフ保存の読み戻し検証に失敗しました。']='Saved graph read-back validation failed.',
  ['保存グラフの整合性検証に失敗しました。']='Saved graph integrity validation failed.',
  ['グラフ保存先を確保できません。']='Cannot allocate the graph snapshot.',
+ ['グラフ削除情報が不正です。']='Invalid graph cleanup journal.',
+ ['グラフ削除情報が上限を超えました。']='Graph cleanup journal limit exceeded.',
+ ['測定レイアウトを保存できません。']='Cannot save the measurement layout.',
  ['前回の正常な保存からグラフを復元しました。直近の一部は再測定してください。']='Restored the previous valid snapshot. Remeasure the latest missing section.',
  ['保存グラフの正常な測定点を復元しました。欠けた区間だけ再測定してください。']='Recovered valid measurements. Remeasure only the missing sections.',
  ['保存グラフの形式を修復しました。測定値は保持しています。']='Repaired the saved graph format. Measurements were preserved.',
@@ -5217,6 +5223,8 @@ local function load_settings()
   S.targets={s={-23,3},m={-23,3},i={-23,1}}
   S.alertUpper=false;S.alertLower=false;S.alertPeak=false
   local _,layout=R.GetProjExtState(A.project,PROJECT_SECTION,'measurement_layout')
+  local _,legacy=R.GetProjExtState(A.project,SECTION,'measurement_layout');A.layoutLegacy=legacy~=''
+  for _,v in ipairs(Core.layouts) do if v.id==legacy then layout=legacy end end
   A.layout='stereo';for _,v in ipairs(Core.layouts) do if v.id==layout then A.layout=layout end end
   local _,raw=R.GetProjExtState(A.project,PROJECT_SECTION,'settings')
   local f={};for v in raw:gmatch('[^;]+') do f[#f+1]=v end
@@ -5241,22 +5249,21 @@ end
 -- Snapshot ownership is explicit. Never delete by subtracting an enumeration
 -- from the reference set: enumeration output/case is not an ownership proof.
 -- Current graph storage
-local History={key='result@master',backup='result_backup@master',recovery='result_recovery@master',failed='result_failed@master',failedBackup='result_failed_backup@master'}
-History.references={History.key,History.backup,History.recovery,History.failed,History.failedBackup}
+-- One current snapshot per layout. The journal contains deletion cursors, never graph backups.
+local History={key='result@master'}
+function History.key_for(id)
+  return id=='stereo' and 'result@master' or 'result@master:'..id
+end
 function History.select_layout(id)
- local suffix=id=='stereo' and '@master' or '@master:'..id
- History.key='result'..suffix;History.backup='result_backup'..suffix;History.recovery='result_recovery'..suffix
- History.failed='result_failed'..suffix;History.failedBackup='result_failed_backup'..suffix
- History.references={History.key,History.backup,History.recovery,History.failed,History.failedBackup}
+  Core.layout(id);History.key=History.key_for(id)
 end
 function History.manifest(raw)
   assert(type(raw)=='string' and #raw<=512,'保存情報が不正です。')
-  local f={};for v in (raw..';'):gmatch('(.-);') do f[#f+1]=v end
-  local n,stamp,bytes=tonumber(f[2]),tonumber(f[3]),tonumber(f[5])
-  assert(#f==6 and f[1]:match('^[%x]+$') and #f[1]<=128 and n and n>=1 and n<=4096 and n%1==0
-    and Core.finite(stamp) and f[4]=='2' and bytes and bytes>0 and bytes<=MAX_SAVE_BYTES
-    and f[6]:match('^[%x]+$') and #f[6]==16,'保存情報が不正です。')
-  return f[1]:lower(),n,stamp,bytes,f[6]:lower()
+  local id,n,stamp,version,bytes,hash=raw:match('^([%x]+);([^;]+);([^;]+);([^;]+);([^;]+);([%x]+)$')
+  n,stamp,bytes=tonumber(n),tonumber(stamp),tonumber(bytes)
+  assert(id and #id<=128 and n and n>=1 and n<=4096 and n%1==0 and Core.finite(stamp)
+    and version=='2' and bytes and bytes>0 and bytes<=MAX_SAVE_BYTES and #hash==16,'保存情報が不正です。')
+  return id:lower(),n,stamp,bytes,hash:lower()
 end
 function History.raw(key)
   local _,value=R.GetProjExtState(A.project,PROJECT_SECTION,key:lower())
@@ -5264,109 +5271,208 @@ function History.raw(key)
   return value
 end
 function History.put(key,value)
-  local canonical=key:lower()
-  R.SetProjExtState(A.project,PROJECT_SECTION,canonical,value)
-  local _,check=R.GetProjExtState(A.project,PROJECT_SECTION,canonical)
+  key=key:lower()
+  R.SetProjExtState(A.project,PROJECT_SECTION,key,value)
+  local _,check=R.GetProjExtState(A.project,PROJECT_SECTION,key)
   assert(check==value,'グラフ保存の読み戻し検証に失敗しました。')
 end
 function History.erase(key)
   if History.raw(key)~='' then History.put(key,'') end
 end
-function History.retire(raw)
-  -- Retire known snapshots only after verified publication or clearing their references.
-  if raw=='' then return end
-  local parsed,id,n=pcall(History.manifest,raw);if not parsed then return end
-  if not id:match('^[%x]+$') or #id<16 then return end
-  local canonical=id:lower()
-  for _,key in ipairs(History.references) do
-    local value=History.raw(key)
-    if value~='' then
-      local owner=value:match('^([%w]+);')
-      if owner and owner:lower()==canonical then return end
-
-      if not owner and value:lower():find(canonical,1,true) then return end
+function History.remember_layout()
+  local ok,why=pcall(function()
+    if History.raw('measurement_layout')~=A.layout then History.put('measurement_layout',A.layout) end
+    if A.layoutLegacy then
+      R.SetProjExtState(A.project,SECTION,'measurement_layout','')
+      local _,check=R.GetProjExtState(A.project,SECTION,'measurement_layout')
+      assert(check=='','測定レイアウトを保存できません。');A.layoutLegacy=nil
+    end
+  end)
+  if not ok then BLT.logError(why) end
+end
+function History.pending()
+  local raw=History.raw('gc_pending');local out={}
+  if raw=='' then return out end
+  assert(#raw<=262144 and raw:sub(1,7)=='BLTGC1\n','グラフ削除情報が不正です。')
+  for line in raw:sub(8):gmatch('[^\n]+') do
+    local id,n,nextIndex=line:match('^([%x]+),(%d+),(%d+)$')
+    n,nextIndex=tonumber(n),tonumber(nextIndex)
+    assert(id and #id==32 and n and n>=0 and n<=4096 and nextIndex and nextIndex>=1 and nextIndex<=n+1,
+      'グラフ削除情報が不正です。')
+    out[id:lower()]={n=n,next=nextIndex}
+  end
+  return out
+end
+function History.write_pending(pending)
+  local ids={};for id in pairs(pending) do ids[#ids+1]=id end;table.sort(ids)
+  local lines={'BLTGC1'}
+  for _,id in ipairs(ids) do local p=pending[id];lines[#lines+1]=id..','..p.n..','..p.next end
+  local raw=#ids>0 and table.concat(lines,'\n')..'\n' or ''
+  assert(#raw<=262144,'グラフ削除情報が上限を超えました。')
+  if History.raw('gc_pending')~=raw then History.put('gc_pending',raw) end
+end
+function History.queue(pending,id,n)
+  if not id or #id~=32 or not id:match('^[%x]+$') then return end
+  id=id:lower();local prior=pending[id]
+  if prior then prior.n=max(prior.n,n) else pending[id]={n=n,next=1} end
+end
+function History.queue_manifest(pending,raw)
+  local ok,id,n=pcall(History.manifest,raw)
+  if ok then History.queue(pending,id,n) end
+end
+function History.live_ids()
+  local live={}
+  for _,layout in ipairs(Core.layouts) do
+    -- Protect even a damaged current manifest until its own load path clears it.
+    local id=History.raw(History.key_for(layout.id)):match('^([%x]+);')
+    if id then live[id:lower()]=true end
+  end
+  return live
+end
+function History.collect(budget)
+  local pending=History.pending();local live=History.live_ids();local used=0;local problem
+  for id,p in pairs(pending) do
+    if live[id] then pending[id]=nil
+    elseif not budget or used<budget then
+      local ok,why=pcall(function()
+        while p.next<=p.n and (not budget or used<budget) do
+          used=used+1;History.erase(id..'_'..p.next);p.next=p.next+1
+        end
+        if p.next>p.n and (not budget or used<budget) then
+          used=used+1;History.erase(id..'_name');pending[id]=nil
+        end
+      end)
+      if not ok then problem=problem or why end
     end
   end
-  for i=1,n do History.erase(id..'_'..i) end
-  History.erase(id..'_name')
+  -- A failed cursor update leaves the earlier journal available for a safe retry.
+  History.write_pending(pending)
+  return next(pending)~=nil,problem
 end
-function History.read(raw,recover,verifyOnly)
+function History.cleanup(scan,budget)
+  local ok,remaining,problem=pcall(function()
+    if scan then
+      local valid,pending=pcall(History.pending)
+      if not valid then pending={} end
+      local live=History.live_ids()
+      local legacy={}
+      for _,layout in ipairs(Core.layouts) do
+        local suffix=History.key_for(layout.id):sub(7)
+        for _,prefix in ipairs({'result_backup','result_recovery','result_failed','result_failed_backup'}) do
+          local key=prefix..suffix;legacy[#legacy+1]=key
+          History.queue_manifest(pending,History.raw(key))
+        end
+      end
+      if R.EnumProjExtState then
+        local index=0
+        while true do
+          local found,key,value=R.EnumProjExtState(A.project,PROJECT_SECTION,index)
+          if not found or found==0 then break end;index=index+1
+          local id,part=key:match('^([0-9a-f]+)_(%d+)$');part=tonumber(part)
+          -- Old orphan chunks need both the generated GUID shape and the BLT wire signature.
+          if id and #id==32 and not live[id] and part and part>=1 and part<=4096 and value:sub(1,5)=='BLT2|' then
+            History.queue(pending,id,part)
+          end
+        end
+      end
+      History.write_pending(pending)
+      for _,key in ipairs(legacy) do History.erase(key) end
+      History.prepared=A.project
+    end
+    return History.collect(budget)
+  end)
+  if not ok then problem=remaining;remaining=true end
+  History.cleanupProject=remaining and A.project or nil
+  History.cleanupAt=R.time_precise()+(problem and 1 or .1)
+  if problem and tostring(problem)~=History.lastError then BLT.logError(problem) end
+  History.lastError=problem and tostring(problem) or nil
+end
+function History.tick(now)
+  if History.cleanupProject~=A.project or now<(History.cleanupAt or 0) or A.job or Live.enabled then return end
+  History.cleanup(History.prepared~=A.project,64)
+  A.baseline=R.GetProjectStateChangeCount(A.project)
+end
+function History.read(raw)
   if raw=='' then return nil end
   local id,n,_,expectedBytes,expectedHash=History.manifest(raw)
   local chunks,bytes={},0
   for i=1,n do
     local v=History.raw(id..'_'..i)
-    if not recover then assert(v~='','保存カーブが不足しています。') end
+    assert(v~='','保存カーブが不足しています。')
     bytes=bytes+#v;assert(bytes<=MAX_SAVE_BYTES,'保存データが12 MiBの安全上限を超えました。測定範囲を短くしてください。')
     chunks[i]=v
   end
-  if not recover then
-    local hash,actualBytes=Core.history_hash(chunks)
-    assert(actualBytes==expectedBytes and hash==expectedHash,'保存グラフの整合性検証に失敗しました。')
-  end
-
-  if verifyOnly and not recover then return true end
-  local data,info=Core.unpack(chunks,recover)
+  local hash,actualBytes=Core.history_hash(chunks)
+  assert(actualBytes==expectedBytes and hash==expectedHash,'保存グラフの整合性検証に失敗しました。')
+  local data=Core.unpack(chunks,false,true)
   data.source='master';data.name='MASTER MIX · '..Core.layout(A.layout).name
-  if not verifyOnly then Core.recompute(data) end
-  return data,info
+  Core.recompute(data,nil,true)
+  return data
 end
-local function save_data(data,recovered)
+local function save_data(data)
   assert(data.source=='master','測定データのソースがマスターミックスではありません。')
   local chunks=Core.pack(data)
-  local verified=Core.unpack(chunks);local rows=0
-  for _,seg in ipairs(verified.segments) do rows=rows+#seg.rows end
-  assert(rows<=MAX_HISTORY_ROWS,'保存できる共通履歴は最大3.5時間です。古い履歴を整理してから再試行してください。')
   local hash,bytes=Core.history_hash(chunks)
   assert(bytes<=MAX_SAVE_BYTES,'保存データが12 MiBの安全上限を超えました。測定範囲を短くしてください。')
+  Core.unpack(chunks,false,true)
+  if History.prepared~=A.project then History.cleanup(true) end
   local old=History.raw(History.key)
-  local snapshotKey=recovered and History.recovery or History.backup
-  local previousSnapshot=History.raw(snapshotKey)
   local id=R.genGuid():gsub('[^%w]',''):lower()
-  assert(id~='' and old:sub(1,#id):lower()~=id and History.raw(id..'_1')=='','グラフ保存先を確保できません。')
-  local stamp=os.time()+(R.time_precise()%1)
-  local manifest=string.format('%s;%d;%.6f;2;%d;%s',id,#chunks,stamp,bytes,hash)
-  local written={};local switching=false
+  assert(#id==32 and old:sub(1,#id):lower()~=id and History.raw(id..'_1')=='','グラフ保存先を確保できません。')
+  local pending=History.pending()
+  History.queue(pending,id,#chunks);History.queue_manifest(pending,old)
+  -- Journal ownership before writing or retiring chunks, including interrupted transactions.
+  History.write_pending(pending)
+  local manifest=string.format('%s;%d;%.6f;2;%d;%s',id,#chunks,os.time()+(R.time_precise()%1),bytes,hash)
+  local switching=false
   local ok,why=xpcall(function()
-    for i,chunk in ipairs(chunks) do
-      local key=id..'_'..i;written[#written+1]=key;History.put(key,chunk)
-    end
-    local nameKey=id..'_name';written[#written+1]=nameKey;History.put(nameKey,data.name or '')
-    History.read(manifest,false,true)
-    if old~='' then History.put(snapshotKey,old) end
+    for i,chunk in ipairs(chunks) do History.put(id..'_'..i,chunk) end
+    History.put(id..'_name',data.name or '')
     switching=true;History.put(History.key,manifest)
-
-    History.read(History.raw(History.key),false,true)
   end,debug.traceback)
   if not ok then
     if switching then pcall(History.put,History.key,old) end
-    local read,current=pcall(History.raw,History.key)
-    if read and current==old then
-      pcall(History.put,snapshotKey,previousSnapshot)
-      for _,key in ipairs(written) do pcall(History.erase,key) end
-    end
-    -- On an uncertain rollback, keep the new chunks rather than delete a possible owner.
+    History.cleanup(false)
     error(why,0)
   end
   A.historyBlocked=false;A.historyProblem=nil
-  local cleaned,err=pcall(History.retire,previousSnapshot);if not cleaned then BLT.logError(err) end
-  -- Retirement cannot turn a successful save into a missing-curve snapshot.
-  History.read(History.raw(History.key),false,true)
+  History.cleanup(false)
 end
 function History.clear()
-  local snapshots={}
-  for _,key in ipairs(History.references) do
-    snapshots[#snapshots+1]=History.raw(key);History.erase(key)
-  end
-  for _,raw in ipairs(snapshots) do History.retire(raw) end
+  local pending=History.pending();History.queue_manifest(pending,History.raw(History.key))
+  History.write_pending(pending);History.erase(History.key);History.cleanup(true)
 end
-local function load_data()
+local function load_data(automatic)
   A.data=nil;A.stale=false;A.historyBlocked=false;A.historyProblem=nil;A.historyRecovery=nil
-  local raw=History.raw(History.key)
-  local ok,result=pcall(History.read,raw)
-  if ok then A.data=result;A.stale=result~=nil;return end
-  -- Invalid persisted history starts a new measurement without a recovery prompt.
-  History.clear()
+  History.cleanup(History.prepared~=A.project)
+  local candidates={}
+  if automatic then
+    for _,layout in ipairs(Core.layouts) do
+      local raw=History.raw(History.key_for(layout.id))
+      if raw~='' then
+        local valid,_,_,stamp=pcall(History.manifest,raw)
+        candidates[#candidates+1]={id=layout.id,preferred=layout.id==A.layout,stamp=valid and stamp or -math.huge}
+      end
+    end
+    table.sort(candidates,function(a,b)
+      if a.preferred~=b.preferred then return a.preferred end
+      if a.stamp~=b.stamp then return a.stamp>b.stamp end
+      return a.id<b.id
+    end)
+  else candidates[1]={id=A.layout} end
+  for _,candidate in ipairs(candidates) do
+    A.layout=candidate.id;History.select_layout(A.layout)
+    local ok,result=pcall(History.read,History.raw(History.key))
+    if ok and result then
+      A.data=result;A.stale=true
+      if automatic then History.remember_layout() end
+      return
+    elseif not ok then
+      local cleared,why=pcall(History.clear);if not cleared then BLT.logError(why) end
+    end
+  end
+  History.select_layout(A.layout)
+  if automatic and A.layoutLegacy then History.remember_layout() end
   Live.run=nil;Live.previous=nil;Live.dirty=false;Live.notice=nil;Live.noticeBad=false
 end
 
@@ -5427,7 +5533,7 @@ local function adopt_project(create)
   Live.project=nil;Live.run=nil;Live.previous=nil;Live.dirty=false;Live.notice=nil;Live.noticeBad=false
   unlink(); A.project=R.EnumProjects(-1,""); A.track=find_track()
   -- Validate stored history before displaying it; invalid history is cleared.
-  load_settings();History.select_layout(A.layout);load_data()
+  load_settings();History.select_layout(A.layout);load_data(true)
   if create then ensure_track() end
 
   if valid_track() then S.visible=graph_track_is_visible() end
@@ -6896,7 +7002,7 @@ local function layout_menu()
   for _,layout in ipairs(Core.layouts) do
    I.BeginDisabled(ctx,A.job~=nil)
    if I.Selectable(ctx,layout.name,A.layout==layout.id) and layout.id~=A.layout and Live.prepare_offline() then
-    A.layout=layout.id;R.SetProjExtState(A.project,SECTION,'measurement_layout',A.layout)
+    A.layout=layout.id;History.remember_layout()
     History.select_layout(A.layout);load_data();Live.latest=nil;Live.warningCache=nil
     A.cache='';A.hover=nil;A.revision=A.revision+1;A.baseline=R.GetProjectStateChangeCount(A.project);wake_visuals()
    end
@@ -7121,7 +7227,7 @@ local function loop()
   Media.tick();retry_temp_deletes(false);Live.restore_fx_preference()
   if R.EnumProjects(-1,'')~=A.project then commit_edit(true);release();cancel_job(false);adopt_project(false);wake_visuals() end
   if A.data and not Live.enabled and R.GetProjectStateChangeCount(A.project)~=A.baseline then A.stale=true end
-  step_job();Live.tick(now);step_window_transition(now);overlay(now)
+  step_job();Live.tick(now);History.tick(now);step_window_transition(now);overlay(now)
   local tcpOK,tcpError=pcall(tcp_button,now)
   if not tcpOK then tcp_dispose();TCP.supported=false;BLT.logError(tcpError) end
   shell.theme.tick(now)

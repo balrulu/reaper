@@ -1,5 +1,5 @@
 -- @description LOOP RM STUDIO
--- @version 0.6.24
+-- @version 0.6.29
 -- @author Balrulu
 -- @provides
 --   . > ../
@@ -3268,7 +3268,7 @@ function M.new(host,api,text,language,C)
   local d=A.seam_drag or A.seam_hold
   index=0;self.dirty=not image or not self.valid
   check(iw);check(ih);check(dpi);check(scale);check(language.code);check(A.seam);check(A.seam_problem)
-  check(A.pjob~=nil);check(A.seam_refreshing);check(A.seam_drag~=nil)
+  check(A.pjob~=nil);check(A.seam_refreshing);check(A.seam_drag~=nil);check(A.seam_zoom)
   check(d and d.delta);check(d and d.edge);check(d and d.relative)
   check(d and A.seam_drag and host.g.mouse_x)
   local flashes=A.wave_entry_flash
@@ -3528,6 +3528,13 @@ local function create_language(api,section,catalog)
 end
 
 local LanguageCatalog={en={
+ ["アイテム埋込"]="Item cues",
+ ["アイテムから読み出し"]="Read from items",
+ ["アイテムへ書き込み（追加）"]="Append to items",
+ ["アイテムのキューをクリア"]="Clear item cues",
+ ["選択アイテムの埋込情報をプロジェクトへ追加。元ファイルのキューは維持します。"]="Add embedded cues from selected items to the project; keep source cues.",
+ ["選択アイテム内のマーカー/リージョンを元WAV/AIFFへ追記。共有する全アイテムへ反映されます。ファイル更新はUndo対象外です。"]="Append project markers/regions within selected items to source WAV/AIFF files. Affects all instances; file changes cannot be undone.",
+ ["選択アイテムの元WAV/AIFFから全キューを削除。共有する全アイテムへ反映されます。ファイル更新はUndo対象外です。"]="Remove all cues from source WAV/AIFF files of selected items. Affects all instances; file changes cannot be undone.",
  ['レンダリングの準備中…']='Preparing render...',
  ['書き出し範囲と埋め込み情報を確認しています…']='Checking render ranges and metadata...',
  ['出力先とファイル名を準備しています…']='Preparing output folder and file name...',
@@ -3902,14 +3909,14 @@ local LanguageCatalog={en={
  ["選択アイテム範囲に収まる\nループリージョンがありません"]="No loop region fits\nwithin selected items",
  ["選択アイテム範囲に\nループリージョンが\n複数存在しています！"]="Multiple loop regions\nwithin selected\nitems!",
  ["継ぎ目を読み取り中…"]="Reading seam...",
- ["終了 −6 ms  /  DRAG"]="End -6 ms / DRAG",
- ["開始 ＋6 ms  /  DRAG"]="Start +6 ms / DRAG",
+ ["終了 −%s ms  /  DRAG"]="End -%s ms / DRAG",
+ ["開始 ＋%s ms  /  DRAG"]="Start +%s ms / DRAG",
  [" / クリックで更新"]=" / Click to refresh",
  ["更新中…"]="Updating...",
  ["終了 "]="End ",
  ["開始 "]="Start ",
  ["  /  相対保持"]=" / Linked ends",
- ["波形を右へドラッグ＝時間位置を前へ / 左へドラッグ＝後ろへ / クリックで更新"]="Drag right: move earlier / Drag left: move later / Click: refresh",
+ ["ホイールで拡大/縮小 / 右へドラッグ＝前へ / 左へドラッグ＝後ろへ / クリックで更新"]="Wheel: zoom / Drag right: move earlier / Drag left: move later / Click: refresh",
  ["LOOP / REGION / MARKER MANAGER  ループ・リージョン・マーカー管理ツール"]="LOOP / REGION / MARKER MANAGER  Manage loops, regions and markers",
  ["ループ・リージョン・マーカーを追加"]="ADD LOOP / REGION / MARKER",
  ["ループ（サステイン）"]="Loop (sustain)",
@@ -4847,6 +4854,23 @@ function Core.encode_name(name,encoding)
  end
  return table.concat(out)
 end
+local cp932_decode
+function Core.decode_name(name,codepage)
+ if codepage~=932 and utf8.len(name) then return name end
+ assert(codepage~=65001,'キュー名のUTF-8が不正です。')
+ if not cp932_decode then
+  cp932_decode={};local raw=Core.unbase64(CP932_TABLE)
+  for i=1,#raw,4 do local u,v=string.unpack('<I2I2',raw,i);cp932_decode[v]=utf8.char(u) end
+ end
+ local out={};local i=1
+ while i<=#name do
+  local b=name:byte(i);local two=(b>=0x81 and b<=0x9f) or (b>=0xe0 and b<=0xfc)
+  local id=two and name:byte(i+1) and b*256+name:byte(i+1) or b
+  assert(not two or name:byte(i+1),'キュー名のCP932が不正です。')
+  out[#out+1]=assert(cp932_decode[id],'キュー名の文字コードを読み出せません。');i=i+(two and 2 or 1)
+ end
+ return table.concat(out)
+end
 local function u32(n) assert(finite(n) and n>=0 and n<=0xffffffff and n%1==0,'Invalid uint32');return string.pack('<I4',n) end
 function Core.chunk(id,data) return id..u32(#data)..data..(#data%2==1 and '\0' or '') end
 function Core.plan(rows,start,ending,sr,options)
@@ -4950,7 +4974,7 @@ function Core.scan(path,options)
   assert(header:sub(1,4)=='RIFF' and header:sub(9,12)=='WAVE','通常のRIFF/WAVのみ対応しています（RF64/Wave64非対応）。')
   local declared_size=string.unpack('<I4',header,5)+8
   assert(audio_only or declared_size==size,'WAVサイズが一致しません。レンダー未完了または破損ファイルです。')
-  local w={size=size,declared_size=declared_size,chunks={},metadata={}};local offset=12
+  local w={size=size,declared_size=declared_size,chunks={},metadata={}};local offset=12;local metadata_bytes=0
   while offset<size do
    assert(offset+8<=size,'WAVチャンクヘッダーが不正です。');assert(f:seek('set',offset))
    local h=read_exact(f,8);local id=h:sub(1,4);local n=string.unpack('<I4',h,5)
@@ -4973,7 +4997,8 @@ function Core.scan(path,options)
    elseif id=='data' then assert(not w.data,'複数dataチャンクには対応していません。');w.data=c end
    c.remove=id=='cue ' or id=='smpl' or id=='plst' or (id=='LIST' and c.list=='adtl')
    if c.remove and not audio_only then
-    assert(n<=Core.MAX_METADATA,'既存のWAVメタデータが大きすぎます。');assert(f:seek('set',offset));w.metadata[#w.metadata+1]=read_exact(f,c.total)
+    metadata_bytes=metadata_bytes+c.total
+    assert(n<=Core.MAX_METADATA and (not options or not options.metadata_limit or metadata_bytes<=options.metadata_limit),'既存のWAVメタデータが大きすぎます。');assert(f:seek('set',offset));w.metadata[#w.metadata+1]=read_exact(f,c.total)
    end
    w.chunks[#w.chunks+1]=c;offset=offset+c.total
    -- Existing files may contain trailing application data or stale RIFF sizes.
@@ -6215,9 +6240,10 @@ function Core.seam_drag_delta(dx,seconds_per_px)
  return clamp(-dx*seconds_per_px,-Core.SEAM_DRAG_SECONDS,Core.SEAM_DRAG_SECONDS)
 end
 
-function Core.seam_wave_shift(delta,half_width)
- assert(finite(delta) and finite(half_width) and half_width>0,'波形表示位置が不正です。')
- return -delta/Core.SEAM_SECONDS*half_width
+function Core.seam_wave_shift(delta,half_width,seconds)
+ seconds=seconds or Core.SEAM_SECONDS
+ assert(finite(delta) and finite(half_width) and half_width>0 and finite(seconds) and seconds>0,'波形表示位置が不正です。')
+ return -delta/seconds*half_width
 end
 
 function Core.seam_boundary_delta(delta,edge,start,finish,relative,min_time,max_time)
@@ -6284,9 +6310,427 @@ function Core.seam_start(project,rows,selected_key,items_override)
  return j
 end
 
+-- Source-file cue editing. Audio chunks are copied verbatim; publication is transactional.
+local ItemMetadata=(function()
+local M={}
+local function check(ok,msg) if not ok then error(msg,0) end;return ok end
+local function exact(f,n) local s=f:read(n);return check(s and #s==n and s,'キュー情報または音声ファイルが途中で切れています。') end
+local function key(path) local s=path:gsub('\\','/');return (R.GetOS() or ''):match('Win') and s:lower() or s end
+local function stat(path)
+ if not R.JS_File_Stat then return end
+ local result,size,accessed,modified,created,device,special,inode,mode,links=R.JS_File_Stat(path)
+ check(result==0,'ファイル情報を取得できません: '..path)
+ return table.concat({tostring(size),tostring(modified),tostring(created),tostring(device),tostring(inode),tostring(mode),tostring(links)},'\0'),links
+end
+local function chunk(id,data,big) return id..string.pack(big and '>I4' or '<I4',#data)..data..(#data%2==1 and '\0' or '') end
+local function text(s,cp)
+ s=s:match('^[^%z]*') or ''
+ return Core.decode_name(s,cp)
+end
+local function subchunks(data,first,fn)
+ local at=first
+ while at<=#data do
+  check(at+7<=#data,'不正なキューのサブチャンクです。')
+  local n=string.unpack('<I4',data,at+4);local last=at+8+n+n%2
+  check(last-1<=#data,'キューのサブチャンク長が不正です。')
+  fn(data:sub(at,at+3),data:sub(at+8,at+7+n),data:sub(at,last-1));at=last
+ end
+end
+function M.scan(path,raw_names)
+ local function name(s,cp) return raw_names and '' or text(s,cp) end
+ local f=check(io.open(path,'rb'),'音声ファイルを開けません: '..path)
+ local ok,w=pcall(function()
+  local h=exact(f,12)
+  if h:sub(1,4)=='RIFF' and h:sub(9,12)=='WAVE' then
+   f:close();f=nil
+   local v=Core.scan(path,{metadata_limit=Core.MAX_METADATA});v.kind='WAVE';v.cues={};v.labels={};v.lengths={};v.adtl={};v.used={};v.cue_ids={};v.cue_records={};v.entries={}
+   for _,raw in ipairs(v.metadata) do
+    local id,d=raw:sub(1,4),raw:sub(9,8+string.unpack('<I4',raw,5))
+    if id=='cue ' then
+     check(#d>=4,'不正なcueチャンクです。');local n=string.unpack('<I4',d)
+     check(#d==4+n*24,'cueポイント数が不正です。')
+     for i=1,n do
+      local at=5+(i-1)*24;local cid,pos,typ,cs,bs,sample=string.unpack('<I4I4c4I4I4I4',d,at)
+      check(not v.cue_ids[cid] and typ=='data' and cs==0 and bs==0 and sample<=v.frames,'未対応または不正なcueポイントです。')
+      v.cue_ids[cid]=true;v.used[cid]=true;v.cues[#v.cues+1]={id=cid,start=sample};v.cue_records[#v.cue_records+1]=d:sub(at,at+23)
+     end
+    elseif id=='LIST' then
+     subchunks(d,5,function(sid,s,rawsub)
+      v.adtl[#v.adtl+1]=rawsub
+      if sid=='labl' or sid=='note' or sid=='ltxt' then
+       check(#s>=4,'不正なキューラベルです。');local cid=string.unpack('<I4',s);v.used[cid]=true
+       if sid=='labl' then check(not v.labels[cid],'重複するキューラベルです。');v.labels[cid]=s:sub(5)
+       elseif sid=='ltxt' then
+        check(#s>=20 and not v.lengths[cid],'不正なキューリージョンです。')
+        v.lengths[cid]={length=string.unpack('<I4',s,5),cp=string.unpack('<I2',s,19),name=s:sub(21)}
+       end
+      end
+     end)
+    elseif id=='smpl' then
+     check(not v.smpl and #d>=36,'不正なsmplチャンクです。')
+     local n,extra=string.unpack('<I4I4',d,29);check(#d==36+n*24+extra,'smplループ数が不正です。')
+     v.smpl=d;v.loop_count=n
+     for i=1,n do
+      local at=37+(i-1)*24;local cid,typ,s,e=string.unpack('<I4I4I4I4',d,at)
+      check(s<=e and e<v.frames,'音声範囲外のループ情報です。')
+      v.used[cid]=true;v.entries[#v.entries+1]={kind='sustain',start=s,finish=e+1,name='',loop_type=typ,cue_id=cid}
+     end
+    end
+   end
+   for _,c in ipairs(v.cues) do
+    local l=v.lengths[c.id];local e=l and c.start+l.length or c.start
+    check(not l or l.length>0 and e<=v.frames,'音声範囲外のキューリージョンです。')
+    local label=name(v.labels[c.id] or l and l.name or '',l and l.cp);local matched
+    if l then for _,entry in ipairs(v.entries) do if entry.kind=='sustain' and entry.cue_id==c.id and entry.start==c.start and entry.finish==e then entry.name=label;matched=true;break end end end
+    if not matched then v.entries[#v.entries+1]={kind=l and 'region' or 'marker',start=c.start,finish=e,name=label} end
+   end
+   return v
+  end
+  check(h:sub(1,4)=='FORM' and (h:sub(9,12)=='AIFF' or h:sub(9,12)=='AIFC'),'対応形式はRIFF/WAV・AIFFです（RF64/Wave64非対応）。')
+  local size=f:seek('end');check(size==string.unpack('>I4',h,5)+8,'AIFFサイズが一致しません。')
+  local v={kind=h:sub(9,12),size=size,chunks={},metadata={},entries={},marks={},used={},mark_records={},comments={}}
+  local at=12;local metadata_bytes=0
+  while at<size do
+   check(at+8<=size,'AIFFチャンクヘッダーが不正です。');f:seek('set',at);local head=exact(f,8)
+   local id,n=head:sub(1,4),string.unpack('>I4',head,5);check(at+8+n+n%2<=size,'AIFFチャンク長が不正です。')
+   local c={id=id,offset=at,size=n,total=8+n+n%2,remove=id=='MARK' or id=='INST' or id=='COMT'}
+   if id=='COMM' then
+    check(not v.sr and n>=18 and n<=4096,'AIFF COMMが不正です。');local d=exact(f,n)
+    local ch,frames,bits,ex,hi,lo=string.unpack('>I2I4I2I2I4I4',d)
+    local sr=(hi*4294967296.0+lo)*2^(ex-16383-63)
+    local codec=v.kind=='AIFF' and 'NONE' or d:sub(19,22)
+    check(ex>0 and ex<32767 and hi>=0x80000000 and finite(sr) and sr>0 and math.abs(sr-floor(sr+.5))<.001 and ch>0 and ch<=64 and bits>0 and bits<=64,'AIFF音声形式が不正です。')
+    check(codec=='NONE' or codec=='sowt' or (codec=='fl32' or codec=='FL32') and bits==32 or (codec=='fl64' or codec=='FL64') and bits==64,'AIFFの埋込はPCM / IEEE floatに対応しています。')
+    v.sr,v.frames,v.fmt,v.align=floor(sr+.5),frames,d,ch*math.ceil(bits/8)
+   elseif id=='SSND' then
+    check(not v.data and n>=8,'AIFF SSNDが不正です。');local offset=string.unpack('>I4',exact(f,8))
+    check(offset<=n-8,'AIFF音声オフセットが不正です。');v.data=c;v.audio_bytes=n-8-offset
+   end
+   if c.remove then
+    metadata_bytes=metadata_bytes+c.total
+    check(metadata_bytes<=Core.MAX_METADATA,'AIFFキュー情報が大きすぎます。');f:seek('set',at);local raw=exact(f,c.total);v.metadata[#v.metadata+1]=raw
+    local d=raw:sub(9,8+n)
+    if id=='MARK' then
+     check(#d>=2,'AIFF MARKが不正です。');local count=string.unpack('>I2',d);local p=3
+     for i=1,count do
+      check(p+6<=#d,'AIFFマーカーが途中で切れています。');local cid,pos,len=string.unpack('>I2I4B',d,p);local ending=p+7+len+(1+len)%2
+      check(cid>0 and cid<=32767 and not v.used[cid] and ending-1<=#d,'AIFFマーカーID/名前が不正です。')
+      local m={id=cid,start=pos,name=name(d:sub(p+7,p+6+len))};v.used[cid]=true;v.marks[#v.marks+1]=m;v.mark_records[#v.mark_records+1]=d:sub(p,ending-1);p=ending
+     end
+     check(p==#d+1,'AIFFマーカー数が一致しません。')
+    elseif id=='INST' then check(not v.instrument and n==20,'AIFF INSTが不正です。');v.instrument=d
+    elseif id=='COMT' then
+     check(#d>=2,'AIFF COMTが不正です。');local count=string.unpack('>I2',d);local p=3
+     for i=1,count do
+      check(p+7<=#d,'AIFFコメントが不正です。');local len=string.unpack('>I2',d,p+6);local ending=p+8+len+len%2
+      check(ending-1<=#d,'AIFFコメント長が不正です。');v.comments[#v.comments+1]=d:sub(p,ending-1);p=ending
+     end
+     check(p==#d+1,'AIFFコメント数が一致しません。')
+    end
+   end
+   v.chunks[#v.chunks+1]=c;at=at+c.total
+  end
+  check(v.sr and v.data and v.frames>0 and v.audio_bytes>=v.frames*v.align,'AIFF音声データがありません、または途中で切れています。')
+  local byid,consumed={},{};for _,m in ipairs(v.marks) do check(m.start<=v.frames,'AIFFマーカーが音声範囲外です。');byid[m.id]=m end
+  if v.instrument then
+   for _,p in ipairs({9,15}) do
+    local mode,a,b=string.unpack('>I2I2I2',v.instrument,p)
+    if mode~=0 then
+     check((mode==1 or mode==2) and byid[a] and byid[b] and byid[b].start>byid[a].start,'AIFFループ参照が不正です。')
+     consumed[a],consumed[b]=true,true;v.loop_count=(v.loop_count or 0)+1
+     local name=byid[a].name:gsub(' %[%s*START%s*%]$','');if name=='Loop Start' then name='' end
+     v.entries[#v.entries+1]={kind='sustain',start=byid[a].start,finish=byid[b].start,name=name,loop_type=mode-1}
+    end
+   end
+  end
+  for _,m in ipairs(v.marks) do if not consumed[m.id] then
+   local name=m.name:match('^(.*) %[%s*START%s*%]$');local ending
+   if name then for _,other in ipairs(v.marks) do if not consumed[other.id] and other.start>m.start and other.name==name..' [END]' then ending=other;break end end end
+   if ending then consumed[ending.id]=true;v.entries[#v.entries+1]={kind='region',start=m.start,finish=ending.start,name=name}
+   else v.entries[#v.entries+1]={kind='marker',start=m.start,finish=m.start,name=m.name} end
+  end end
+  return v
+ end)
+ if f then f:close() end;check(ok,w);return w
+end
+function M.metadata(w,entries,clear,encoding)
+ local out={};local function add(id,d) out[#out+1]=chunk(id,d,w.kind~='WAVE') end
+ local used={};if not clear then for id in pairs(w.used) do used[id]=true end end
+ local nextid=1
+ local function allocate()
+  while used[nextid] do nextid=nextid+1 end
+  check(nextid<=(w.kind=='WAVE' and 0xffffffff or 32767),'キューIDの上限を超えています。')
+  local id=nextid;used[id]=true;return id
+ end
+ local loop,loopid
+ check(clear or (w.loop_count or 0)<=1,'既存のループが複数あります。追記を停止しました。')
+ if w.kind=='WAVE' then
+  local cues,adtl={},{}
+  if not clear then for _,s in ipairs(w.cue_records) do cues[#cues+1]=s end;for _,s in ipairs(w.adtl) do adtl[#adtl+1]=s end end
+  for _,e in ipairs(entries) do
+   local id=allocate();local name=Core.encode_name(e.name,encoding);check(#name<=65535,'キュー名が長すぎます。')
+   check(e.start>=0 and e.finish<=w.frames and (e.kind=='marker' or e.finish>e.start),'1サンプル未満または音声範囲外のリージョンです。')
+   if e.kind=='sustain' then loop,loopid=e,id end
+   cues[#cues+1]=string.pack('<I4I4c4I4I4I4',id,e.start,'data',0,0,e.start)
+   adtl[#adtl+1]=chunk('labl',u32(id)..name..'\0')
+   if e.kind~='marker' then adtl[#adtl+1]=chunk('ltxt',u32(id)..u32(e.finish-e.start)..'rgn '..string.pack('<I2I2I2I2',0,0,0,encoding=='CP932' and 932 or 65001)..name..'\0') end
+  end
+  if #cues>0 then add('cue ',u32(#cues)..table.concat(cues)) end
+  if #adtl>0 then add('LIST','adtl'..table.concat(adtl)) end
+  if w.smpl then
+   if clear then
+    local n=string.unpack('<I4',w.smpl,29);add('smpl',w.smpl:sub(1,28)..u32(0)..w.smpl:sub(33,36)..w.smpl:sub(37+n*24))
+   elseif loop then
+    check((w.loop_count or 0)==0,'ループ情報が競合しています。')
+    add('smpl',w.smpl:sub(1,28)..u32(1)..w.smpl:sub(33,36)..string.pack('<I4I4I4I4I4I4',loopid,0,loop.start,loop.finish-1,0,0)..w.smpl:sub(37))
+   else add('smpl',w.smpl) end
+  elseif loop then add('smpl',string.pack('<I4I4I4I4I4I4I4I4I4',0,0,floor(1e9/w.sr+.5),60,0,0,0,1,0)..string.pack('<I4I4I4I4I4I4',loopid,0,loop.start,loop.finish-1,0,0)) end
+  if not clear then for _,raw in ipairs(w.metadata) do if raw:sub(1,4)=='plst' then out[#out+1]=raw end end end
+ else
+  local marks={};if not clear then for _,s in ipairs(w.mark_records) do marks[#marks+1]=s end end
+  local function mark(pos,name)
+   check(#name<=255,'AIFFのキュー名は文字コード変換後255バイトまでです。')
+   local id=allocate();local s=string.char(#name)..name;marks[#marks+1]=string.pack('>I2I4',id,pos)..s..(#s%2==1 and '\0' or '');return id
+  end
+  local first,last
+  for _,e in ipairs(entries) do
+   local name=Core.encode_name(e.name,encoding)
+   check(e.start>=0 and e.finish<=w.frames and (e.kind=='marker' or e.finish>e.start),'1サンプル未満または音声範囲外のリージョンです。')
+   if e.kind=='marker' then mark(e.start,name)
+   else
+    local a,b=mark(e.start,name..' [START]'),mark(e.finish,name..' [END]')
+    if e.kind=='sustain' then first,last=a,b end
+   end
+  end
+  if #marks>0 then add('MARK',string.pack('>I2',#marks)..table.concat(marks)) end
+  if w.instrument or first then
+   local prefix=w.instrument and w.instrument:sub(1,8) or string.pack('>BBBBBBi2',60,0,0,127,1,127,0)
+   add('INST',prefix..(clear and string.rep('\0',12) or first and string.pack('>I2I2I2I2I2I2',1,first,last,0,0,0) or w.instrument:sub(9)))
+  end
+  if #w.comments>0 then
+   local comments={};for _,s in ipairs(w.comments) do comments[#comments+1]=clear and (s:sub(1,4)..'\0\0'..s:sub(7)) or s end
+   add('COMT',string.pack('>I2',#comments)..table.concat(comments))
+  end
+ end
+ local blob=table.concat(out);check(#blob<=Core.MAX_METADATA,'キュー情報が大きすぎます。');return blob
+end
+function M.selection(project,geometry,raw_names)
+ local groups,bykey,skipped={}, {},0
+ for i=0,R.CountSelectedMediaItems(project)-1 do
+  local item=R.GetSelectedMediaItem(project,i);local take=R.GetActiveTake(item)
+  if take and not R.TakeIsMIDI(take) then
+   local source=R.GetMediaItemTake_Source(take);local top=source;local a,b=0,1;local seen={}
+   while source and R.GetMediaSourceParent(source) do
+    check(not seen[source],'音声ソースの参照が循環しています。');seen[source]=true
+    local ok,offset,len,reverse=R.PCM_Source_GetSectionInfo(source)
+    check(not geometry or ok,'未対応の音声ソース構造です。')
+    if geometry then a=reverse and offset+len-a or offset+a;b=reverse and -b or b end
+    source=R.GetMediaSourceParent(source)
+   end
+   local path=source and R.GetMediaSourceFileName(source,'') or ''
+   if path:lower():match('%.wav$') or path:lower():match('%.aiff?$') or path:lower():match('%.aifc$') then
+    local k=key(path);local g=bykey[k]
+    if not g then
+     local stamp,links=stat(path)
+     g={path=path,key=k,w=M.scan(path,raw_names),items={},stamp=stamp,links=links};bykey[k]=g;groups[#groups+1]=g
+    end
+    if geometry then
+     check(R.GetTakeNumStretchMarkers(take)==0,'ストレッチマーカーのあるアイテムは埋込の位置を確定できません。先にグルーしてください。')
+     local rate=R.GetMediaItemTakeInfo_Value(take,'D_PLAYRATE');local offset=R.GetMediaItemTakeInfo_Value(take,'D_STARTOFFS')
+     local pos=R.GetMediaItemInfo_Value(item,'D_POSITION');local len=R.GetMediaItemInfo_Value(item,'D_LENGTH')
+     local duration,qn=R.GetMediaSourceLength(top)
+     check(not qn and finite(rate) and rate>0 and finite(offset) and finite(pos) and finite(len) and len>0 and finite(duration) and duration>0,'アイテムの音声範囲が不正です。')
+     local spans={};local t=0;local looping=R.GetMediaItemInfo_Value(item,'B_LOOPSRC')~=0
+     while t<len-1e-12 do
+      check(#spans<10000,'ループ反復数が多すぎます。')
+      local x=offset+t*rate;if looping then x=x%duration end
+      local dt=looping and min(len-t,(duration-x)/rate) or len-t
+      check(dt>1e-12,'アイテムのループ範囲が不正です。')
+      local p,q=a+b*x,a+b*(x+dt*rate);local lo,hi=max(0,min(p,q)),min(g.w.frames/g.w.sr,max(p,q))
+      if hi>lo then spans[#spans+1]={lo=lo,hi=hi,p=pos+t-p/(b*rate),slope=b*rate} end
+      t=t+dt
+     end
+     g.items[#g.items+1]={spans=spans,item=item}
+    end
+   else skipped=skipped+1 end
+  else skipped=skipped+1 end
+ end
+ check(#groups>0,'対応する音声アイテムを選択してください（RIFF/WAV・AIFF）。')
+ return groups,skipped
+end
+function M.read_plan(groups)
+ local entries={};local seen={}
+ for _,g in ipairs(groups) do for _,it in ipairs(g.items) do for _,s in ipairs(it.spans) do for _,e in ipairs(g.w.entries) do
+  local lo,hi=e.start/g.w.sr,e.finish/g.w.sr;local marker=e.kind=='marker'
+  if marker and lo>=s.lo and lo<=s.hi or not marker and hi>s.lo and lo<s.hi then
+   lo,hi=max(lo,s.lo),min(hi,s.hi)
+   local p,q=s.p+lo/s.slope,s.p+hi/s.slope
+   local row={kind=e.kind,start=min(p,q),finish=max(p,q),name=e.name}
+   local k=table.concat({row.kind,string.format('%.12f',row.start),string.format('%.12f',row.finish),row.name},'\0')
+   if not seen[k] then check(#entries<100000,'読み出すキュー数が多すぎます。');seen[k]=true;entries[#entries+1]=row end
+  end
+ end end end end
+ return entries
+end
+function M.write_plan(groups,rows,clear,encoding)
+ for _,r in ipairs(rows) do check(finite(r.start) and finite(r.finish),'プロジェクトのキュー位置が不正です。') end
+ table.sort(rows,function(a,b) return a.start==b.start and (a.id or 0)<(b.id or 0) or a.start<b.start end)
+ for _,g in ipairs(groups) do
+  check(not g.links or g.links<=1,'ハードリンクされた元ファイルは安全に置換できないため停止しました: '..g.path)
+  local entries,seen={},{};local loop=(g.w.loop_count or 0)>0
+  if not clear then for _,r in ipairs(rows) do
+   for _,it in ipairs(g.items) do for _,s in ipairs(it.spans) do
+    local p,q=s.p+s.lo/s.slope,s.p+s.hi/s.slope;local lo,hi=min(p,q),max(p,q);local marker=not r.isr
+    if marker and r.start>=lo and r.start<=hi or not marker and r.finish>lo and r.start<hi then
+     check(r.kind=='marker' or r.kind=='region' or r.kind=='sustain','不明なBLT接頭辞: '..(r.raw or ''))
+     check(marker or r.finish>r.start,'リージョンの範囲が不正です: '..r.name)
+     local x,y=(max(lo,r.start)-s.p)*s.slope,(min(hi,r.finish)-s.p)*s.slope
+     if marker then x=(r.start-s.p)*s.slope;y=x end
+     local first,last=clamp(floor(min(x,y)*g.w.sr+.5),0,g.w.frames),clamp(floor(max(x,y)*g.w.sr+.5),0,g.w.frames)
+     check(marker or last>first,'1サンプル未満のリージョンです: '..r.name)
+     local k=table.concat({r.kind,first,last,r.name},'\0')
+     if not seen[k] then
+      check(#entries<100000,'書き込むキュー数が多すぎます。');seen[k]=true;local kind=r.kind
+      if kind=='sustain' then if loop then kind='region' else loop=true end end
+      entries[#entries+1]={kind=kind,start=first,finish=last,name=r.name}
+     end
+    end
+   end end
+  end end
+  g.blob=M.metadata(g.w,entries,clear,encoding);g.count=#entries
+ end
+end
+local function spare(path)
+ for i=1,99999 do local p=path..i;if not Core.exists(p) then return p end end
+ error('一時ファイル名を確保できません。',0)
+end
+function M.abort(j)
+ if not j then return end
+ if j.input then j.input:close();j.input=nil end
+ if j.output then j.output:close();j.output=nil end
+ for _,g in ipairs(j.groups) do if g.temp then Core.queue_file_delete(g.temp);g.temp=nil end end
+ Core.retry_file_deletes(true)
+end
+function M.start(groups,project)
+ local j={groups=groups,project=project,revision=R.GetProjectStateChangeCount(project),index=1,copied=0,total=0}
+ for _,g in ipairs(groups) do
+  g.size=12+#g.blob;g.copy={}
+  for _,c in ipairs(g.w.chunks) do if not c.remove then g.copy[#g.copy+1]=c;g.size=g.size+c.total end end
+  check(g.size-8<=0xffffffff,'ファイルサイズがRIFF/AIFFの上限を超えます。');j.total=j.total+g.size
+ end
+ return j
+end
+function M.stage_step(j)
+ local g=j.groups[j.index];if not g then return true end
+ if not j.input then
+  g.temp=spare(g.path..'.blt-cues-part-')
+  j.input=check(io.open(g.path,'rb'),'元ファイルを開けません: '..g.path)
+  j.output=check(io.open(g.temp,'wb'),'一時ファイルを作成できません: '..g.temp)
+  check(j.output:write((g.w.kind=='WAVE' and 'RIFF' or 'FORM')..string.pack(g.w.kind=='WAVE' and '<I4' or '>I4',g.size-8)..g.w.kind),'ヘッダーを書き込めません。')
+  j.chunk,j.offset=1,0;j.copied=j.copied+12
+ end
+ local budget=4*1024*1024
+ while budget>0 and g.copy[j.chunk] do
+  local c=g.copy[j.chunk];local n=min(budget,c.total-j.offset)
+  check(j.input:seek('set',c.offset+j.offset),'元ファイルを読み取れません。');check(j.output:write(exact(j.input,n)),'音声ファイルを書き込めません。')
+  j.offset=j.offset+n;j.copied=j.copied+n;budget=budget-n
+  if j.offset==c.total then j.chunk=j.chunk+1;j.offset=0 end
+ end
+ if not g.copy[j.chunk] then
+  check(j.output:write(g.blob),'キュー情報を書き込めません。');j.copied=j.copied+#g.blob
+  local output=j.output;j.output=nil;check(output:close(),'一時ファイルの保存に失敗しました。');j.input:close();j.input=nil
+  local v=M.scan(g.temp,true)
+  check(v.size==g.size and v.frames==g.w.frames and v.sr==g.w.sr and v.fmt==g.w.fmt,'保存後の音声形式が一致しません。')
+  check(table.concat(v.metadata)==g.blob,'保存後のキュー情報が一致しません。')
+  j.index=j.index+1
+ end
+ return j.index>#j.groups
+end
+function M.commit(j)
+ check(R.EnumProjects(-1,'')==j.project,'プロジェクトが切り替わったため停止しました。')
+ check(R.CF_SetMediaSourceOnline and R.CF_GetMediaSourceOnline,'元ファイルの更新にはSWS拡張が必要です。')
+ check(R.UpdateItemInProject and R.Main_OnCommandEx,'波形の更新APIを利用できません。REAPERを更新してください。')
+ local targets={};for _,g in ipairs(j.groups) do
+  check(not g.stamp or stat(g.path)==g.stamp,'処理中に元ファイルが変更されたため停止しました: '..g.path)
+  local w=M.scan(g.path,true)
+  check(w.size==g.w.size and w.fmt==g.w.fmt and table.concat(w.metadata)==table.concat(g.w.metadata),'処理中に元ファイルが変更されたため停止しました: '..g.path)
+  targets[g.key]=g
+ end
+ local sources,seen,items,projects={},{},{},{};local pi=0
+ while true do
+  local project=R.EnumProjects(pi,'');if not project then break end;pi=pi+1
+  check(R.GetPlayStateEx(project)==0,'元ファイルの更新前に、全プロジェクトの再生・録音を停止してください。')
+  for i=0,R.CountMediaItems(project)-1 do
+   local item=R.GetMediaItem(project,i)
+   local affected=false
+   for t=0,R.CountTakes(item)-1 do
+    local source=R.GetMediaItemTake_Source(R.GetTake(item,t));local chain={}
+    while source and not chain[source] do
+     chain[source]=true
+     local parent=R.GetMediaSourceParent(source)
+     if targets[key(R.GetMediaSourceFileName(source,'') or '')] then
+      affected=true
+      local entry=seen[source]
+      if not entry then entry={source=source,online=R.CF_GetMediaSourceOnline(source)};seen[source]=entry;sources[#sources+1]=entry end
+      if not parent and entry.online then projects[project]=true end
+     end
+     source=parent
+    end
+   end
+   if affected then items[#items+1]={item=item,project=project} end
+  end
+ end
+ local failures={};local ok,err=pcall(function()
+  for _,s in ipairs(sources) do if s.online then R.CF_SetMediaSourceOnline(s.source,false) end end
+  if R.reduce_open_files then R.reduce_open_files(2) end
+  for _,g in ipairs(j.groups) do
+   g.backup=spare(g.path..'.blt-cues-original-')
+   check(os.rename(g.path,g.backup),'元ファイルを置き換えられません（使用中または書込不可）: '..g.path);g.moved=true
+   check(os.rename(g.temp,g.path),'キュー更新ファイルを配置できません: '..g.path);g.published=true;g.temp=nil
+  end
+ end)
+ if not ok then
+  for i=#j.groups,1,-1 do
+   local g=j.groups[i]
+   if g.moved then
+    local removed=not g.published or os.remove(g.path)
+    if removed and os.rename(g.backup,g.path) then g.backup=nil;g.moved=false
+    else failures[#failures+1]='復元用ファイルを保持しています: '..g.backup end
+   end
+  end
+ end
+ for i=#sources,1,-1 do
+  local s=sources[i]
+  if s.online then
+   local yes,why=pcall(function()
+    R.CF_SetMediaSourceOnline(s.source,true)
+    check(R.CF_GetMediaSourceOnline(s.source),'元ファイルをオンラインへ戻せません。')
+   end)
+   if not yes then failures[#failures+1]='音声ソースのオンライン復元に失敗: '..tostring(why) end
+  end
+ end
+ if ok then for _,g in ipairs(j.groups) do if g.backup then Core.queue_file_delete(g.backup);g.backup=nil end end end
+ Core.retry_file_deletes(true)
+ local function refresh(fn,...)
+  local refreshed,why=pcall(fn,...)
+  if not refreshed then failures[#failures+1]=(ok and 'キュー情報は保存済みですが、波形の更新に失敗しました: ' or '波形の復元に失敗しました: ')..tostring(why) end
+ end
+ -- REAPER owns peak rebuilding, including progress/cancellation and cache paths.
+ for project in pairs(projects) do
+  if not R.ValidatePtr or R.ValidatePtr(project,'ReaProject*') then refresh(R.Main_OnCommandEx,40047,0,project) end
+ end
+ for _,entry in ipairs(items) do
+  if not R.ValidatePtr2 or R.ValidatePtr2(entry.project,entry.item,'MediaItem*') then refresh(R.UpdateItemInProject,entry.item) end
+ end
+ R.UpdateArrange()
+ check(ok and #failures==0,(not ok and tostring(err)..'\n' or '')..table.concat(failures,'\n'))
+ return #j.groups
+end
+return M
+end)()
 local SECTION=Core.SECTION
 local PROJECT_SECTION='BLT_REGION_FORGE'
-local W,H=980,926
+local W,H=980,826
 local A={status='時間選択から区間を追加し、WAVへ書き出します。',warning=false,content_dirty=true,closed=false,
  rows={},selected=nil,selected_regions={},poll_at=0,active=true,sr=48000,bits=24,channels=2,encoding='UTF-8',
  directory='',filename='$region',busy=false,progress=0,use_default_directory=true,use_default_filename=false,use_format=false,
@@ -6294,7 +6738,7 @@ local A={status='時間選択から区間を追加し、WAVへ書き出します
  marker_color=-1,region_color=-1,sustain_color=-1,
  add_mode='selection',length=1,length_values={seconds=1,beats=1,bars=1,grid=1},unit='seconds',
  interval=0,interval_values={seconds=0,beats=0,bars=0,grid=0},interval_unit='seconds',count=0,omit_name=true,
- xfade_seconds=3,relative_lock=false,auto_audition=false,wave_items={},audition=nil,period_notice=nil,
+ xfade_seconds=3,relative_lock=false,auto_audition=false,seam_zoom=4,wave_items={},audition=nil,period_notice=nil,
  loop_enable={crossfade=false,zero=false,period=false}}
 local UI={}
 
@@ -6353,6 +6797,7 @@ Core.context_changed={}
 function UI.safe(fn,...)
  local ok,err=xpcall(fn,debug.traceback,...)
  if not ok then
+  if A.cue_job then BLT.cleanup(ItemMetadata.abort,A.cue_job);A.cue_job=nil end
   if A.render_snapshot and BLT.cleanup(Core.restore_render,A.render_snapshot) then A.render_snapshot=nil end
   if A.job and BLT.cleanup(Core.copy_abort,A.job) then A.job=nil end
   if A.xjob and BLT.cleanup(Core.crossfade_abort,A.xjob) then A.xjob=nil end
@@ -6997,6 +7442,7 @@ function UI.render_step()
  end
 end
 function UI.cancel()
+ if A.cue_job then ItemMetadata.abort(A.cue_job);A.cue_job=nil;A.busy=false;notice('キュー更新を中止しました。元ファイルは変更していません。',false);return end
  if A.render_batch then
   local b=A.render_batch
   if A.render_snapshot then Core.restore_render(A.render_snapshot);A.render_snapshot=nil end
@@ -7014,6 +7460,63 @@ function UI.cancel()
   notice(cleaned and '埋め込みを中止しました。' or '処理を中止しました。一時WAVを削除できませんでした。終了前に再試行します。',not cleaned)
  end
 end
+function UI.item_embed_error(err)
+ if A.cue_job then ItemMetadata.abort(A.cue_job);A.cue_job=nil end
+ A.busy=false;A.progress=0;UI.dirty()
+ local message=BLT.publicError(err);notice(message,true)
+ Language.mb(message,'ITEM CUES',0)
+end
+function UI.item_embed(mode)
+ if A.busy or not Media.ready() or not UI.commit_edit() then return end
+ local ok,err=pcall(function()
+  UI.poll(R.time_precise(),true)
+  local project=A.project
+  local groups,skipped=ItemMetadata.selection(project,mode~='clear',mode~='read')
+  if mode=='read' then
+   local entries=ItemMetadata.read_plan(groups)
+   assert(#entries>0,'選択アイテムの範囲にキュー情報がありません。')
+   UI.undo('アイテムのキューを読み出し',8,function()
+    local added={};local success,problem=pcall(function()
+     for _,e in ipairs(entries) do
+      local c=UI.insert_color(e.kind)
+      local color=R.ColorToNative(floor(c[1]*255+.5),floor(c[2]*255+.5),floor(c[3]*255+.5))|0x1000000
+      local name=e.kind=='sustain' and (Core.tags.sustain..' '..(e.name~='' and e.name or Core.names.sustain)) or e.name
+      local id=R.AddProjectMarker2(project,e.kind~='marker',e.start,e.kind=='marker' and 0 or e.finish,name,-1,color)
+      assert(id>=0,'キューの追加に失敗しました。');added[#added+1]={id=id,isr=e.kind~='marker'}
+     end
+    end)
+    if not success then for _,e in ipairs(added) do R.DeleteProjectMarker(project,e.id,e.isr) end;error(problem,0) end
+   end)
+   notice('キューを読み出しました: '..#entries..'件'..(skipped>0 and (' / 非対応アイテムを除外: '..skipped..'件') or ''),false)
+  else
+   assert(R.CF_SetMediaSourceOnline and R.CF_GetMediaSourceOnline,'元ファイルの更新にはSWS拡張が必要です。')
+   local rows=mode=='clear' and {} or Core.project_rows(project)
+   ItemMetadata.write_plan(groups,rows,mode=='clear',A.encoding)
+   local changed={};for _,g in ipairs(groups) do if mode=='clear' and g.blob~=table.concat(g.w.metadata) or mode~='clear' and g.count>0 then changed[#changed+1]=g end end
+   assert(#changed>0,'書き込むキューがないか、変更対象がありません。')
+   if A.audition then UI.stop_loop_audition(true) end
+   if A.pjob then Core.loop_audio_close(A.pjob);A.pjob=nil;A.preview_signature=nil end
+   A.cue_job=ItemMetadata.start(changed,project);A.cue_job.skipped=skipped
+   A.busy=true;A.progress=0;notice('元素材のキュー情報を更新中…',false)
+  end
+ end)
+ if not ok then UI.item_embed_error(err) end
+end
+function UI.item_embed_step()
+ local j=A.cue_job;if not j then return end
+ local ok,err=pcall(function()
+  assert(R.EnumProjects(-1,'')==j.project,'プロジェクトが切り替わったため停止しました。')
+  assert(R.GetProjectStateChangeCount(j.project)==j.revision,'処理中にプロジェクトが変更されたため停止しました。')
+  if ItemMetadata.stage_step(j) then
+   local count=ItemMetadata.commit(j)
+   A.cue_job=nil;A.busy=false;A.progress=1;A.preview_signature=nil;A.preview_at=0
+   UI.poll(R.time_precise(),true)
+   notice('元ファイルのキュー情報を更新しました: '..count..'ファイル'..(j.skipped>0 and (' / 非対応アイテムを除外: '..j.skipped..'件') or '')..'（ファイル更新はUndo対象外）',false)
+  else A.progress=j.copied/max(1,j.total);UI.dirty() end
+ end)
+ if not ok then UI.item_embed_error(err) end
+end
+
 function UI.step()
  if not Media.ready() or not A.job then return end
  local j=A.job;local b=A.render_batch
@@ -7768,14 +8271,22 @@ if not R.ImGui_GetBuiltinPath or not R.JS_LICE_CreateBitmap then
 end
 local ok,value=pcall(BLT.CanvasHost.new,R,APP_NAME,W,H+26,SECTION)
 if not ok then Language.mb(BLT.publicError(value),APP_NAME,0);return end
-Host=value;Host.minWidth,Host.minHeight,Host.persistSize=784,790,true
+Host=value;Host.minWidth,Host.minHeight,Host.persistSize=784,710,true
 local savedW,savedH=tonumber(R.GetExtState(SECTION,'window_w')),tonumber(R.GetExtState(SECTION,'window_h'))
 if R.GetExtState(SECTION,'render_button_balance_206')~='true' then
  if savedH then savedH=savedH+16 end
  BLT.store(SECTION,'render_button_balance_206','true',true)
 end
+if R.GetExtState(SECTION,'compact_panels_626')~='true' then
+ if finite(savedH) then
+  local previousH=clamp(savedH,790,1800)
+  local previousScale=min((finite(savedW) and clamp(savedW,784,2200) or W)/W,(previousH-26)/(H+100))
+  savedH=previousH-100*previousScale
+ end
+ BLT.store(SECTION,'compact_panels_626','true',true)
+end
 Host.width=finite(savedW) and clamp(savedW,784,2200) or W
-Host.height=finite(savedH) and clamp(savedH,790,1800) or H+26
+Host.height=finite(savedH) and clamp(savedH,710,1800) or H+26
 local I,ctx=Host.I,Host.ctx
 gfx=Host.g
 local g=gfx
@@ -7896,11 +8407,10 @@ local function insert_button(id,x,y,w,h,title,action,tip,accent)
  elseif colorClicked then UI.safe(UI.select_insert_color,kind) end
  hint(id,tip,x,y,w,h)
 end
-local function panel(x,y,w,h,title,code)
+local function panel(x,y,w,h,title,inline)
  cut_panel(x,y,w,h)
- label(code or '',x+16,y+13,10,C.faint,2,w-30,16,0,true)
- label(title,x+16,y+31,16,C.text,1,w-30,26,0,true)
- line(x+16,y+58,x+w-16,y+58,C.edge,.22)
+ label(title,x+16,y+(inline and (h-26)/2 or 11),16,C.text,1,inline and 140 or w-30,26,inline and 4 or 0,true)
+ if not inline then line(x+16,y+38,x+w-16,y+38,C.edge,.22) end
 end
 local toggleOptions={background=false,showState=false}
 local function toggle(id,x,y,w,h,text,checked,action,tip,enabled,size,bold)
@@ -7925,7 +8435,7 @@ local function relative_toggle(x,y,w,h)
  if clicked then UI.commit_edit();A.relative_lock=value;UI.safe(UI.refresh);UI.dirty() end
  hint('relative_lock','ONでは開始と終了を同じ量だけ移動し、ループ尺を保持',x,y,w,h)
 end
-function UI.field(key,x,y,w,enabled,owner,textonly)
+function UI.field(key,x,y,w,enabled,owner,textonly,height)
  owner=owner or A;local id='field_'..key;local spec=not textonly and field_spec(key) or nil
  local f=fields[id] or {id=id};fields[id]=f;f.owner,f.key,f.spec=owner,key,spec
  f.done=f.done or function(raw) UI.safe(applyField,f,raw,false);UI.dirty() end
@@ -7954,7 +8464,7 @@ function UI.field(key,x,y,w,enabled,owner,textonly)
   end
  end
  local previous=owner[key];local value=spec and tonumber(previous) or tostring(previous or '')
- local h=textonly and 32 or 36;prime(id,x,y,w,h,opt.enabled)
+ local h=height or (textonly and 32 or 36);prime(id,x,y,w,h,opt.enabled)
  local result=U:field(id,value,x/density,y/density,w/density,h/density,opt)
  if result~=value then UI.safe(applyField,f,result,true) end
  local tip=spec and 'クリック入力 / 上下ドラッグ / ホイール' or 'クリックして直接入力'
@@ -7982,11 +8492,11 @@ local function drawExecute(now)
   completedStamp=A.render_complete_until;U:complete('execute',310/density,52/density)
  end
  execution.busy,execution.progress=A.busy,A.busy and A.progress or completed and 1 or nil
- execution.caption=b and UI.render_stages[b.phase].caption or A.ajob and 'ANALYZING' or A.busy and 'WRITING WAV' or completed and 'COMPLETE' or 'RENDER'
+ execution.caption=b and UI.render_stages[b.phase].caption or A.ajob and 'ANALYZING' or A.busy and (A.cue_job and 'UPDATING CUES' or 'WRITING WAV') or completed and 'COMPLETE' or 'RENDER'
  local title=A.busy and ('処理中'..(b and b.index>0 and string.format('  %d/%d',b.index,b.count) or '')) or 'レンダリング実行'
- if U:execute('execute',Language.message(title),335/density,864/density,310/density,52/density,execution) then UI.commit_edit();UI.render_mix() end
- hint('execute',b and '工程全体の進捗です。標準レンダー中の詳細はREAPERのレンダラーに表示されます。' or 'Master mixをレンダーして区間情報を埋め込む',335,864,310,52)
- if A.busy and (b or A.job or A.xjob or A.ajob) then button('cancel',678,877,92,29,'中止',UI.cancel,'処理を中止',true,C.warn) end
+ if U:execute('execute',Language.message(title),335/density,764/density,310/density,52/density,execution) then UI.commit_edit();UI.render_mix() end
+ hint('execute',b and '工程全体の進捗です。標準レンダー中の詳細はREAPERのレンダラーに表示されます。' or 'Master mixをレンダーして区間情報を埋め込む',335,764,310,52)
+ if A.busy and (b or A.job or A.xjob or A.ajob or A.cue_job) then button('cancel',678,777,92,29,'中止',UI.cancel,'処理を中止',true,C.warn) end
 end
 local function tooltip(now)
  if hintID~=tooltipID then tooltipID,tooltipSince=hintID,now end
@@ -8186,9 +8696,16 @@ function UI.draw_wave_entry_flash(x,y,w,h,mid)
   end
  end
 end
+function UI.seam_seconds() return Core.SEAM_SECONDS/A.seam_zoom end
+function UI.zoom_seam(wheel)
+ local zoom=clamp(A.seam_zoom*2^clamp(wheel/480,-6,6),1,64)
+ if abs(zoom-1)<1e-12 then zoom=1 end
+ if zoom~=A.seam_zoom then A.seam_zoom=zoom;UI.dirty() end
+end
 function UI.paint_seam(x,y,w,h)
  rect(x,y,w,h,C.field,1)
  local inner_left,mid,inner_right,half=Core.seam_geometry(x,w)
+ local seconds=UI.seam_seconds()
  local bounds=A.wave_hover_bounds or {};A.wave_hover_bounds=bounds
  bounds.x,bounds.y,bounds.w,bounds.h,bounds.mid=x,y,w,h,mid
  UI.draw_wave_entry_flash(x,y,w,h,mid)
@@ -8198,8 +8715,9 @@ function UI.paint_seam(x,y,w,h)
    line(mid,yy,mid,ending,color_value,alpha)
   end
  end
- label('終了 −6 ms  /  DRAG',inner_left+2,y+3,10,C.muted,1,half-4,17)
- label('開始 ＋6 ms  /  DRAG',mid+2,y+3,10,C.muted,1,half-4,17)
+ local milliseconds=string.format('%.3g',seconds*1000)
+ label(string.format(Language.message('終了 −%s ms  /  DRAG'),milliseconds),inner_left+2,y+3,10,C.muted,1,half-4,17)
+ label(string.format(Language.message('開始 ＋%s ms  /  DRAG'),milliseconds),mid+2,y+3,10,C.muted,1,half-4,17)
  center_line(C.accent2,.65,false)
  local a=A.seam
  if not a then
@@ -8211,11 +8729,11 @@ function UI.paint_seam(x,y,w,h)
  local function visible(p)
   local window=p.windows[1];local data=window.audio;local draw_ch=window.draw_ch or min(2,p.ch);local frames=#data//draw_ch
   local left=p.preview_side=='finish'
-  local start=p.preview_origin and (mid+(p.s+window.first/p.sr-p.preview_origin)/Core.SEAM_SECONDS*half) or (left and (mid-frames/p.sr/Core.SEAM_SECONDS*half) or mid)
+  local start=p.preview_origin and (mid+(p.s+window.first/p.sr-p.preview_origin)/seconds*half) or (left and (mid-frames/p.sr/seconds*half) or mid)
   local follows=d and (d.relative or (d.edge=='finish' and left) or (d.edge=='start' and not left))
-  if follows then start=start+Core.seam_wave_shift(d.delta,half) end
+  if follows then start=start+Core.seam_wave_shift(d.delta,half,seconds) end
   local clip_left,clip_right=left and inner_left or mid,left and mid or inner_right
-  local pixels_per_frame=half/(Core.SEAM_SECONDS*p.sr)
+  local pixels_per_frame=half/(seconds*p.sr)
   local first=max(0,floor((clip_left-start)/pixels_per_frame)-1)
   local last=min(frames-1,math.ceil((clip_right-start)/pixels_per_frame)+1)
   local v=p._draw_view or {};p._draw_view=v
@@ -8241,28 +8759,43 @@ function UI.paint_seam(x,y,w,h)
     -- an apparently empty horizontal line.
     local color_value=c==1 and C.accent2 or C.focus
     local column,column_min,column_max,previous_x,previous_y
+    local function segment(x1,y1,x2,y2)
+     local lo,hi=max(x1,v.clip_left),min(x2,v.clip_right)
+     if hi<lo or x2<=x1 then return end
+     local slope=(y2-y1)/(x2-x1)
+     line(lo,y1+(lo-x1)*slope,hi,y1+(hi-x1)*slope,color_value,.72)
+    end
     local function flush_column()
      if not column then return end
      local upper=cy-column_max/visible_peak*(lane*.4)
      local lower=cy-column_min/visible_peak*(lane*.4)
      local center=(upper+lower)/2
-     if previous_x then line(previous_x,previous_y,column,center,color_value,.72) end
-     if lower-upper>=.5 then line(column,upper,column,lower,color_value,.92)
-     else line(column-.5,center,column+.5,center,color_value,.92) end
+     if previous_x then segment(previous_x,previous_y,column,center) end
+     if column>=v.clip_left and column<=v.clip_right then
+      if lower-upper>=.5 then line(column,upper,column,lower,color_value,.92)
+      else line(max(v.clip_left,column-.5),center,min(v.clip_right,column+.5),center,color_value,.92) end
+     end
      previous_x,previous_y=column,center
     end
     for f=v.first,v.last do
      local px=v.start+f*v.pixels_per_frame
-     if px>=v.clip_left and px<=v.clip_right then
-      local xcol=floor(px+.5);local sample=v.data[f*v.draw_ch+c]
-      if column~=xcol then
-       flush_column();column=xcol;column_min=sample;column_max=sample
-      else column_min=min(column_min,sample);column_max=max(column_max,sample) end
-     else
-      flush_column();column,column_min,column_max,previous_x,previous_y=nil,nil,nil,nil,nil
-     end
+     local xcol=v.pixels_per_frame>=1 and px or floor(px+.5);local sample=v.data[f*v.draw_ch+c]
+     if column~=xcol then
+      flush_column();column=xcol;column_min=sample;column_max=sample
+     else column_min=min(column_min,sample);column_max=max(column_max,sample) end
     end
     flush_column()
+    -- At a real data boundary, hold the endpoint for its last sample interval.
+    local frames=#v.data//v.draw_ch
+    local last_x=v.start+(frames-1)*v.pixels_per_frame
+    if v.first==0 and v.start>v.clip_left and v.start-v.clip_left<=v.pixels_per_frame+1e-6 then
+     local yy=cy-v.data[c]/visible_peak*(lane*.4)
+     segment(v.clip_left,yy,v.start,yy)
+    end
+    if v.last==frames-1 and last_x<v.clip_right and v.clip_right-last_x<=v.pixels_per_frame+1e-6 then
+     local yy=cy-v.data[(frames-1)*v.draw_ch+c]/visible_peak*(lane*.4)
+     segment(last_x,yy,v.clip_right,yy)
+    end
    end
   end
  end
@@ -8284,6 +8817,7 @@ function UI.draw_seam(x,y,w,h)
  local inner_left,mid,inner_right,half=Core.seam_geometry(x,w)
  local b=A.wave_hover_bounds or {};A.wave_hover_bounds=b
  b.x,b.y,b.w,b.h,b.mid,b.half=x,y,w,h,mid,half
+ if A.seam and not A.busy then gfx.wheelRegion(sx(x),sy(y),w*scale,h*scale) end
  if wave:begin(A,sx(x),sy(y),w,h,scale,U.now) then
   local canvas=gfx;gfx=wave.canvas
   local success,err=xpcall(UI.paint_seam,debug.traceback,x,y,w,h)
@@ -8291,7 +8825,7 @@ function UI.draw_seam(x,y,w,h)
   wave:finish()
  end
  wave:draw(sx(x),sy(y),w,h,scale)
- local tip='波形を右へドラッグ＝時間位置を前へ / 左へドラッグ＝後ろへ / クリックで更新'
+ local tip='ホイールで拡大/縮小 / 右へドラッグ＝前へ / 左へドラッグ＝後ろへ / クリックで更新'
  if not A.seam then
   local clicked=U:interaction('seam_refresh',x/density,y/density,w/density,h/density,not A.busy)
   if clicked then UI.safe(UI.preview_refresh) end
@@ -8309,9 +8843,14 @@ function UI.interact()
  end
  local b=A.wave_hover_bounds
  local hit
- if b and inside(b.x,b.y,b.w,b.h) and A.seam and not A.busy and not A.seam_refreshing then
-  hit=b.hit or {seam={}};b.hit=hit;hit.seam.mid=b.mid
-  hit.seam.seconds_per_px=Core.SEAM_SECONDS/b.half
+ if b and inside(b.x,b.y,b.w,b.h) and A.seam and not A.busy then
+  if U.wheel~=0 and not down and not A.seam_drag and (gfx.mouse_cap&3)==0 then
+   UI.zoom_seam(U.wheel);U.wheel=0
+  end
+  if not A.seam_refreshing then
+   hit=b.hit or {seam={}};b.hit=hit;hit.seam.mid=b.mid
+   hit.seam.seconds_per_px=UI.seam_seconds()/b.half
+  end
  end
  if hit and U.pressed then U.capture='seam_drag';U.focus=nil;U.hit=true end
  if UI.seam_input(hit,down) then return end
@@ -8341,7 +8880,7 @@ function UI.draw(now)
  hintID,hintText=nil,nil
  keypress(key)
  UI.interact();U.blocked=U.blocked or A.name_dialog~=nil or A.popup~=nil
- panel(20,92,940,156,'ループ・リージョン・マーカーを追加','AUTHOR')
+ panel(20,92,940,136,'ループ・リージョン・マーカーを追加')
  local kinds={{'marker',36,178,'マーカー'},{'region',222,178,'リージョン'},{'sustain',408,390,'ループ（サステイン）'}}
  local item_mode=A.add_mode=='items' or A.add_mode=='itemblocks' or A.add_mode=='itemspan'
  if item_mode then A.last_item_mode=A.add_mode end
@@ -8349,42 +8888,46 @@ function UI.draw(now)
   local selected=A.add_mode==mode
   button('mode_'..mode,x,y,w,h,text,function() UI.set_add_mode(mode) end,ADD_LABELS[mode]..'を配置元にする',true,nil,false,nil,selected)
  end
- mode_button('selection',36,159,96,32,ADD_LABELS.selection)
- button('mode_items_parent',138,153,282,18,'選択アイテム',function() UI.set_add_mode(A.last_item_mode or 'items') end,'選択アイテムから配置範囲を作成',true,nil,false,11.5,item_mode)
- line(148,172,410,172,item_mode and C.accent2 or C.edge,.5)
- mode_button('items',138,176,88,20,'個別')
- mode_button('itemblocks',232,176,88,20,'ブロック')
- mode_button('itemspan',326,176,94,20,'全体')
- mode_button('cursor',426,159,92,32,ADD_LABELS.cursor)
+ mode_button('selection',36,139,96,32,ADD_LABELS.selection)
+ button('mode_items_parent',138,133,282,18,'選択アイテム',function() UI.set_add_mode(A.last_item_mode or 'items') end,'選択アイテムから配置範囲を作成',true,nil,false,11.5,item_mode)
+ line(148,152,410,152,item_mode and C.accent2 or C.edge,.5)
+ mode_button('items',138,156,88,20,'個別')
+ mode_button('itemblocks',232,156,88,20,'ブロック')
+ mode_button('itemspan',326,156,94,20,'全体')
+ mode_button('cursor',426,139,92,32,ADD_LABELS.cursor)
  local cursor=A.add_mode=='cursor'
- label('個数',526,163,10.5,cursor and C.text or C.faint,1,30,26,2|4,true)
- UI.field('count',562,157,42,cursor)
- label('基準幅',610,163,10.5,cursor and C.text or C.faint,1,42,26,2|4,true)
- UI.field('length',658,157,48,cursor)
- dropdown('unit',709,157,68,36,UNIT_LABELS[A.unit],function()
+ label('個数',526,143,10.5,cursor and C.text or C.faint,1,30,26,2|4,true)
+ UI.field('count',562,137,42,cursor)
+ label('基準幅',610,143,10.5,cursor and C.text or C.faint,1,42,26,2|4,true)
+ UI.field('length',658,137,48,cursor)
+ dropdown('unit',709,137,68,36,UNIT_LABELS[A.unit],function()
   UI.menu({'seconds','beats','bars','grid'},A.unit,function(v) return UNIT_LABELS[v] end,UI.set_unit)
  end,'リージョンの長さ／マーカーの配置基準幅',cursor,11.5)
- label('間隔補正',781,163,10.5,cursor and C.text or C.faint,1,50,26,2|4,true)
- UI.field('interval',837,157,49,cursor)
- dropdown('interval_unit',889,157,67,36,UNIT_LABELS[A.interval_unit],function()
+ label('間隔補正',781,143,10.5,cursor and C.text or C.faint,1,50,26,2|4,true)
+ UI.field('interval',837,137,49,cursor)
+ dropdown('interval_unit',889,137,67,36,UNIT_LABELS[A.interval_unit],function()
   UI.menu({'seconds','beats','bars','grid'},A.interval_unit,function(v) return UNIT_LABELS[v] end,UI.set_interval_unit)
  end,'次の配置位置＝現在位置＋基準幅＋間隔補正。-基準幅で同位置、さらに小さい負値で左方向',cursor,11.5)
  local add_flash=A.add_kind_flash and clamp(1-(now-A.add_kind_flash)/.65,0,1) or 0
  for _,k in ipairs(kinds) do
-  insert_button('add_'..k[1],k[2],207,k[3],30,k[4],function() UI.add(k[1]) end,ADD_LABELS[A.add_mode]..' → '..k[4],kind_color(k[1]))
+  insert_button('add_'..k[1],k[2],187,k[3],30,k[4],function() UI.add(k[1]) end,ADD_LABELS[A.add_mode]..' → '..k[4],kind_color(k[1]))
   if add_flash>0 then
    local pulse=add_flash*add_flash
-   rect(k[2]-5,202,k[3]+10,40,C.focus,.045*pulse)
-   rect(k[2]-2,205,k[3]+4,34,C.focus,.090*pulse)
-   rect(k[2]+1,208,k[3]-2,28,C.accent2,.105*pulse)
+   rect(k[2]-5,182,k[3]+10,40,C.focus,.045*pulse)
+   rect(k[2]-2,185,k[3]+4,34,C.focus,.090*pulse)
+   rect(k[2]+1,188,k[3]-2,28,C.accent2,.105*pulse)
   end
  end
- checkbox('omit_name',803,210,153,'名前入力を省略',A.omit_name,function() A.omit_name=not A.omit_name;UI.refresh() end,'ONでは追加時の名前入力を省略します',nil,14)
- panel(20,262,940,238,'ループ調整','LOOP ADJUSTMENT')
+ checkbox('omit_name',803,190,153,'名前入力を省略',A.omit_name,function() A.omit_name=not A.omit_name;UI.refresh() end,'ONでは追加時の名前入力を省略します',nil,14)
+ panel(20,242,940,46,'アイテム埋込',true)
+ button('cues_read',192,251,224,28,'アイテムから読み出し',function() UI.item_embed('read') end,'選択アイテムの埋込情報をプロジェクトへ追加。元ファイルのキューは維持します。',true,nil,false,12)
+ button('cues_append',426,251,270,28,'アイテムへ書き込み（追加）',function() UI.item_embed('append') end,'選択アイテム内のマーカー/リージョンを元WAV/AIFFへ追記。共有する全アイテムへ反映されます。ファイル更新はUndo対象外です。',true,nil,false,12)
+ button('cues_clear',706,251,238,28,'アイテムのキューをクリア',function() UI.item_embed('clear') end,'選択アイテムの元WAV/AIFFから全キューを削除。共有する全アイテムへ反映されます。ファイル更新はUndo対象外です。',true,nil,false,12)
+ panel(20,302,940,218,'ループ調整')
  local loop_state=A.loop_enable or {};local transport_ready=(R.GetPlayStateEx(A.project)&4)==0 and abs(R.Master_GetPlayRate(A.project)-1)<1e-9
- button('crossfade',36,321,228,28,'クロスフェードを適用',UI.crossfade,'レベル突出を抑える滑らかなカーブで指定時間分だけ加工。時間は2サンプル〜ループ長に自動補正',loop_state.crossfade and transport_ready,nil,true,12.5)
- label('時間',276,322,13,C.text,1,38,27,2|4,true)
- UI.field('xfade_seconds',317,317,110,true);label('s',435,325,12,C.faint,3,28,22,4,true)
+ button('crossfade',36,341,228,28,'クロスフェードを適用',UI.crossfade,'レベル突出を抑える滑らかなカーブで指定時間分だけ加工。時間は2サンプル〜ループ長に自動補正',loop_state.crossfade and transport_ready,nil,true,12.5)
+ label('時間',276,342,13,C.text,1,38,27,2|4,true)
+ UI.field('xfade_seconds',317,337,110,true);label('s',435,345,12,C.faint,3,28,22,4,true)
  local function adjust_row(mode,y,text)
   local mode_ready=loop_state[mode] and transport_ready
   button(mode=='zero' and 'zero_cross' or 'period',36,y,228,28,text,function() UI.adjust_loop(mode) end,'開始・終了の両方を近い位置へ調整',mode_ready,nil,true,12.5)
@@ -8397,75 +8940,72 @@ function UI.draw(now)
     button(mode..'_'..edge[1]..'_'..d,x,y+2,24,24,d<0 and '◀' or '▶',function() UI.adjust_loop(mode,edge[1],d) end,hint,mode_ready,locked and C.warn or nil)
    end
   end
-  if locked and mode_ready then line(307,y+27,465,y+27,C.warn,.30) end
+  if locked and mode_ready then line(307,y+27,385,y+27,C.warn,.30) end
  end
- adjust_row('zero',365,'最寄りゼロクロスへ補正')
- adjust_row('period',409,'周期を検出し補正')
- relative_toggle(342,393,76,16)
- slide_toggle('auto_audition',36,455,428,'調整後、繋ぎ目を自動再生',A.auto_audition,function()
+ adjust_row('zero',385,'最寄りゼロクロスへ補正')
+ adjust_row('period',429,'周期を検出し補正')
+ relative_toggle(342,413,76,16)
+ slide_toggle('auto_audition',36,475,428,'調整後、繋ぎ目を自動再生',A.auto_audition,function()
   A.auto_audition=not A.auto_audition;if not A.auto_audition then UI.stop_loop_audition(true) end;UI.refresh()
  end,'通常はループ末端の0.75秒前から再生。クロスフェード時はその開始点（最低0.75秒前）から再生し、1回ループした約1秒後に停止',not A.busy)
- UI.draw_seam(488,278,456,207)
- panel(20,514,940,329,'レンダリング設定','RENDER SETTINGS')
- label('対象',36,584,13,C.text,1,138,22,4,true)
- button('master_mix',185,579,169,31,'マスターミックス',function() end,'マスターミックス\n現状マスターミックスのみ対応としています。',false)
- button('range_fixed',368,579,218,31,'選択リージョン',function() end,'選択リージョン\n現状選択リージョンの書き出しのみ対応しています。\nREAPER本体や、BLT MARKER REGION DESK等でリージョンを選択してください。',false)
- label('Master mix  /  REAPERで選択した各リージョンを個別のWAVとしてレンダリングします',36,621,11,C.faint,1,905,20)
- line(36,651,607,651,C.edge,.28)
+ UI.draw_seam(488,318,456,187)
+ panel(20,534,940,209,'レンダリング設定')
+ label('対象',36,580,13,C.text,1,138,22,4,true)
+ button('master_mix',185,578,169,24,'マスターミックス',function() end,'マスターミックス\n現状マスターミックスのみ対応としています。',false)
+ button('range_fixed',368,578,218,24,'選択リージョン',function() end,'選択リージョン\n現状選択リージョンの書き出しのみ対応しています。\nREAPER本体や、BLT MARKER REGION DESK等でリージョンを選択してください。',false)
 
- label('フォーマット',36,658,13,C.text,1,102,26,4,true)
- checkbox('format_defaults',145,658,439,'REAPER本体の設定を使用',A.use_format,function() A.use_format=not A.use_format;UI.refresh() end,'WAVのビット深度・サンプルレート・チャンネル数をREAPER本体から参照',true,12)
+ label('フォーマット',36,614,13,C.text,1,102,26,4,true)
+ checkbox('format_defaults',145,614,439,'REAPER本体の設定を使用',A.use_format,function() A.use_format=not A.use_format;UI.refresh() end,'WAVのビット深度・サンプルレート・チャンネル数をREAPER本体から参照',true,12)
  local f=A.format or {};local manual=not A.use_format
- label('形式',36,696,11,C.faint,1,92,20)
- label('ビット深度',146,696,11,C.faint,1,122,20)
- label('サンプルレート',284,696,11,C.faint,1,137,20)
- label('チャンネル',439,696,11,C.faint,1,140,20)
- button('format',36,718,96,31,'WAV',function() end,'WAV\n現状WAVのみ対応としています。\nOGG等への対応はしていません。',false)
- dropdown('bits',146,718,124,31,f.bits and (f.bits..(f.bits==32 and ' bit float' or ' bit PCM')) or '—',function()
+ label('形式',36,648,11,C.faint,1,92,20)
+ label('ビット深度',146,648,11,C.faint,1,122,20)
+ label('サンプルレート',284,648,11,C.faint,1,137,20)
+ label('チャンネル',439,648,11,C.faint,1,140,20)
+ button('format',36,670,96,24,'WAV',function() end,'WAV\n現状WAVのみ対応としています。\nOGG等への対応はしていません。',false)
+ dropdown('bits',146,670,124,24,f.bits and (f.bits..(f.bits==32 and ' bit float' or ' bit PCM')) or '—',function()
   UI.menu({16,24,32},A.bits,function(v) return v..(v==32 and ' bit float' or ' bit PCM') end,function(v) A.bits=v end)
  end,'WAVのビット深度',manual)
- dropdown('sr',284,718,141,31,f.sr and (f.sr..' Hz') or '—',function()
+ dropdown('sr',284,670,141,24,f.sr and (f.sr..' Hz') or '—',function()
   UI.menu(Core.sample_rates,A.sr,function(v) return v..' Hz' end,function(v) A.sr=v end)
  end,'出力サンプルレート',manual)
- dropdown('ch',439,718,145,31,f.channels and (f.channels==1 and 'Mono' or f.channels==2 and 'Stereo' or f.channels..' ch') or '—',function()
+ dropdown('ch',439,670,145,24,f.channels and (f.channels==1 and 'Mono' or f.channels==2 and 'Stereo' or f.channels..' ch') or '—',function()
   UI.menu(Core.channel_options,A.channels,function(v) return v==1 and 'Mono' or v==2 and 'Stereo' or v..' ch' end,function(v) A.channels=v end)
  end,'出力チャンネル数',manual)
- line(607,579,607,749,C.edge,.28)
- label('出力先',624,584,13,C.text,1,70,22,4,true)
+ line(607,578,607,698,C.edge,.28)
+ label('出力先',624,580,13,C.text,1,70,22,4,true)
  local dir=A.use_default_directory and (A.default_directory~='' and A.default_directory or '（プロジェクトの標準保存先）') or A.directory
  local name=A.use_default_filename and (A.default_pattern~='' and A.default_pattern or '（REAPERの既定名）') or (A.filename..'.wav')
- label('保存フォルダー',624,610,11,C.faint,1,58,26,4)
- checkbox('directory_defaults',686,610,258,'REAPER設定を使用',A.use_default_directory,function()
+ label('保存フォルダー',624,604,11,C.faint,1,58,26,4)
+ checkbox('directory_defaults',686,604,258,'REAPER設定を使用',A.use_default_directory,function()
  A.use_default_directory=not A.use_default_directory;UI.refresh()
 end,'保存フォルダーのみREAPER本体の設定を使用',true,11)
- if A.use_default_directory then button('dir_default',624,637,320,31,dir,function() end,dir,false)
+ if A.use_default_directory then button('dir_default',624,632,320,24,dir,function() end,dir,false)
  else
-  UI.field('directory',624,637,250,true,A,true)
-  button('dir_browse',882,637,62,31,'参照',UI.choose_directory,'保存フォルダーを選択',true,nil,true,11)
+  UI.field('directory',624,632,250,true,A,true,24)
+  button('dir_browse',882,632,62,24,'参照',UI.choose_directory,'保存フォルダーを選択',true,nil,true,11)
  end
- label('ファイル名',624,674,11,C.faint,1,58,26,4)
- checkbox('filename_defaults',686,674,258,'REAPER設定を使用',A.use_default_filename,function()
+ label('ファイル名',624,654,11,C.faint,1,58,26,4)
+ checkbox('filename_defaults',686,654,258,'REAPER設定を使用',A.use_default_filename,function()
  A.use_default_filename=not A.use_default_filename;UI.refresh()
 end,'ファイル名のみREAPER本体の設定を使用。ワイルドカードもREAPERで解決',true,11)
- if A.use_default_filename then button('name_default',624,701,320,31,name,function() end,name,false)
- else UI.field('filename',624,701,320,true,A,true) end
+ if A.use_default_filename then button('name_default',624,682,320,24,name,function() end,name,false)
+ else UI.field('filename',624,682,320,true,A,true,24) end
 
- line(36,758,944,758,C.edge,.28)
- label('埋め込むマーカー/リージョンを設定',36,766,13,C.text,1,355,22,4,true)
- slide_toggle('embed_markers',36,794,110,'マーカー',A.embed_markers,function()
+ line(36,709,944,709,C.edge,.28)
+ slide_toggle('embed_markers',36,711,110,'マーカー',A.embed_markers,function()
   A.embed_markers=not A.embed_markers;UI.refresh()
  end,'レンダー範囲内のマーカーをWAVへ埋め込み',not A.busy)
- slide_toggle('embed_regions',150,794,122,'リージョン',A.embed_regions,function()
+ slide_toggle('embed_regions',150,711,122,'リージョン',A.embed_regions,function()
   A.embed_regions=not A.embed_regions;UI.refresh()
  end,'レンダー範囲内の通常リージョンをWAVへ埋め込み',not A.busy)
- slide_toggle('embed_loop_region',276,794,176,'ループリージョン',A.embed_loop_region,function()
+ slide_toggle('embed_loop_region',276,711,176,'ループリージョン',A.embed_loop_region,function()
   A.embed_loop_region=not A.embed_loop_region;UI.refresh()
  end,'レンダー範囲内のサステインをWAVのループ情報として埋め込み',not A.busy)
- slide_toggle('exclude_selected_region',456,794,246,'選択中のリージョンを除外',A.exclude_selected_region,function()
+ slide_toggle('exclude_selected_region',456,711,246,'選択中のリージョンを除外',A.exclude_selected_region,function()
   A.exclude_selected_region=not A.exclude_selected_region;UI.refresh()
  end,'書き出し範囲として選択しているリージョンは埋め込まないようにします。\nただし、ループリージョン自体を選択して書き出した場合に、ループリージョンは除外しません。',not A.busy)
- label('マーカー文字コード設定',706,793,11.5,C.faint,1,132,26,2|4)
- dropdown('encoding',842,793,102,26,A.encoding,function()
+ label('マーカー文字コード設定',706,711,11.5,C.faint,1,132,26,2|4)
+ dropdown('encoding',842,711,102,26,A.encoding,function()
   UI.menu({'UTF-8','CP932'},A.encoding,nil,function(v) A.encoding=v end)
  end,ENCODING_HINT,true,11.5)
 
@@ -8479,7 +9019,7 @@ end,'ファイル名のみREAPER本体の設定を使用。ワイルドカード
  U.scale,U.ox,U.oy=scale,ox,oy+22*scale
  local footer=(A.warning or A.render_batch or completed) and A.status or (message~='' and message or A.status)
  if Media.waiting then footer=Media.message(SECTION) elseif BLT.notice then footer=BLT.notice end
- shell:footer(footer,A.warning or (not A.render_batch and A.problem),W,H,'0.6.13')
+ shell:footer(footer,A.warning or (not A.render_batch and A.problem),W,H,'0.6.29')
  U.scale,U.ox,U.oy=density*scale,ox,oy
  U.editor:frame()
  UI.draw_name_dialog();UI.draw_popup();UI.draw_period_notice(now)
@@ -8506,6 +9046,7 @@ function UI.close()
  BLT.cleanup(UI.commit_edit)
  if A.audition then BLT.cleanup(UI.stop_loop_audition,true) end
  if A.render_snapshot then BLT.cleanup(Core.restore_render,A.render_snapshot);A.render_snapshot=nil end
+ if A.cue_job then BLT.cleanup(ItemMetadata.abort,A.cue_job);A.cue_job=nil end
  BLT.cleanup(Core.copy_abort,A.job);A.job=nil
  if A.xjob then BLT.cleanup(Core.crossfade_abort,A.xjob);A.xjob=nil end
  if A.ajob then BLT.cleanup(Core.loop_audio_close,A.ajob);A.ajob=nil end
@@ -8532,6 +9073,7 @@ local function poll(now)
  local b=A.render_batch
  if b then
   if b.presented and b.presentedPass and pass>b.presentedPass+1 then UI.render_step() end
+ elseif A.cue_job then UI.item_embed_step()
  elseif A.job then UI.step() end
  if A.xjob then UI.crossfade_step() end
  if A.ajob then UI.adjust_loop_step() end
