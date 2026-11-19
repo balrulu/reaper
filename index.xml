@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<index version="1" name="BLT ReaScripts" commit="6e52d14552c6b9be4a6b00fee89514297beca731">
+<index version="1" name="BLT ReaScripts" commit="8aa91413721a8667d14ce2f1b18d649702b17b01">
   <category name="BLT">
     <reapack name="BLT_SPATIAL_FIELD.jsfx" type="effect" desc="BLT SPATIAL FIELD">
       <version name="0.5.4" author="Balrulu" time="2026-10-05T05:08:58Z">
@@ -156,9 +156,9 @@
 ]]></description>
       </metadata>
       
-      <version name="0.14.27" author="Balrulu" time="2026-11-16T14:28:32Z">
+      <version name="0.14.29" author="Balrulu" time="2026-11-19T18:23:02Z">
         <changelog><![CDATA[BLT SERIES Beta TEST UPLOAD]]></changelog>
-        <source main="main" file="../BLT_DEDICATED_RENDER.lua">https://github.com/balrulu/reaper/raw/6e52d14552c6b9be4a6b00fee89514297beca731/BLT_ReaScripts/BLT_DEDICATED_RENDER.lua</source>
+        <source main="main" file="../BLT_DEDICATED_RENDER.lua">https://github.com/balrulu/reaper/raw/8aa91413721a8667d14ce2f1b18d649702b17b01/BLT_ReaScripts/BLT_DEDICATED_RENDER.lua</source>
       </version>
     </reapack>
     <reapack name="BLT_ENVELOPE_CANVAS_ITEM.lua" type="script" desc="ENVELOPE CANVAS ITEM">
@@ -217,9 +217,9 @@
 ]]></description>
       </metadata>
       
-      <version name="0.6.29" author="Balrulu" time="2026-11-16T14:28:32Z">
+      <version name="0.6.36" author="Balrulu" time="2026-11-19T18:23:02Z">
         <changelog><![CDATA[BLT SERIES Beta TEST UPLOAD]]></changelog>
-        <source main="main" file="../BLT_LOOP_RM_STUDIO.lua">https://github.com/balrulu/reaper/raw/6e52d14552c6b9be4a6b00fee89514297beca731/BLT_ReaScripts/BLT_LOOP_RM_STUDIO.lua</source>
+        <source main="main" file="../BLT_LOOP_RM_STUDIO.lua">https://github.com/balrulu/reaper/raw/8aa91413721a8667d14ce2f1b18d649702b17b01/BLT_ReaScripts/BLT_LOOP_RM_STUDIO.lua</source>
       </version>
     </reapack>
     <reapack name="BLT_LOUDNESS_TRACE.lua" type="script" desc="LOUDNESS TRACE">
@@ -232,7 +232,6 @@
 }
 ]]></description>
       </metadata>
-      
       <version name="0.8.23" author="Balrulu" time="2026-11-16T14:28:32Z">
         <changelog><![CDATA[BLT SERIES Beta TEST UPLOAD]]></changelog>
         <source main="main" file="../BLT_LOUDNESS_TRACE.lua">https://github.com/balrulu/reaper/raw/6e52d14552c6b9be4a6b00fee89514297beca731/BLT_ReaScripts/BLT_LOUDNESS_TRACE.lua</source>
