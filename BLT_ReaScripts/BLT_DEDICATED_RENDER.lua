@@ -1,5 +1,5 @@
 -- @description BLT DEDICATED RENDER
--- @version 0.14.27
+-- @version 0.14.29
 -- @author Balrulu
 -- @provides
 --   . > ../
@@ -2060,6 +2060,7 @@ function Core.plan(rows,start,ending,sr,options)
    local clipped=isr and(s<0 or e>p.frames)
    s=clamp(s,0,p.frames);e=clamp(e,0,p.frames)
    if loop then s=math.min(s,p.frames-1);e=math.max(e,s+1)end
+   if isr and e<=s and options.drop_subsample_regions then p.omitted=p.omitted+1;goto continue end
    assert(not isr or e>s,'1サンプル未満のリージョンがあります: '..row.name)
    local encoded=loop and''or Core.encode_name(row.name,p.encoding)
    local entry={kind=row.kind,name=row.name,start=s,finish=e,encoded=encoded,id=row.id,key=row.key}
@@ -2110,7 +2111,9 @@ local Embed={NUMBERING_REQUIRED='BLT_NUMBERING_REQUIRED:'}
 function Embed.defaults()return {embed_markers=true,embed_regions=true,embed_loop_region=true,exclude_selected_region=true,encoding='UTF-8'}end
 local function check(v,msg)if not v then error(msg,0)end;return v end
 local function key(p)return p:gsub('\\','/'):lower()end
-function Embed.supported(path)return path:lower():match('%.wav$')or path:lower():match('%.aiff?$')or path:lower():match('%.aifc$')end
+local embedExtensions={wav='wav',aif='aiff',aiff='aiff',aifc='aiff',ogg='ogg',oga='ogg',opus='ogg',flac='flac',mp3='mp3',caf='caf'}
+function Embed.format(path)return embedExtensions[path:lower():match('%.([%w]+)$')]end
+function Embed.pcm(path)local kind=Embed.format(path);return kind=='wav'or kind=='aiff'end
 local function paths(api,p,state)
  local ok,text=api.GetSetProjectInfo_String(p,'RENDER_TARGETS','',false);check(ok,'出力範囲を取得できません。')
  local out={};for name in text:gmatch('[^;]+')do out[#out+1]=name end;return out
@@ -2119,15 +2122,27 @@ function Embed.prepare(api,state,originalRegions,numbering,knownOutputs)
  if not state.embed then return end
  local p=api.EnumProjects(-1,'');local outputs={}
  for _,path in ipairs(knownOutputs or paths(api,p,state))do outputs[#outputs+1]=path end
- local wav=false
- for _,path in ipairs(outputs)do if Embed.supported(path)and(not state.s or Embed.accepts(state,path))then wav=true end end;if not wav then return end
+ local chapters=state.embed.embed_markers~=false or state.embed.embed_regions~=false
+ local function accept(path)
+  return Embed.format(path)and(chapters or Embed.pcm(path))and(not state.s or Embed.accepts(state,path))
+ end
+ local pcmOutput,chapterOutput=false,false
+ for _,path in ipairs(outputs)do if accept(path)then
+  if Embed.pcm(path)then pcmOutput=true else chapterOutput=true end
+ end end
+ if not pcmOutput and not chapterOutput then return end
  LoopMetadata.setapi(api)
  local rows=LoopMetadata.project_rows(p);local opts={};for k,v in pairs(state.embed)do opts[k]=v end
  local any=false;for _,row in ipairs(rows)do if row.kind=='sustain'and opts.embed_loop_region or row.kind=='region'and opts.embed_regions or row.kind=='marker'and opts.embed_markers then any=true end end
  local norm=api.GetSetProjectInfo(p,'RENDER_NORMALIZE',0,false)
  local rate=api.Master_GetPlayRate and api.Master_GetPlayRate(p)or 1;check(rate>0,'再生レートが不正です。')
- local pad=(norm&(4<<16))==0 and(norm&(1<<16))~=0 and api.GetSetProjectInfo(p,'RENDER_PADSTART',0,false)or 0
+ local post=(norm&(4<<16))==0
+ local pad=post and(norm&(1<<16))~=0 and api.GetSetProjectInfo(p,'RENDER_PADSTART',0,false)or 0
+ local padEnd=chapterOutput and post and(norm&(2<<16))~=0 and api.GetSetProjectInfo(p,'RENDER_PADEND',0,false)or 0
  local source=api.GetSetProjectInfo(p,'RENDER_SETTINGS',0,false);local bounds=api.GetSetProjectInfo(p,'RENDER_BOUNDSFLAG',0,false)
+ local tailBit=({[0]=1,2,4,8,16,32,8,32})[bounds]or 0
+ local chapterTail=chapterOutput and(api.GetSetProjectInfo(p,'RENDER_TAILFLAG',0,false)&tailBit)~=0
+  and math.max(0,api.GetSetProjectInfo(p,'RENDER_TAILMS',0,false))/1000 or 0
  local direct=(source&(32|64|4096))~=0
  local items={};for i=0,api.CountSelectedMediaItems(p)-1 do items[#items+1]=api.GetSelectedMediaItem(p,i)end
  local ui={};opts.selected_keys={}
@@ -2143,6 +2158,21 @@ function Embed.prepare(api,state,originalRegions,numbering,knownOutputs)
   opts.selected_keys={}
   for _,v in ipairs(originalRegions)do if v.isr and v.selected~=0 then opts.selected_keys['r'..math.floor(v.id+.5)]=true end end
  end
+ local chapterOpts={}
+ for k,v in pairs(opts)do chapterOpts[k]=v end
+ chapterOpts.encoding='UTF-8';chapterOpts.embed_loop_region=false
+ chapterOpts.drop_subsample_regions=true
+ chapters=false
+ if chapterOutput then
+  for _,row in ipairs(rows)do
+   if row.kind=='marker'and opts.embed_markers~=false and(not opts.marker_hash_only or row.raw:sub(1,1)=='#')
+    or row.kind=='region'and opts.embed_regions~=false and(not opts.region_hash_only or row.raw:sub(1,1)=='#')
+     and(not opts.exclude_selected_region or not opts.selected_keys[row.key])then
+    chapters=true;break
+   end
+  end
+ end
+ if not pcmOutput and not chapters then return end
  local activeItems=items
  local function selectitem(item)
   if not item then
@@ -2204,7 +2234,8 @@ function Embed.prepare(api,state,originalRegions,numbering,knownOutputs)
   end
  end
  local function metadata(files)
-  return {files=files,units=units,rows=rows,options=opts,rate=rate,pad=pad,direct=direct,accept=function(path)return not state.s or Embed.accepts(state,path)end}
+  return {files=files,units=units,rows=rows,options=opts,chapter_options=chapterOpts,api=api,rate=rate,pad=pad,
+   padEnd=padEnd,chapterTail=chapterTail,direct=direct,accept=accept}
  end
  local token='__BLT_RANGE__'
  local ending='__BLT_RANGE_END__'
@@ -2231,12 +2262,21 @@ function Embed.prepare(api,state,originalRegions,numbering,knownOutputs)
 
    activateUnit(unit)
    local current=(numbering or unit.razor or unit.item or unit.row)and paths(api,p,state)or outputs
-   if #current>0 then
+   local pcm,aiff,other=false,false,false
+   for _,path in ipairs(current)do if accept(path)then
+    if Embed.pcm(path)then pcm=true;aiff=aiff or Embed.format(path)=='aiff'else other=true end
+   end end
+   if pcm then
     local test=LoopMetadata.plan(rows,unit.start,unit.finish,48000,opts)
     unit.loop=test.sustain~=nil
     unit.loop_key=test.sustain and test.sustain.key
-    check(unit.loop and not direct or not any or(norm&(4<<16))~=0 or(norm&(16384|32768))==0,'無音トリムとリージョン埋め込みは開始位置を確定できません。トリムまたは埋め込みをOFFにしてください。')
-    for _,path in ipairs(current)do if Embed.supported(path)and not path:lower():match('%.wav$')then Embed.aiff_metadata(test)end end
+    if aiff then Embed.aiff_metadata(test)end
+   end
+   local chapterTest=other and LoopMetadata.plan(rows,unit.start,unit.finish+chapterTail*rate,48000,chapterOpts)
+   if post and not(unit.loop and not direct)then
+    local losesStart=pcm and any and(norm&(16384|32768))~=0
+     or chapterTest and #chapterTest.entries>0 and(norm&16384)~=0
+    check(not losesStart,'無音トリムとリージョン埋め込みは開始位置を確定できません。トリムまたは埋め込みをOFFにしてください。')
    end
    for _,path in ipairs(current)do
     if numbering then
@@ -2292,19 +2332,29 @@ function Embed.scan(path)
 end
 local function exists(p)local f=io.open(p,'rb');if f then f:close();return true end end
 local function spare(p)local i=1;while exists(p..i)do i=i+1 end;return p..i end
-function Embed.timeline(path,plan,w)
+function Embed.timeline(path,plan,w,options)
  local unit=check(plan.files[key(path)],'出力先の範囲が不明です：'..path)
- if unit.window then return LoopMetadata.plan(plan.rows,unit.start,unit.window.finish,w.sr,plan.options)end
+ if not options and unit.window then return LoopMetadata.plan(plan.rows,unit.start,unit.window.finish,w.sr,plan.options)end
+ local pad=options and 0 or plan.pad
  local projected={}
  for _,r in ipairs(plan.rows)do
   if not plan.direct or r.kind~='sustain' or r.key==unit.loop_key then
    local v={};for k,x in pairs(r)do v[k]=x end
    local first,last=r.start,r.finish
    if plan.direct and r.kind=='sustain'then first=math.max(first,unit.start);last=math.min(last,unit.finish)end
-   v.start=first/plan.rate+plan.pad;v.finish=last/plan.rate+plan.pad;projected[#projected+1]=v
+   v.start=first/plan.rate+pad;v.finish=last/plan.rate+pad;projected[#projected+1]=v
   end
  end
- local origin=unit.start/plan.rate;return LoopMetadata.plan(projected,origin,origin+w.frames/w.sr,w.sr,plan.options)
+ local origin=unit.start/plan.rate
+ if not options then return LoopMetadata.plan(projected,origin,origin+w.frames/w.sr,w.sr,plan.options)end
+ local lead=unit.window and 0 or math.floor((plan.pad or 0)*w.sr+.5)
+ local trailing=unit.window and 0 or math.floor((plan.padEnd or 0)*w.sr+.5)
+ local content=math.min(w.frames-lead-trailing,
+  math.floor((unit.finish/plan.rate+(plan.chapterTail or 0))*w.sr+.5)-math.floor(origin*w.sr+.5))
+ if content<=0 then return {entries={}}end
+ local metadata=LoopMetadata.plan(projected,origin,origin+content/w.sr,w.sr,options)
+ for _,entry in ipairs(metadata.entries)do entry.start=entry.start+lead;entry.finish=entry.finish+lead end
+ return metadata
 end
 local function loop_slice(path,plan,w)
  local unit=plan.files[key(path)];local window=unit and unit.window
@@ -2325,7 +2375,9 @@ local function replace_output(path,temp,backup)
  if had then check(os.remove(backup),'出力は完了しましたが退避ファイルを削除できません：'..backup)end
 end
 function Embed.write(path,plan,source)
- if not path:lower():match('%.wav$')then return Embed.write_aiff(path,plan,source)end
+ local kind=Embed.format(path)
+ if kind=='aiff'then return Embed.write_aiff(path,plan,source)end
+ if kind~='wav'then return Embed.write_chapters(path,plan,kind)end
  local w=Embed.scan(source or path);local pre,frames,crop=loop_slice(path,plan,w)
  local blob=LoopMetadata.metadata(Embed.timeline(path,plan,w));local bytes=frames*w.align
  local size=12+#blob
@@ -2366,7 +2418,7 @@ end
 function Embed.finish(stats,plan)
  if not plan then return end
  local done={};for entry in (stats or''):gmatch('[^;]+')do local path=entry:match('^FILE:(.+)$')
-  if path and Embed.supported(path)and(not plan.accept or plan.accept(path))and not done[key(path)]and not(plan.finished and plan.finished[key(path)])then Embed.write(path,plan);done[key(path)]=true end
+  if path and Embed.format(path)and(not plan.accept or plan.accept(path))and not done[key(path)]and not(plan.finished and plan.finished[key(path)])then Embed.write(path,plan);done[key(path)]=true end
  end
 end
 
@@ -2466,7 +2518,480 @@ function Embed.write_aiff(path,plan,source)
  if not ok then if exists(temp)then os.remove(temp)end;error(err,0)end
 end
 
-local Model={VERSION='0.14.27',SOURCE_MASK=1|2|8|32|64|128|4096}
+do
+local limit=LoopMetadata.MAX_METADATA
+local function read(f,n)
+ if n==0 then return '' end
+ local bytes=f:read(n)
+ return check(bytes and #bytes==n and bytes,'埋め込み先のファイルが途中で切れています。')
+end
+local function write(f,...)
+ check(f:write(...),'マーカー／リージョンの書き込みに失敗しました。')
+end
+local function milliseconds(frame,sr)return math.floor(frame*1000/sr+.5)end
+local function chapter_time(ms)
+ return ('%02d:%02d:%02d.%03d'):format(ms//3600000,ms//60000%60,ms//1000%60,ms%1000)
+end
+local function vorbis_comments(data,plan)
+ local pos=1
+ local function u32()
+  local n
+  n,pos=string.unpack('<I4',data,pos)
+  return n
+ end
+ local function field()
+  local length=u32()
+  check(length<=#data-pos+1,'Vorbisコメントの長さが不正です。')
+  local value=data:sub(pos,pos+length-1)
+  pos=pos+length
+  return value
+ end
+ local vendor=field()
+ local count=u32()
+ check(count<=(#data-pos+1)//4,'Vorbisコメントの件数が不正です。')
+ local tags,points,existing,order={},{},{},0
+ local function point(ms,name,url)
+  order=order+1
+  points[#points+1]={ms=ms,name=name,url=url,order=order}
+ end
+ for i=1,count do
+  local tag=field()
+  local key,value=tag:match('^([^=]+)=(.*)$')
+  key=key and key:upper()
+  local id,suffix
+  if key then id,suffix=key:match('^CHAPTER(%d+)(%u*)$')end
+  id=id and #id<=9 and tonumber(id)
+  if suffix~=''and suffix~='NAME'and suffix~='URL'then id=nil end
+  if id then
+   local chapter=existing[id]
+   if not chapter then chapter={};existing[id]=chapter end
+   if suffix=='NAME'then chapter.name=value
+   elseif suffix=='URL'then chapter.url=value
+   else
+    local h,m,s,f=value:match('^(%d+):(%d%d):(%d%d)%.(%d%d%d)$')
+    if h then chapter.ms=((tonumber(h)*60+m)*60+s)*1000+f end
+   end
+  else tags[#tags+1]=tag end
+ end
+ local trailer=data:sub(pos)
+ local ids={}
+ for id in pairs(existing)do ids[#ids+1]=id end
+ table.sort(ids)
+ for _,id in ipairs(ids)do
+  local chapter=existing[id]
+  if chapter.ms then point(chapter.ms,chapter.name or '',chapter.url)end
+ end
+ for _,e in ipairs(plan.entries)do
+  local start=milliseconds(e.start,plan.sr)
+  if e.kind=='marker'then point(start,e.encoded)
+  else
+   point(start,e.encoded..' [START]')
+   point(milliseconds(e.finish,plan.sr),e.encoded..' [END]')
+  end
+ end
+ table.sort(points,function(a,b)return a.ms<b.ms or a.ms==b.ms and a.order<b.order end)
+ for i,p in ipairs(points)do
+  local key=('CHAPTER%03d'):format(i)
+  tags[#tags+1]=key..'='..chapter_time(p.ms)
+  tags[#tags+1]=key..'NAME='..p.name
+  if p.url then tags[#tags+1]=key..'URL='..p.url end
+ end
+ local flat={string.pack('<s4I4',vendor,#tags)}
+ for _,tag in ipairs(tags)do flat[#flat+1]=string.pack('<s4',tag)end
+ flat[#flat+1]=trailer
+ local result=table.concat(flat)
+ check(#result<=limit,'Vorbisコメントの容量が上限を超えました。')
+ return result
+end
+
+local crc_table
+local function ogg_crc(bytes)
+ if not crc_table then
+  crc_table={}
+  for i=0,255 do
+   local r=i<<24
+   for _=1,8 do r=((r<<1)~((r&0x80000000)~=0 and 0x04c11db7 or 0))&0xffffffff end
+   crc_table[i]=r
+  end
+ end
+ local crc=0
+ for i=1,#bytes do crc=((crc<<8)&0xffffffff)~crc_table[(crc>>24)~bytes:byte(i)]end
+ return crc
+end
+local function ogg_page(f)
+ local head=read(f,27)
+ check(head:sub(1,5)=='OggS\0','Oggページのヘッダーが不正です。')
+ local lace=read(f,head:byte(27))
+ local size=0
+ for i=1,#lace do size=size+lace:byte(i)end
+ local granule,serial,seq=string.unpack('<i8I4I4',head,7)
+ return {head=head,lace=lace,body=read(f,size),granule=granule,serial=serial,seq=seq,flags=head:byte(6)}
+end
+local function ogg_emit(f,serial,seq,flags,granule,lace,body)
+ local head='OggS\0'..string.pack('<Bi8I4I4',flags,granule,serial,seq)
+ local rest=string.char(#lace)..lace..body
+ local crc=ogg_crc(head..'\0\0\0\0'..rest)
+ write(f,head,string.pack('<I4',crc),rest)
+end
+local function ogg_comments(f)
+ local bos=ogg_page(f)
+ local prefix=bos.body:sub(1,7)=='\1vorbis'and '\3vorbis' or bos.body:sub(1,8)=='OpusHead'and 'OpusTags'
+ check(prefix and bos.flags==2 and #bos.lace>0 and bos.lace:find('[^\255]')==#bos.lace,'Ogg Vorbis／Opusの識別ヘッダーが不正です。')
+ local seq=bos.seq
+ local parts,size={},0
+ while true do
+  local page=ogg_page(f)
+  seq=(seq+1)&0xffffffff
+  check(page.serial==bos.serial and page.seq==seq and (page.flags&3)==(#parts==0 and 0 or 1),'Oggのコメントページが不正です。')
+  local end_lace=page.lace:find('[^\255]')
+  local n=end_lace and (end_lace-1)*255+page.lace:byte(end_lace) or #page.body
+  size=size+n
+  check(size<=limit,'Oggコメントの容量が上限を超えました。')
+  parts[#parts+1]=page.body:sub(1,n)
+  if end_lace then
+   local packet=table.concat(parts)
+   check(packet:sub(1,#prefix)==prefix,'Oggコメントが見つかりません。')
+   return bos,prefix,packet,page,page.lace:sub(end_lace+1),page.body:sub(n+1)
+  end
+ end
+end
+local function ogg(input,output,size,plan)
+ local bos,prefix,packet,last,tail_lace,tail_body=ogg_comments(input)
+ local changed=prefix..vorbis_comments(packet:sub(#prefix+1),plan)
+ local lace=string.rep('\255',#changed//255)..string.char(#changed%255)
+ local seq=(bos.seq+1)&0xffffffff
+ write(output,bos.head,bos.lace,bos.body)
+ local offset=1
+ for i=1,#lace,255 do
+  local part=lace:sub(i,i+254)
+  local final=i+#part>#lace
+  local joined=final and #part+#tail_lace<=255
+  local bytes=final and #changed-offset+1 or #part*255
+  local body=changed:sub(offset,offset+bytes-1)
+  local granule=-1
+  local flags=i==1 and 0 or 1
+  if final then granule=0 end
+  if joined then
+   part=part..tail_lace
+   body=body..tail_body
+   flags=flags|(last.flags&4)
+   granule=last.granule
+  end
+  ogg_emit(output,bos.serial,seq,flags,granule,part,body)
+  seq=(seq+1)&0xffffffff
+  if final and not joined then
+   ogg_emit(output,bos.serial,seq,last.flags&4,tail_lace:find('[^\255]')and last.granule or -1,tail_lace,tail_body)
+   seq=(seq+1)&0xffffffff
+  end
+  offset=offset+bytes
+ end
+ local expected=(last.seq+1)&0xffffffff
+ if seq==expected then
+  local at=input:seek()
+  copy_audio(input,output,at,size-at)
+ else
+  while input:seek()<size do
+   local page=ogg_page(input)
+   check(page.serial==bos.serial and page.seq==expected,'複数のOggストリームを含む出力は書き換えできません。')
+   ogg_emit(output,page.serial,seq,page.flags,page.granule,page.lace,page.body)
+   seq=(seq+1)&0xffffffff
+   expected=(expected+1)&0xffffffff
+  end
+ end
+end
+
+local function flac(input,output,size,plan)
+ local signature=read(input,4)
+ check(signature=='fLaC','FLACのヘッダーが不正です。')
+ local blocks,comment={},false
+ repeat
+  local tag,length=string.unpack('>BI3',read(input,4))
+  local offset=input:seek()
+  check(length<=size-offset,'FLACのメタデータ長が不正です。')
+  local id=tag&127
+  check(#blocks>0 or id==0 and length==34,'FLACのSTREAMINFOが不正です。')
+  local block={id=id,offset=offset,length=length,last=(tag&128)~=0}
+  if id==4 then
+   check(not comment,'FLACに複数のコメントブロックがあります。')
+   block.data=vorbis_comments(read(input,length),plan)
+   comment=true
+  else check(input:seek('cur',length),'FLACメタデータを読み取れません。')end
+  blocks[#blocks+1]=block
+ until blocks[#blocks].last
+ local audio=input:seek()
+ if not comment then blocks[#blocks+1]={id=4,data=vorbis_comments(string.pack('<s4I4','BLT',0),plan)}end
+ write(output,signature)
+ for i,b in ipairs(blocks)do
+  local length=b.data and #b.data or b.length
+  check(length<=0xffffff,'FLACコメントの容量が上限を超えました。')
+  write(output,string.pack('>BI3',b.id|(i==#blocks and 128 or 0),length))
+  if b.data then write(output,b.data)else copy_audio(input,output,b.offset,length)end
+ end
+ copy_audio(input,output,audio,size-audio)
+end
+
+local function syncsafe(data,at)
+ local a,b,c,d=data:byte(at,at+3)
+ check(d and (a|b|c|d)<128,'ID3タグのサイズが不正です。')
+ return (a<<21)|(b<<14)|(c<<7)|d
+end
+local function syncword(n)return string.char((n>>21)&127,(n>>14)&127,(n>>7)&127,n&127)end
+local function id3_title(name,version)
+ if version==4 then return '\3'..name end
+ local words={'\1\255\254'}
+ for _,code in utf8.codes(name)do
+  if code<0x10000 then words[#words+1]=string.pack('<I2',code)
+  else
+   code=code-0x10000
+   words[#words+1]=string.pack('<I2I2',0xd800|(code>>10),0xdc00|(code&1023))
+  end
+ end
+ return table.concat(words)
+end
+local function mp3(input,output,size,plan)
+ local head=read(input,10)
+ local version,frames,ids,audio=4,{},{},0
+ local chapters,root={},nil
+ local function frame(kind,data,flags)
+  return kind..(version==4 and syncword(#data)or string.pack('>I4',#data))..(flags or '\0\0')..data
+ end
+ local function chapter(id,start,bytes)
+  chapters[#chapters+1]={id=id,start=start,bytes=bytes,order=#chapters+1}
+ end
+ if head:sub(1,3)=='ID3' then
+  version=head:byte(4)
+  local bytes=syncsafe(head,7)
+  check((version==3 or version==4) and head:byte(6)==0 and bytes<=limit and bytes<size-10,'MP3のID3タグ形式に対応していません。')
+  local data=read(input,bytes)
+  audio=10+bytes
+  local at=1
+  while at<=#data and data:byte(at)~=0 do
+   local kind=data:sub(at,at+3)
+   check(at+9<=#data and kind:match('^[A-Z0-9]+$'),'ID3フレームのヘッダーが不正です。')
+   local n=version==4 and syncsafe(data,at+4)or string.unpack('>I4',data,at+4)
+   local last=at+9+n
+   check(last<=#data,'ID3フレームの長さが不正です。')
+   local bytes=data:sub(at,last)
+   if kind=='CHAP' or kind=='CTOC' then
+    local ending=data:find('\0',at+10,true)
+    check(ending and ending>at+10 and ending<=last and data:byte(at+9)==0,'ID3チャプターのヘッダーが不正です。')
+    local id=data:sub(at+10,ending-1)
+    check(not ids[id],'ID3チャプターのIDが重複しています。')
+    ids[id]=true
+    if kind=='CHAP'then
+     check(ending+16<=last,'ID3チャプターの時刻が不正です。')
+     local start=string.unpack('>I4',data,ending+1)
+     local body=data:sub(at+10,ending+8)..string.rep('\255',8)..data:sub(ending+17,last)
+     chapter(id,start,frame(kind,body,data:sub(at+8,at+9)))
+     bytes=nil
+    else
+     check(ending+2<=last,'ID3目次のヘッダーが不正です。')
+     local flags,count=data:byte(ending+1,ending+2)
+     if (flags&2)~=0 then
+      check(not root and count>0,'ID3目次のルートが不正です。')
+      local children,cursor={},ending+3
+      for i=1,count do
+       local stop=data:find('\0',cursor,true)
+       check(stop and stop>cursor and stop<=last,'ID3目次の子要素が不正です。')
+       children[i]=data:sub(cursor,stop-1);cursor=stop+1
+      end
+      root={id=id,flags=flags,children=children,subframes=data:sub(cursor,last),headerFlags=data:sub(at+8,at+9)}
+      bytes=nil
+     end
+    end
+   end
+   if bytes then frames[#frames+1]=bytes end
+   at=last+1
+  end
+ end
+ check(input:seek('set',audio),'MP3音声の読み取り位置が不正です。')
+ local a,b=read(input,2):byte(1,2)
+ check(a==255 and (b&224)==224,'MP3音声が見つかりません。')
+ local index=0
+ local function next_id()
+  local id
+  repeat index=index+1;id='blt-'..index until not ids[id]
+  return id
+ end
+ local added={}
+ for _,e in ipairs(plan.entries)do
+  local id=next_id()
+  added[id]=true
+  local start=milliseconds(e.start,plan.sr)
+  local finish=e.kind=='marker'and start or milliseconds(e.finish,plan.sr)
+  check(finish<=0xffffffff,'ID3チャプターの時間が上限を超えました。')
+  local data=id..'\0'..string.pack('>I4I4I4I4',start,finish,0xffffffff,0xffffffff)
+  chapter(id,start,frame('CHAP',data..frame('TIT2',id3_title(e.encoded,version))))
+ end
+ table.sort(chapters,function(a,b)return a.start<b.start or a.start==b.start and a.order<b.order end)
+ local children={}
+ for _,item in ipairs(chapters)do
+  frames[#frames+1]=item.bytes
+  if root and added[item.id]then children[#children+1]=item.id end
+ end
+ if root then
+  local function toc(id,flags,items,trailer,headerFlags)
+   return frame('CTOC',id..'\0'..string.char(flags,#items)..table.concat(items,'\0')..'\0'..(trailer or ''),headerFlags)
+  end
+  if #root.children+#children<=255 then
+   table.move(children,1,#children,#root.children+1,root.children)
+  else
+   while #children>=255 do
+    local groups={}
+    for first=1,#children,255 do
+     local part=table.move(children,first,math.min(first+254,#children),1,{})
+     local id=next_id()
+     frames[#frames+1]=toc(id,1,part)
+     groups[#groups+1]=id
+    end
+    children=groups
+   end
+   local id=next_id()
+   frames[#frames+1]=toc(id,root.flags&~2,root.children)
+   table.insert(children,1,id)
+   root.children=children
+  end
+  frames[#frames+1]=toc(root.id,root.flags,root.children,root.subframes,root.headerFlags)
+ end
+ local tag=table.concat(frames)
+ check(#tag<=limit,'ID3タグの容量が上限を超えました。')
+ write(output,'ID3',string.char(version,0,0),syncword(#tag),tag)
+ copy_audio(input,output,audio,size-audio)
+end
+
+local cafMarkers={mark=true,regn=true,strg=true}
+local function caf(input,output,size,plan)
+ local signature=read(input,8)
+ check(signature:sub(1,6)=='caff\0\1','CAFのヘッダーが不正です。')
+ local chunks,existing,has_audio={},{},false
+ while input:seek()<size do
+  local offset=input:seek()
+  local kind,n=string.unpack('>c4i8',read(input,12))
+  if n==-1 and kind=='data'then n=size-offset-12 end
+  check(n>=0 and n<=size-offset-12,'CAFチャンクの長さが不正です。')
+  check(#chunks>0 or kind=='desc'and n==32,'CAFの音声形式が不正です。')
+  if cafMarkers[kind]then
+   check(not existing[kind] and n<=limit,'CAFマーカー情報のチャンクが不正です。')
+   existing[kind]=read(input,n)
+  else
+   chunks[#chunks+1]={offset=offset,bytes=12+n}
+   check(input:seek('cur',n),'CAFチャンクを読み取れません。')
+  end
+  has_audio=has_audio or kind=='data'
+ end
+ check(has_audio,'CAF音声が見つかりません。')
+ local markers,regions,strings,offsets,used={},{},{},{},{}
+ local previousMark,previousRegion,previousStrings,previousOffsets='','','',''
+ local markerClock,regionClock,markerCount,regionCount,stringCount=0,0,0,0,0
+ local markerPad,regionPad='',''
+ local function marker_ids(data,at,count)
+  check(count<=(#data-at+1)//28,'CAFマーカーの件数が不正です。')
+  for i=at,at+(count-1)*28,28 do used[string.unpack('>I4',data,i+12)]=true end
+  return at+count*28
+ end
+ if existing.mark then
+  local data=existing.mark
+  markerClock,markerCount=string.unpack('>I4I4',data)
+  local after=marker_ids(data,9,markerCount)
+  previousMark,markerPad=data:sub(9,after-1),data:sub(after)
+ end
+ if existing.regn then
+  local data=existing.regn
+  regionClock,regionCount=string.unpack('>I4I4',data)
+  check(regionCount<=(#data-8)//12,'CAFリージョンの件数が不正です。')
+  local at=9
+  for _=1,regionCount do
+   local regionId,_,count,nextAt=string.unpack('>I4I4I4',data,at)
+   used[regionId]=true
+   at=marker_ids(data,nextAt,count)
+  end
+  previousRegion,regionPad=data:sub(9,at-1),data:sub(at)
+ end
+ if existing.strg then
+  local data=existing.strg
+  stringCount=string.unpack('>I4',data)
+  check(stringCount<=(#data-4)//12,'CAF文字列の件数が不正です。')
+  local after=5+stringCount*12
+  for at=5,after-1,12 do used[string.unpack('>I4',data,at)]=true end
+  previousOffsets,previousStrings=data:sub(5,after-1),data:sub(after)
+ end
+ local id,bytes=0,#previousStrings
+ local function new_id()
+  repeat id=id+1 until not used[id]
+  return id
+ end
+ local function marker(kind,pos,name)
+  local key=new_id()
+  if name and name~=''then
+   offsets[#offsets+1]=string.pack('>I4i8',key,bytes)
+   strings[#strings+1]=name..'\0'
+   bytes=bytes+#name+1
+  end
+  return string.pack('>c4dI4',kind,pos,key)..string.rep('\255',8)..'\0\0\0\0'
+ end
+ for _,e in ipairs(plan.entries)do
+  if e.kind=='marker'then markers[#markers+1]=marker('\0\0\0\0',e.start,e.encoded)
+  else
+   local header=string.pack('>I4I4I4',new_id(),0,2)
+   regions[#regions+1]=header..marker('rbeg',e.start,e.encoded)..marker('rend',e.finish)
+  end
+ end
+ local function chunk(kind,data)
+  check(#data<=limit,'CAFメタデータの容量が上限を超えました。')
+  write(output,kind,string.pack('>i8',#data),data)
+ end
+ write(output,signature)
+ for i,c in ipairs(chunks)do
+  copy_audio(input,output,c.offset,c.bytes)
+  if i==1 then
+   if #markers>0 or existing.mark then
+    chunk('mark',string.pack('>I4I4',markerClock,markerCount+#markers)..previousMark..table.concat(markers)..markerPad)
+   end
+   if #regions>0 or existing.regn then
+    chunk('regn',string.pack('>I4I4',regionClock,regionCount+#regions)..previousRegion..table.concat(regions)..regionPad)
+   end
+   if #strings>0 or existing.strg then
+    chunk('strg',string.pack('>I4',stringCount+#strings)..previousOffsets..table.concat(offsets)..previousStrings..table.concat(strings))
+   end
+  end
+ end
+end
+
+local writers={ogg=ogg,flac=flac,mp3=mp3,caf=caf}
+function Embed.write_chapters(path,plan,kind)
+ local api=plan.api
+ local source=check(api.PCM_Source_CreateFromFile(path),'埋め込み先の音声を開けません：'..path)
+ local ok,w=pcall(function()
+  local sr=api.GetMediaSourceSampleRate(source)
+  local length,qn=api.GetMediaSourceLength(source)
+  check(not qn and sr>0 and length>0,'埋め込み先の音声の長さが不正です。')
+  return {sr=sr,frames=math.floor(length*sr+.5)}
+ end)
+ api.PCM_Source_Destroy(source)
+ check(ok,w)
+ local metadata=Embed.timeline(path,plan,w,plan.chapter_options)
+ if #metadata.entries==0 then return end
+ local temp,backup=spare(path..'.blt-rm-'),spare(path..'.blt-original-')
+ local input,output
+ local success,err=xpcall(function()
+  input=check(io.open(path,'rb'),'埋め込み先を開けません：'..path)
+  local size=check(input:seek('end'),'音声ファイルのサイズが不明です。')
+  check(input:seek('set',0),'音声ファイルを読み取れません。')
+  output=check(io.open(temp,'wb'),'埋め込み用の作業ファイルを作成できません。')
+  writers[kind](input,output,size,metadata)
+  check(output:close(),'埋め込み用の作業ファイルを保存できません。')
+  output=nil
+  input:close()
+  input=nil
+  replace_output(path,temp,backup)
+ end,tostring)
+ if input then input:close()end
+ if output then output:close()end
+ if not success then os.remove(temp);error(err,0)end
+end
+end
+
+local Model={VERSION='0.14.29',SOURCE_MASK=1|2|8|32|64|128|4096}
 Model.numbers={'RENDER_SETTINGS','RENDER_BOUNDSFLAG','RENDER_CHANNELS','RENDER_SRATE','RENDER_STARTPOS','RENDER_ENDPOS','RENDER_TAILFLAG','RENDER_TAILMS','RENDER_ADDTOPROJ','RENDER_DITHER','RENDER_NORMALIZE','RENDER_NORMALIZE_TARGET','RENDER_BRICKWALL','RENDER_FADEIN','RENDER_FADEOUT','RENDER_FADEINSHAPE','RENDER_FADEOUTSHAPE','RENDER_FADELPF','RENDER_PADSTART','RENDER_PADEND','RENDER_TRIMSTART','RENDER_TRIMEND','RENDER_DELAY'}
 Model.strings={'RENDER_FILE','RENDER_PATTERN','RENDER_EXTRAFILEDIR','RENDER_FORMAT2','RENDER_FORMAT'}
 Model.configs={'projrenderlimit','projrenderspeedcap','projrenderresample','projrenderrateinternal','renderclosewhendone','renderpeaks','projrenderqdelay','renderbsnew'}
@@ -2850,13 +3375,17 @@ function Model.persistmap(api,state)
  for _,v in ipairs(Model.channelFallbacks)do store_setting(api,v[2],tostring(state[v[1]]or 0))end
  if state.colorMap then store_setting(api,'color_mapping',table.concat(state.colorMap,','))end
 end
-function Model.embedsupported(s,path)
+local embedCodecs={evaw='wav',ffia='aiff',vggo='ogg',SggO='ogg',calf='flac',l3pm='mp3',ffac='caf'}
+function Model.embedsupported(s,path,pcmOnly)
+ local target=path and Embed.format(path)
+ if path and not target then return false end
  for _,key in ipairs({'RENDER_FORMAT','RENDER_FORMAT2'})do
   local raw=Model.decode(s.s[key]);local codec=raw:sub(1,4)
-  if codec=='ffia'and(not path or not path:lower():match('%.wav$'))then return true end
-  if codec=='evaw'and(not path or path:lower():match('%.wav$'))then
-   local bits=raw:byte(5)or 24;local large=raw:byte(7)or 0
-   if large~=2 and(bits==8 or bits==16 or bits==24 or bits==32 or bits==33 or bits==64)then return true end
+  local kind=embedCodecs[codec]
+  if kind and(not target or kind==target)and(not pcmOnly or kind=='wav'or kind=='aiff')then
+   if kind~='wav'then return true end
+   local bits=raw:byte(5)or 24
+   if (raw:byte(7)or 0)~=2 and(bits==8 or bits==16 or bits==24 or bits==32 or bits==33 or bits==64)then return true end
   end
  end
  return false
@@ -2876,7 +3405,7 @@ function Model.optionenabled(s,key,mask)
     local norm=s.n.RENDER_NORMALIZE
     if(norm&1)~=0 and(norm&32)~=0 or(norm&64)~=0 and(norm&(32<<16))~=0 then return false end
    end
-  elseif mask==256 or mask==1024 then return Model.embedsupported(s)end
+  elseif mask==256 or mask==1024 then return Model.embedsupported(s,nil,true)end
  elseif key=='RENDER_DITHER'and(mask==4 or mask==8)then
   return source~=0 and not Model.viamaster(s)and not Model.combined(s)
  elseif key=='RENDER_NORMALIZE'then
@@ -3255,7 +3784,7 @@ function M.render(api,m,j,current,numbering)
   end
   return #paths==#expected,stats
  end
- local function eligible(path)return Embed.supported(path)and j.embed.accept(path)end
+ local function eligible(path)return Embed.pcm(path)and j.embed.accept(path)end
  local cancelled=false
  local ok,err=xpcall(function()
   for _,unit in ipairs(j.embed.units)do if unit.paths and #unit.paths>0 then
@@ -3274,7 +3803,7 @@ function M.render(api,m,j,current,numbering)
      local raw=Model.decode(saved.s[k]);local codec=raw:sub(1,4)
      if codec=='evaw'or codec=='ffia'then
       local state={s={RENDER_FORMAT=saved.s[k],RENDER_FORMAT2=''}}
-      if Model.embedsupported(state)then formats[#formats+1]=saved.s[k]end
+      if Model.embedsupported(state,nil,true)then formats[#formats+1]=saved.s[k]end
      end
     end
     fail(#formats>0,'ループ用のPCM/float出力形式を取得できません。')
@@ -7156,12 +7685,13 @@ local function basic()
  section('リージョンとマーカー',36,344,W-72,63)
  if not m.state.embed then m.state.embed=Embed.defaults();BLT.invalidate()end
  local em=m.state.embed
- local wav=Model.embedsupported(m.state)
- tick('embed_markers',em.marker_hash_only and'マーカー #'or'マーカー',em.embed_markers,36,370,80,function(v)em.embed_markers=v;em.marker_hash_only=false end,wav)
- tick('embed_regions',em.region_hash_only and'リージョン #'or'リージョン',em.embed_regions,120,370,93,function(v)em.embed_regions=v;em.region_hash_only=false end,wav)
- tick('embed_loop_region','ループリージョン',em.embed_loop_region,217,370,132,function(v)em.embed_loop_region=v end,wav)
- tick('exclude_selected_region','選択リージョンを除外',em.exclude_selected_region,353,370,158,function(v)em.exclude_selected_region=v end,wav)
- small_button('markerEncoding',em.encoding,515,369,97,22,function()choose('マーカー文字コード',{{'UTF-8','UTF-8'},{'CP932','CP932'}},em.encoding,function(v)em.encoding=v end)end,wav)
+ local supported=Model.embedsupported(m.state)
+ local pcm=Model.embedsupported(m.state,nil,true)
+ tick('embed_markers',em.marker_hash_only and'マーカー #'or'マーカー',em.embed_markers,36,370,80,function(v)em.embed_markers=v;em.marker_hash_only=false end,supported)
+ tick('embed_regions',em.region_hash_only and'リージョン #'or'リージョン',em.embed_regions,120,370,93,function(v)em.embed_regions=v;em.region_hash_only=false end,supported)
+ tick('embed_loop_region','ループリージョン',em.embed_loop_region,217,370,132,function(v)em.embed_loop_region=v end,pcm)
+ tick('exclude_selected_region','選択リージョンを除外',em.exclude_selected_region,353,370,158,function(v)em.exclude_selected_region=v end,supported)
+ small_button('markerEncoding',pcm and em.encoding or supported and 'UTF-8' or em.encoding,515,369,97,22,function()choose('マーカー文字コード',{{'UTF-8','UTF-8'},{'CP932','CP932'}},em.encoding,function(v)em.encoding=v end)end,pcm)
  section('OUTPUT / 出力設定',36,421,W-72,119)
  strfield('RENDER_FILE','保存先フォルダー',36,447,W-160)
  small_button('browse','参照',W-114,462,78,22,function()

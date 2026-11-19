@@ -1,5 +1,5 @@
 -- @description LOOP RM STUDIO
--- @version 0.6.29
+-- @version 0.6.36
 -- @author Balrulu
 -- @provides
 --   . > ../
@@ -569,14 +569,6 @@ function M.new(g,clock,palette)
   local v=s.stop and phase==s.stop and 1 or .5+.5*sin(phase)
   s.level=(low or .08)+((high or .90)-(low or .08))*(linear and v or v*v)
   return s.level
- end
- function U:attentionAnimating()
-  if not self.attentionStates then return false end
-  for id,s in pairs(self.attentionStates)do
-   if s.seen~=self.frameSerial then self.attentionStates[id]=nil
-   elseif s.active or s.stop and s.phase<s.stop then return true end
-  end
-  return false
  end
  function U:button(id,label,x,y,w,h,opt)
   opt=opt or empty;local enabled=opt.enabled~=false
@@ -3702,6 +3694,7 @@ local LanguageCatalog={en={
  ["ループ音声を保存できません。"]="Cannot save loop audio.",
  ["プロジェクトが変更されました。"]="Project changed.",
  ["クロスフェード対象のアイテムが変更されました。"]="Crossfade target items changed.",
+ ["クロスフェード結果をグループ化できません。"]="Cannot group the crossfade result.",
  ["アイテムが変更されました。"]="Item changed.",
  ["安全なクロスフェード置換に必要なUndo APIを利用できません。"]="Undo API required for safe crossfade replacement is unavailable.",
  ["アイテムの分割に失敗しました。"]="Item split failed.",
@@ -3818,9 +3811,9 @@ local LanguageCatalog={en={
  ["プロジェクトが変わりました。追加をやり直してください。"]="Project changed. Add again.",
  ["を追加"]=": add",
  ["追加できませんでした。"]="Could not add.",
- ["録音中は繋ぎ目を自動再生できません。"]="Cannot auto-play seam while recording.",
+ ["録音中は繋ぎ目を再生できません。"]="Cannot play the loop seam while recording.",
  ["プロジェクトの再生速度を取得できません。"]="Cannot read project playback rate.",
- ["繋ぎ目の自動再生を開始できませんでした。"]="Cannot start seam auto-playback.",
+ ["繋ぎ目の再生を開始できませんでした。"]="Cannot start loop seam playback.",
  ["録音中は調整できません。録音を停止してください。"]="Stop recording before adjusting.",
  ["再生を停止できませんでした。"]="Cannot stop playback.",
  ["プロジェクトの再生速度を1.0にしてください。"]="Set project playback rate to 1.0.",
@@ -3946,13 +3939,16 @@ local LanguageCatalog={en={
  ["最寄りゼロクロスへ補正"]="Snap to nearest zero crossing",
  ["周期を検出し補正"]="Detect and align to period",
  ["調整後、繋ぎ目を自動再生"]="Auto-play seam after adjustment",
+ ["繋ぎ目を再生"]="Play Loop Seam",
+ ["ループ開始点へ"]="Go to Loop Start",
+ ["ループ終了点へ"]="Go to Loop End",
  ["通常はループ末端の0.75秒前から再生。クロスフェード時はその開始点（最低0.75秒前）から再生し、1回ループした約1秒後に停止"]="Usually play from 0.75 s before loop end. With crossfade, start at its beginning (at least 0.75 s early); stop about 1 s after one loop.",
  ["レンダリング設定"]="RENDER SETTINGS",
  ["対象"]="Source",
  ["マスターミックス"]="Master mix",
- ["マスターミックス\n現状マスターミックスのみ対応としています。"]="Master mix\nOnly master mix is currently supported.",
+ ["マスターミックス\n現状マスターミックスのみ対応としています。\n他の対象でレンダリングしたい場合は「BLT_DEDICATED_RENDER」を使用してください。"]="Master mix\nOnly master mix is currently supported.\nTo render other sources, use BLT_DEDICATED_RENDER.",
  ["選択リージョン"]="Selected regions",
- ["選択リージョン\n現状選択リージョンの書き出しのみ対応しています。\nREAPER本体や、BLT MARKER REGION DESK等でリージョンを選択してください。"]="Selected regions\nOnly selected region export is supported.\nSelect regions in REAPER or BLT MARKER REGION DESK.",
+ ["選択リージョン\n現状選択リージョンの書き出しのみ対応しています。\nREAPER本体や、BLT MARKER REGION DESK等でリージョンを選択してください。\n他の対象でレンダリングしたい場合は「BLT_DEDICATED_RENDER」を使用してください。"]="Selected regions\nOnly selected region export is supported.\nSelect regions in REAPER or BLT MARKER REGION DESK.\nTo render other sources, use BLT_DEDICATED_RENDER.",
  ["Master mix  /  REAPERで選択した各リージョンを個別のWAVとしてレンダリングします"]="Master mix / Render each selected REAPER region to a separate WAV",
  ["フォーマット"]="FORMAT",
  ["REAPER本体の設定を使用"]="Use REAPER settings",
@@ -3961,7 +3957,7 @@ local LanguageCatalog={en={
  ["ビット深度"]="Bit depth",
  ["サンプルレート"]="Sample rate",
  ["チャンネル"]="Channels",
- ["WAV\n現状WAVのみ対応としています。\nOGG等への対応はしていません。"]="WAV\nOnly WAV is supported.\nOGG and other formats are unsupported.",
+ ["他形式でレンダリングしたい場合は「BLT_DEDICATED_RENDER」を使用してください。"]="To render in other formats, use BLT_DEDICATED_RENDER.",
  ["WAVのビット深度"]="WAV bit depth",
  ["出力サンプルレート"]="Output sample rate",
  ["出力チャンネル数"]="Output channel count",
@@ -4113,10 +4109,6 @@ local function child(value)
   for part in value:gmatch('[^/]+') do if part == '.' or part == '..' then return end end
   return value
 end
-function M.join(base, relative)
-  local value = child(relative)
-  if value then return slash(base) .. '/' .. value end
-end
 function M.encode(api, path)
   if type(path) ~= 'string' or path == '' or path:sub(1, 10) == '@resource/' then return path end
   local root, value = slash(api.GetResourcePath()), slash(path)
@@ -4134,43 +4126,10 @@ function M.decode(api, path)
   local relative = child(path:sub(11))
   if relative then return slash(api.GetResourcePath()) .. '/' .. relative end
 end
-function M.exists(api, path)
-  if not path or path == '' or not M.native(api, path, false) then return false end
-  if api.file_exists then return api.file_exists(path) == true end
-  local file = io.open(path, 'rb');if not file then return false end
-  file:close();return true
-end
-function M.readable(api, path)
-  if not path or path == '' or not M.native(api, path, false) then return false end
-  local file = io.open(path, 'rb');if not file then return false end
-  file:close();return true
-end
-function M.executable(api, path)
-  path = M.decode(api, path)
-  if type(path) ~= 'string' or path == '' or path:find('[%z\r\n]') then return end
-  if not windows(api) and path:lower():match('%.exe$') then return end
-  if M.absolute(path) then return M.exists(api, path) and path or nil end
-  if path:match('^[%w_.%-]+$') then return path end
-end
 function M.directory(api, path)
   if type(path) ~= 'string' or path == '' or type(api.JS_File_Stat) ~= 'function' then return false end
   local result = table.pack(pcall(api.JS_File_Stat, path))
   return result[1] and result[2] == 0 and type(result[10]) == 'number' and (result[10] & 0xF000) == 0x4000
-end
-function M.file(api, path, folders)
-  local value = M.decode(api, path)
-  if M.exists(api, value) then return value end
-  if type(path) ~= 'string' or path:sub(1, 10) == '@resource/' then return end
-  local normalized = slash(path)
-  for _, folder in ipairs(folders or {}) do
-    local prefix = '/' .. folder .. '/'
-    local at = normalized:lower():find(prefix:lower(), 1, true)
-    local relative = at and child(normalized:sub(at + #prefix))
-    if relative then
-      local candidate = slash(api.GetResourcePath()) .. '/' .. folder .. '/' .. relative
-      if M.exists(api, candidate) then return candidate end
-    end
-  end
 end
 local environments = {}
 function M.environment(api)
@@ -4201,43 +4160,6 @@ function M.output(api, path, owner)
   if path == '' or not M.absolute(path) or confirmed[path] then return true end
   if owner and owner ~= '' then return owner == M.environment(api) end
   return M.directory(api, path)
-end
-function M.registry(api, identify)
-  local file = io.open(api.GetResourcePath() .. '/reaper-kb.ini', 'rb')
-  if not file then return {} end
-  local raw = file:read('*a');file:close()
-  local result = {data = raw}
-  for line in raw:gmatch('[^\r\n]+') do
-    local command, path = line:match('^SCR%s+%d+%s+0%s+(%S+)%s+.*%s+"([^"]+)"%s*$')
-    if not command then command, path = line:match('^SCR%s+%d+%s+0%s+(%S+)%s+.*%s+(%S+)%s*$') end
-    local name = path and slash(path):match('([^/]+)$')
-    local id = name and identify(name:lower():gsub(' ', '_'))
-    if id then
-      if not M.absolute(path) then path = api.GetResourcePath() .. '/Scripts/' .. path end
-      result[id] = result[id] or {}
-      result[id][#result[id] + 1] = {path = path, command = '_' .. command:gsub('^_', '')}
-    end
-  end
-  return result
-end
-function M.action(api, id, stored, command, entries, identify, verify)
-  local choices, seen = {}, {}
-  for _, row in ipairs(entries[id] or {}) do
-    if M.readable(api, row.path) and (not verify or verify(id, row.path)) then
-      if row.command == command then return row.path, row.command end
-      local key = slash(row.path);if windows(api) then key = key:lower() end
-      if not seen[key] then choices[#choices + 1] = row;seen[key] = true end
-    end
-  end
-  if #choices == 1 then return choices[1].path, choices[1].command end
-  if #choices > 1 then return nil, 'Multiple registered copies; run the intended action once.' end
-  local path = M.decode(api, stored)
-  local name = path and slash(path):match('([^/]+)$')
-  if name and identify(name:lower():gsub(' ', '_')) == id then
-    path = M.file(api, stored, {'Scripts'})
-    if path and M.readable(api, path) and (not verify or verify(id, path)) then return path, '' end
-  end
-  return nil, 'Script not found; run the installed action once to enable restoration again.'
 end
 return M
 end)()
@@ -4519,7 +4441,7 @@ local function optional_number(fn,...)
  local ok,value=pcall(fn,...)
  return ok and finite(value) and value or nil
 end
-local Core={VERSION='0.5.31',SECTION='BLT_LOOP_RM_STUDIO',MAX_METADATA=16*1024*1024,SEAM_SECONDS=.006,SEAM_DRAG_SECONDS=.250,
+local Core={SECTION='BLT_LOOP_RM_STUDIO',MAX_METADATA=16*1024*1024,SEAM_SECONDS=.006,SEAM_DRAG_SECONDS=.250,
  PERIOD_ANALYSIS_MIN=7,PERIOD_ANALYSIS_MAX=100,CROSSFADE_GUARD_FRAMES=1024}
 Core.PERIOD_FAILURE='[BLT:PERIOD_FAILURE]'
 -- REAPER's stock rate list (also verified in the installed executable).
@@ -4698,11 +4620,6 @@ local function time_number(text,unit)
   v=v*60+n
  end
  return sign*v
-end
-function Core.duration(text,unit)
- local v=time_number(text,unit)
- assert(finite(v) and v>0 and v<=864000,'基準幅は0より大きい値で指定してください。秒は mm:ss または hh:mm:ss も使えます。')
- return v
 end
 
 -- Shared overlap block formation: positive overlap, transitive across all tracks.
@@ -4900,6 +4817,7 @@ function Core.plan(rows,start,ending,sr,options)
    local clipped=isr and(s<0 or e>p.frames)
    s=clamp(s,0,p.frames);e=clamp(e,0,p.frames)
    if loop then s=math.min(s,p.frames-1);e=math.max(e,s+1)end
+   if isr and e<=s and options.drop_subsample_regions then p.omitted=p.omitted+1;goto continue end
    assert(not isr or e>s,'1サンプル未満のリージョンがあります: '..row.name)
    local encoded=loop and''or Core.encode_name(row.name,p.encoding)
    local entry={kind=row.kind,name=row.name,start=s,finish=e,encoded=encoded,id=row.id,key=row.key}
@@ -5043,9 +4961,9 @@ function Core.render_window(p)
  return {start=(first-pre)/p.sr,finish=(first+p.frames+guard)/p.sr,
   frames=pre+p.frames+guard,pre=pre}
 end
-function Core.copy_start(source,target,p)
+function Core.copy_start(source,target,p,wav)
  assert(source~=target and not Core.exists(target),'出力先は新しいWAVファイルを指定してください。')
- local wav=Core.scan(source)
+ wav=wav or Core.scan(source)
  assert(wav.sr==p.sr,'レンダーのサンプルレートが一致しません。')
  local window=p.render_window or {frames=p.frames,pre=0}
  -- Tolerate only +/-1 frame in the intermediate render; keep the final slice unchanged.
@@ -5130,21 +5048,24 @@ function Core.project_region_selection(project)
 end
 function Core.set_project_region_selection(project,selected,allow_missing)
  assert(type(R.SetRegionOrMarkerInfo_Value)=='function','REAPERのリージョン選択APIを利用できません。REAPERを更新してください。')
- local found={}
+ local found,changed={},false
  for i=0,R.GetNumRegionsOrMarkers(project)-1 do
   local ptr=R.GetRegionOrMarker(project,i,'')
   if ptr and R.GetRegionOrMarkerInfo_Value(project,ptr,'B_ISREGION')~=0 then
    local value=R.GetRegionOrMarkerInfo_Value(project,ptr,'I_NUMBER')
    if finite(value) then
     local id=floor(value+.5);local wanted=selected[id] and 1 or 0
-    R.SetRegionOrMarkerInfo_Value(project,ptr,'B_UISEL',wanted)
-    assert((R.GetRegionOrMarkerInfo_Value(project,ptr,'B_UISEL')~=0)==(wanted~=0),'レンダー対象リージョンの選択を変更できません。')
+    if (R.GetRegionOrMarkerInfo_Value(project,ptr,'B_UISEL')~=0)~=(wanted~=0)then
+     R.SetRegionOrMarkerInfo_Value(project,ptr,'B_UISEL',wanted)
+     assert((R.GetRegionOrMarkerInfo_Value(project,ptr,'B_UISEL')~=0)==(wanted~=0),'レンダー対象リージョンの選択を変更できません。')
+     changed=true
+    end
     if selected[id] then found[id]=true end
    end
   end
  end
  if not allow_missing then for id in pairs(selected) do assert(found[id],'レンダー対象リージョンが見つかりません: '..id) end end
- if type(R.UpdateArrange)=='function' then R.UpdateArrange() end
+ if changed and R.UpdateArrange then R.UpdateArrange() end
 end
 function Core.snapshot_render(project)
  local s={project=project,n={},s={}}
@@ -5155,18 +5076,52 @@ function Core.snapshot_render(project)
  for _,key in ipairs(Core.render_strings) do local ok,v=R.GetSetProjectInfo_String(project,key,'',false);assert(ok,'レンダー設定を取得できません: '..key);s.s[key]=v end
  return s
 end
+local function apply_render_number(project,key,value)
+ if R.GetSetProjectInfo(project,key,0,false)~=value then
+  R.GetSetProjectInfo(project,key,value,true)
+  assert(R.GetSetProjectInfo(project,key,0,false)==value,'レンダー設定を変更できません: '..key)
+ end
+end
 function Core.restore_render(s)
  if not s then return end
  if R.ValidatePtr and not R.ValidatePtr(s.project,'ReaProject*') then return end
- for _,key in ipairs(Core.render_numbers) do R.GetSetProjectInfo(s.project,key,s.n[key],true) end
- for _,key in ipairs(Core.render_strings) do R.GetSetProjectInfo_String(s.project,key,s.s[key],true) end
- -- Work around REAPER sink configuration order sensitivity.
- R.GetSetProjectInfo_String(s.project,'RENDER_FORMAT',s.s.RENDER_FORMAT,true)
- if s.regions then Core.set_project_region_selection(s.project,s.regions,true) end
- if s.selection_changed then
-  R.GetSet_LoopTimeRange2(s.project,true,false,s.selection[1],s.selection[2],false)
-  R.GetSet_LoopTimeRange2(s.project,true,true,s.loop[1],s.loop[2],false)
+ local errors={}
+ local function attempt(fn,...)
+  local ok,err=pcall(fn,...)
+  if not ok then errors[#errors+1]=tostring(err)end
  end
+ local project=s.project
+ for _,key in ipairs(Core.render_numbers) do attempt(apply_render_number,project,key,s.n[key])end
+ local function set_string(key)
+  local ok,value=R.GetSetProjectInfo_String(project,key,'',false)
+  if not ok or value~=s.s[key]then
+   assert(R.GetSetProjectInfo_String(project,key,s.s[key],true),'レンダー設定を復元できません: '..key)
+  end
+ end
+ for _,key in ipairs(Core.render_strings) do attempt(set_string,key)end
+ -- Work around REAPER sink configuration order sensitivity.
+ attempt(set_string,'RENDER_FORMAT')
+ for _,key in ipairs(Core.render_strings) do attempt(function()
+  local ok,value=R.GetSetProjectInfo_String(project,key,'',false)
+  assert(ok and value==s.s[key],'レンダー設定を復元できません: '..key)
+ end)end
+ if s.regions then attempt(Core.set_project_region_selection,project,s.regions,true)end
+ if s.selection_changed then
+  local function set_range(loop,range)
+   local first,last=R.GetSet_LoopTimeRange2(project,false,loop,0,0,false)
+   if first~=range[1] or last~=range[2]then R.GetSet_LoopTimeRange2(project,true,loop,range[1],range[2],false)end
+  end
+  attempt(set_range,false,s.selection)
+  attempt(set_range,true,s.loop)
+  local function check_range(loop,range)
+   local first,last=R.GetSet_LoopTimeRange2(project,false,loop,0,0,false)
+   assert(abs(first-range[1])<1e-8 and abs(last-range[2])<1e-8,
+    loop and 'ループ範囲を復元できません。' or '時間選択を復元できません。')
+  end
+  attempt(check_range,false,s.selection)
+  attempt(check_range,true,s.loop)
+ end
+ if #errors>0 then error('書き出し前の状態の復元に失敗しました。\n'..table.concat(errors,'\n'),0)end
 end
 function Core.configure_render(project,p,dir,pattern,bits,channels,resolve_region_name)
  assert(bits==16 or bits==24 or bits==32,'ビット深度が不正です。')
@@ -5179,7 +5134,7 @@ function Core.configure_render(project,p,dir,pattern,bits,channels,resolve_regio
  -- Region bounds are used only to resolve native region filename wildcards.
  -- Use time selection for audio to bypass custom-bound time text conversion.
  local n={RENDER_SETTINGS=native_settings&512,RENDER_BOUNDSFLAG=resolve_region_name and 5 or 2,RENDER_TAILFLAG=0,RENDER_ADDTOPROJ=0,RENDER_SRATE=p.sr,RENDER_CHANNELS=channels,RENDER_NORMALIZE=0,RENDER_DITHER=0}
- for k,v in pairs(n) do R.GetSetProjectInfo(project,k,v,true) end
+ for k,v in pairs(n) do apply_render_number(project,k,v)end
  if not resolve_region_name then
   p.render_window=Core.render_window(p);local window=p.render_window
   R.GetSet_LoopTimeRange2(project,true,false,window.start,window.finish,false)
@@ -5190,7 +5145,7 @@ function Core.configure_render(project,p,dir,pattern,bits,channels,resolve_regio
  -- evaw + depth + flags (force RIFF, no project region embedding) + large-file mode.
  local s={RENDER_FILE=dir,RENDER_PATTERN=pattern,RENDER_FORMAT=Core.base64('evaw'..string.char(bits,2,0)),RENDER_FORMAT2=''}
  for _,k in ipairs(Core.render_strings) do assert(R.GetSetProjectInfo_String(project,k,s[k],true),'レンダー設定を変更できません: '..k) end
- R.GetSetProjectInfo_String(project,'RENDER_FORMAT',s.RENDER_FORMAT,true)
+ assert(R.GetSetProjectInfo_String(project,'RENDER_FORMAT',s.RENDER_FORMAT,true),'レンダー設定を変更できません: RENDER_FORMAT')
 end
 function Core.native_format(project)
  local ok,encoded=R.GetSetProjectInfo_String(project,'RENDER_FORMAT','',false)
@@ -5550,6 +5505,21 @@ function Core.crossfade_commit(j)
  local undo_flags=4
  j.commit_started=true;R.Undo_BeginBlock2(j.project)
  local created={}
+ local used_group_ids
+ local next_group_id=1
+ local function allocate_group_id()
+  if not used_group_ids then
+   used_group_ids={}
+   for i=0,R.CountMediaItems(j.project)-1 do
+    local id=R.GetMediaItemInfo_Value(R.GetMediaItem(j.project,i),'I_GROUPID')
+    if id>0 then used_group_ids[id]=true end
+   end
+  end
+  while used_group_ids[next_group_id] do next_group_id=next_group_id+1 end
+  local id=next_group_id
+  next_group_id=next_group_id+1
+  return id
+ end
  local function split(item,at)
   local right=assert(R.SplitMediaItem(item,at),'アイテムの分割に失敗しました。')
   created[#created+1]={item=right,track=R.GetMediaItemTrack(right)}
@@ -5564,11 +5534,17 @@ function Core.crossfade_commit(j)
  for _,p in ipairs(j.plans) do
   local split_tolerance=Core.crossfade_split_tolerance(p.sr)
   local source=assert(R.PCM_Source_CreateFromFile(p.path),'加工素材を読み込めません。')
-   local middle
+   local middle,group_id
+   local group_items={}
    if p.mixed_commit then
-    local remove={};p.result_items={};j.commit_mutated=true
+    local remove,replaced={},{}
+    p.result_items={};j.commit_mutated=true
     for _,snapshot in ipairs(p.snapshots) do
-     local item=snapshot.item;local pos=R.GetMediaItemInfo_Value(item,'D_POSITION')
+     local item=snapshot.item
+     replaced[item]=true
+     local id=R.GetMediaItemInfo_Value(item,'I_GROUPID')
+     if group_id==nil then group_id=id elseif group_id~=id then group_id=0 end
+     local pos=R.GetMediaItemInfo_Value(item,'D_POSITION')
      local ending=pos+R.GetMediaItemInfo_Value(item,'D_LENGTH');middle=item
      if p.patch_end<ending-split_tolerance then
       local right=split(middle,p.patch_end);p.result_items[#p.result_items+1]=right
@@ -5594,9 +5570,17 @@ function Core.crossfade_commit(j)
      assert(R.SetMediaItemTakeInfo_Value(take,key,value),'加工テイクの再生設定を更新できません。')
     end
     for _,item in ipairs(remove) do assert(R.DeleteTrackMediaItem(p.track,item),'置換前の重複音声を取り除けません。') end
+    for _,entry in ipairs(p.sources) do
+     local item=entry.item
+     if not replaced[item] and entry.ending>p.loop_start+1e-9 and entry.pos<p.loop_finish-1e-9 then
+      group_items[#group_items+1]=item
+      if group_id~=0 and group_id~=R.GetMediaItemInfo_Value(item,'I_GROUPID') then group_id=0 end
+     end
+    end
     if R.SetMediaItemSelected then R.SetMediaItemSelected(middle,true) end
    else
     middle=p.item;p.result_items={p.item}
+    group_id=R.GetMediaItemInfo_Value(p.item,'I_GROUPID')
     if p.patch_end<p.ending-split_tolerance then
      local right=split(middle,p.patch_end);p.result_items[#p.result_items+1]=right
      clear_edge(middle,'OUT');clear_edge(right,'IN')
@@ -5609,6 +5593,16 @@ function Core.crossfade_commit(j)
     R.SetMediaItemTake_Source(take,source);assert(R.GetMediaItemTake_Source(take)==source,'加工素材を適用できません。')
     assert(R.SetMediaItemTakeInfo_Value(take,'D_STARTOFFS',(p.pre_guard or 0)/p.sr),'加工素材の開始位置を更新できません。')
     assert(R.SetMediaItemInfo_Value(middle,'B_LOOPSRC',0),'加工素材のループ設定を更新できません。')
+   end
+   -- Include the untouched loop audio as well as the surviving split and replacement items.
+   for _,item in ipairs(p.result_items) do group_items[#group_items+1]=item end
+   if group_id==0 and #group_items>1 then group_id=allocate_group_id() end
+   if group_id>0 then
+    for _,item in ipairs(group_items) do
+     if R.GetMediaItemInfo_Value(item,'I_GROUPID')~=group_id then
+      assert(R.SetMediaItemInfo_Value(item,'I_GROUPID',group_id),'クロスフェード結果をグループ化できません。')
+     end
+    end
    end
    if p.region and (p.region.start~=p.loop_start or p.region.finish~=p.loop_finish) then
     undo_flags=undo_flags|8
@@ -6730,7 +6724,8 @@ return M
 end)()
 local SECTION=Core.SECTION
 local PROJECT_SECTION='BLT_REGION_FORGE'
-local W,H=980,826
+local adjustment_row_h=36
+local W,H=980,826+adjustment_row_h
 local A={status='時間選択から区間を追加し、WAVへ書き出します。',warning=false,content_dirty=true,closed=false,
  rows={},selected=nil,selected_regions={},poll_at=0,active=true,sr=48000,bits=24,channels=2,encoding='UTF-8',
  directory='',filename='$region',busy=false,progress=0,use_default_directory=true,use_default_filename=false,use_format=false,
@@ -6819,13 +6814,21 @@ function UI.safe(fn,...)
  return ok
 end
 function UI.dirty() A.content_dirty=true;wake_visuals() end
-function UI.selected()
- for _,row in ipairs(A.rows) do if row.key==A.selected then return row end end
-end
 function UI.selected_rows()
  local wanted={};for _,key in ipairs(A.selected_regions or {}) do wanted[key]=true end
  local rows={};for _,row in ipairs(A.rows) do if wanted[row.key] and row.isr and row.finish>row.start then rows[#rows+1]=row end end
  return rows
+end
+function Core.selected_sustain(rows,selected)
+ local wanted={};for _,key in ipairs(selected) do wanted[key]=true end
+ local found
+ for _,row in ipairs(rows) do
+  if wanted[row.key] and row.kind=='sustain' and row.finish>row.start then
+   if found then return nil end
+   found=row
+  end
+ end
+ return found
 end
 local function valid_audio_item(project,item)
  if not item or R.ValidatePtr2 and not R.ValidatePtr2(project,item,'MediaItem*') then return false end
@@ -6879,6 +6882,7 @@ function UI.refresh_loop_enable()
  if #seeds==0 then A.loop_enable=state;return end
  local ok,row=pcall(Core.loop_target,A.project,A.rows,nil,seeds)
  if not ok then A.loop_enable=state;return end
+ state.target=row
  local function validate_adjust(mode)
   local margin=mode=='period' and 0 or .1
   local items=Core.virtual_loop_items(A.project,row,seeds,margin)
@@ -6928,7 +6932,7 @@ function UI.load_project(project)
   A.seam=nil;A.seam_problem=nil;A.seam_refreshing=false;A.preview_signature=nil;A.seam_drag=nil;A.seam_hold=nil;A.wave_items={};A.last_wave_selection=nil
   A.loop_enable={crossfade=false,zero=false,period=false}
  end
- A.project=project;A.selected=nil;A.selected_regions={};A.region_selection_signature=nil;A.region_selection_problem=nil
+ A.project=project;A.selected=nil;A.selected_regions={};A.selected_sustain=nil;A.region_selection_signature=nil;A.region_selection_problem=nil
  local function get(key,default) local _,v=R.GetProjExtState(project,PROJECT_SECTION,key);return v~='' and v or default end
  local savedDirectory=get('directory','')
  A.filename=get('filename','$region');A.directory=BLTPaths.decode(R,savedDirectory)or savedDirectory;A.directory_origin=get('directory_origin','')
@@ -7040,6 +7044,7 @@ function UI.poll(now,force,render_prepare)
  end
  local s,e=UI.bounds()
  if force or rev~=A.plan_revision or s~=A.start or e~=A.finish then
+  A.selected_sustain=Core.selected_sustain(A.rows,selected)
   if render_prepare then A.start,A.finish=s,e
   else UI.preflight();A.plan_revision=rev end
   UI.dirty()
@@ -7116,11 +7121,11 @@ function UI.stop_loop_audition(stop_playback)
  if valid and d.forced_repeat and repeat_state(d.project,-1)==1 then repeat_state(d.project,0) end
  A.audition=nil;UI.dirty()
 end
-function UI.start_loop_audition(plans,lead_seconds)
- if not A.auto_audition then return end
+function UI.start_loop_audition(plans,lead_seconds,manual)
+ if not manual and not A.auto_audition then return end
  UI.stop_loop_audition(true)
  local project=A.project;local start,finish=Core.adjusted_loop_bounds(plans)
- assert((R.GetPlayStateEx(project)&4)==0,'録音中は繋ぎ目を自動再生できません。')
+ assert((R.GetPlayStateEx(project)&4)==0,'録音中は繋ぎ目を再生できません。')
  local rate=R.Master_GetPlayRate(project);assert(finite(rate) and rate>0,'プロジェクトの再生速度を取得できません。')
  local play_start,wrap_after,stop_after=Core.loop_audition_timing(start,finish,rate,lead_seconds)
  local previous_repeat=repeat_state(project,-1)
@@ -7131,7 +7136,7 @@ function UI.start_loop_audition(plans,lead_seconds)
  repeat_state(project,1)
  R.SetEditCurPos2(project,play_start,false,false)
  if R.OnPlayButtonEx then R.OnPlayButtonEx(project) else R.OnPlayButton() end
- assert((R.GetPlayStateEx(project)&1)~=0,'繋ぎ目の自動再生を開始できませんでした。')
+ assert((R.GetPlayStateEx(project)&1)~=0,'繋ぎ目の再生を開始できませんでした。')
 end
 function UI.loop_audition_tick(now)
  local d=A.audition;if not d then return end
@@ -7153,6 +7158,30 @@ function UI.stop_for_adjustment(project)
   assert(R.GetPlayStateEx(project)==0,'再生を停止できませんでした。')
  end
 end
+function UI.navigate_loop(edge)
+ local project=A.project
+ if A.busy or R.EnumProjects(-1,'')~=project then return end
+ local rows=Core.project_rows(project)
+ local ok,row=pcall(Core.loop_target,project,rows,nil,UI.wave_target_items(project,true))
+ if not ok then row=Core.selected_sustain(rows,Core.selected_project_regions(project,rows)) end
+ if not row then return end
+ if edge then
+  UI.stop_loop_audition(true)
+  local position=row[edge]
+  local left,right=R.GetSet_ArrangeView2(project,false,0,0,0,0)
+  local can_center=finite(left) and finite(right) and right>left
+  R.SetEditCurPos2(project,position,not can_center,false)
+  if can_center then
+   local half=(right-left)*.5
+   R.GetSet_ArrangeView2(project,true,0,0,position-half,position+half)
+  end
+ elseif (R.GetPlayStateEx(project)&4)==0 then
+  UI.stop_for_adjustment(project)
+  UI.start_loop_audition({{row=row}},nil,true)
+ end
+end
+function UI.go_loop_start() UI.navigate_loop('start') end
+function UI.go_loop_end() UI.navigate_loop('finish') end
 function UI.follow_loop_selection(project,plans)
  assert(project==A.project,Core.context_changed)
  local start,finish=Core.adjusted_loop_bounds(plans)
@@ -7277,10 +7306,9 @@ function UI.output_path(p,batch_index,batch_count)
  if A.use_default_directory or A.use_default_filename or manual_pattern then
   local snapshot=Core.snapshot_render(A.project);A.render_snapshot=snapshot
   local ok,result=xpcall(function()
-   snapshot.selection_changed=true
    if A.use_default_directory then
     local probe='__BLT_DIRECTORY_'..R.genGuid():gsub('[^%w]','')
-    Core.configure_render(A.project,p,snapshot.s.RENDER_FILE,probe,A.format.bits,A.format.channels,false)
+    Core.configure_render(A.project,p,snapshot.s.RENDER_FILE,probe,A.format.bits,A.format.channels,true)
     local got,paths=R.GetSetProjectInfo_String(A.project,'RENDER_TARGETS','',false)
     local resolved=Core.single_render_wav_target(got,paths)
     directory=resolved:match('^(.*)[/\\][^/\\]+$')
@@ -7336,8 +7364,8 @@ function UI.render_mix()
  A.render_batch={project=R.EnumProjects(-1,''),plans={},outputs={},index=0,count=0,completed_frames=0}
  UI.render_stage('prepare')
 end
-function UI.start_copy(source,p,target)
- A.job=Core.copy_start(source,target,p);A.busy=true
+function UI.start_copy(source,p,target,wav)
+ A.job=Core.copy_start(source,target,p,wav);A.busy=true
  if A.render_batch then UI.render_stage('copy')
  else A.progress=0;notice('リージョン情報を埋め込んでいます…',false) end
 end
@@ -7352,7 +7380,6 @@ function UI.render_one(p,batch_index,batch_count,target)
  assert(not Core.exists(target),'出力先に同名ファイルが作成されました。再実行してください。')
  assert(R.GetPlayStateEx(A.project)==0,'再生・録音を停止してから書き出してください。')
  assert(abs(R.Master_GetPlayRate(A.project)-1)<1e-9,'プロジェクトの再生速度を1.0にしてください。')
- A.raw=target;A.own_raw=true
  local snapshot=Core.snapshot_render(A.project);A.render_snapshot=snapshot
  local ok,err=xpcall(function()
   snapshot.selection_changed=true
@@ -7361,7 +7388,10 @@ function UI.render_one(p,batch_index,batch_count,target)
   local wav_target=Core.single_render_wav_target(got,targets)
   local function norm(s) return s:gsub('\\','/'):lower() end
   assert(norm(wav_target)==norm(target),'REAPERが予期しないWAV出力先を返しました: '..targets)
-  R.Main_OnCommand(41824,0) -- Synchronous native render; never automate overwrite dialogs.
+  assert(not Core.exists(target),'出力先に同名ファイルが作成されました。再実行してください。')
+  local rendered,why=pcall(R.Main_OnCommand,41824,0)
+  if Core.exists(target)then A.raw,A.own_raw=target,true end
+  if not rendered then error(why,0)end
  end,debug.traceback)
  -- Never yield with temporary project render settings or selection still installed.
  Core.restore_render(snapshot);A.render_snapshot=nil
@@ -7384,7 +7414,11 @@ function UI.render_step()
  assert(R.EnumProjects(-1,'')==b.project,Core.context_changed)
  if not Media.ready() then return end
  local phase=b.phase
+ if (phase=='plan' or phase=='path' or phase=='render') and R.GetProjectStateChangeCount(b.project)~=b.revision then
+  UI.render_stop('プロジェクトが変更されたため、書き出しを中止しました。',false,true);return
+ end
  if phase=='prepare' then
+  if A.render_snapshot then Core.restore_render(A.render_snapshot);A.render_snapshot=nil end
   if not UI.commit_edit() then UI.render_stop('書き出しを中止しました。',false);return end
   UI.poll(R.time_precise(),true,true)
   b.selected=UI.selected_rows();b.rows=A.rows;b.count=#b.selected
@@ -7394,6 +7428,7 @@ function UI.render_step()
   assert(R.GetPlayStateEx(b.project)==0,'再生・録音を停止してから書き出してください。')
   assert(abs(R.Master_GetPlayRate(b.project)-1)<1e-9,'プロジェクトの再生速度を1.0にしてください。')
   assert(UI.cleanup_raw(),'前回の一時WAVを削除できません。再試行してください。')
+  b.revision=R.GetProjectStateChangeCount(b.project)
   b.total_frames=0;A.progress=.01;UI.render_stage('plan')
  elseif phase=='plan' then
   local deadline=R.time_precise()+.004
@@ -7407,21 +7442,24 @@ function UI.render_step()
   end
   if #b.plans==b.count then
    b.rows=nil;b.selected=nil;b.index=1;A.plan=b.plans[1]
-   A.plan_revision=R.GetProjectStateChangeCount(b.project);UI.save_settings()
+   UI.save_settings();b.revision=R.GetProjectStateChangeCount(b.project);A.plan_revision=b.revision
    UI.render_stage('path')
   end
  elseif phase=='path' then
   b.target=UI.output_path(b.plans[b.index],b.index,b.count)
+  b.revision=R.GetProjectStateChangeCount(b.project)
   UI.render_stage('render')
  elseif phase=='render' then
   b.raw=UI.render_one(b.plans[b.index],b.index,b.count,b.target)
+  b.revision=R.GetProjectStateChangeCount(b.project)
   UI.render_stage('inspect')
  elseif phase=='inspect' then
   local audio=Core.scan(b.raw)
   assert(audio.channels==A.format.channels and audio.bits==A.format.bits and (A.format.bits~=32 or audio.tag==3),'レンダーされたWAVのチャンネル数／ビット深度が設定と一致しません。')
+  b.wav=audio
   UI.render_stage('embed')
  elseif phase=='embed' then
-  UI.start_copy(b.raw,b.plans[b.index],b.target)
+  UI.start_copy(b.raw,b.plans[b.index],b.target,b.wav);b.wav=nil
  elseif phase=='copy' or phase=='verify' then
   UI.step()
  elseif phase=='cleanup' then
@@ -7681,165 +7719,6 @@ function BLT.pick(obj,keys) local v=BLT.valueView or {};BLT.valueView=v;for k in
 -- Shared BLT app restoration protocol. Each app owns one registry ID.
 local BLTRestore=(function()
 -- BLT app restoration 1.2.1. Embedded in standalone apps.
--- BEGIN BLT PORTABLE PATHS 1.0.0
-local BLTPaths=(function()
--- BLT portable paths 1.0.0. Embedded in standalone scripts.
-local M = {}
-local function windows(api) return (api.GetOS() or ''):match('Win') ~= nil end
-local function slash(path)
-  path = tostring(path or ''):gsub('\\', '/')
-  local prefix = path:sub(1, 2) == '//' and '//' or ''
-  return prefix .. path:sub(#prefix + 1):gsub('/+', '/'):gsub('/+$', '')
-end
-function M.absolute(path)
-  if type(path) ~= 'string' then return false end
-  local value = path:gsub('\\', '/')
-  return value:sub(1, 1) == '/' or value:match('^%a:/') ~= nil
-end
-function M.native(api, path, relative)
-  if type(path) ~= 'string' or path:find('[%z\r\n]') then return false end
-  if path == '' then return relative == true end
-  if windows(api) then
-    if path:match('^%a:[/\\]') or path:match('^[/\\][/\\][^/\\]+[/\\][^/\\]+') then return true end
-    return relative == true and not path:match('^[/\\]') and not path:match('^%a:')
-  end
-  if path:match('^%a:') or path:find('\\', 1, true) then return false end
-  return path:sub(1, 1) == '/' or relative == true
-end
-local function child(value)
-  if value == '' or value:sub(1, 1) == '/' or value:find('\\', 1, true) or value:find('[%z\r\n:]') then return end
-  for part in value:gmatch('[^/]+') do if part == '.' or part == '..' then return end end
-  return value
-end
-function M.join(base, relative)
-  local value = child(relative)
-  if value then return slash(base) .. '/' .. value end
-end
-function M.encode(api, path)
-  if type(path) ~= 'string' or path == '' or path:sub(1, 10) == '@resource/' then return path end
-  local root, value = slash(api.GetResourcePath()), slash(path)
-  local a, b = root, value
-  if windows(api) then a, b = a:lower(), b:lower() end
-  if b:sub(1, #a + 1) == a .. '/' then
-    local relative = child(value:sub(#root + 2))
-    if relative then return '@resource/' .. relative end
-  end
-  return path
-end
-function M.decode(api, path)
-  if type(path) ~= 'string' then return end
-  if path:sub(1, 10) ~= '@resource/' then return path end
-  local relative = child(path:sub(11))
-  if relative then return slash(api.GetResourcePath()) .. '/' .. relative end
-end
-function M.exists(api, path)
-  if not path or path == '' or not M.native(api, path, false) then return false end
-  if api.file_exists then return api.file_exists(path) == true end
-  local file = io.open(path, 'rb');if not file then return false end
-  file:close();return true
-end
-function M.readable(api, path)
-  if not path or path == '' or not M.native(api, path, false) then return false end
-  local file = io.open(path, 'rb');if not file then return false end
-  file:close();return true
-end
-function M.executable(api, path)
-  path = M.decode(api, path)
-  if type(path) ~= 'string' or path == '' or path:find('[%z\r\n]') then return end
-  if not windows(api) and path:lower():match('%.exe$') then return end
-  if M.absolute(path) then return M.exists(api, path) and path or nil end
-  if path:match('^[%w_.%-]+$') then return path end
-end
-function M.directory(api, path)
-  if type(path) ~= 'string' or path == '' or type(api.JS_File_Stat) ~= 'function' then return false end
-  local result = table.pack(pcall(api.JS_File_Stat, path))
-  return result[1] and result[2] == 0 and type(result[10]) == 'number' and (result[10] & 0xF000) == 0x4000
-end
-function M.file(api, path, folders)
-  local value = M.decode(api, path)
-  if M.exists(api, value) then return value end
-  if type(path) ~= 'string' or path:sub(1, 10) == '@resource/' then return end
-  local normalized = slash(path)
-  for _, folder in ipairs(folders or {}) do
-    local prefix = '/' .. folder .. '/'
-    local at = normalized:lower():find(prefix:lower(), 1, true)
-    local relative = at and child(normalized:sub(at + #prefix))
-    if relative then
-      local candidate = slash(api.GetResourcePath()) .. '/' .. folder .. '/' .. relative
-      if M.exists(api, candidate) then return candidate end
-    end
-  end
-end
-local environments = {}
-function M.environment(api)
-  local root = slash(api.GetResourcePath())
-  if environments[root] ~= nil then return environments[root] or nil end
-  local path = root .. '/UserPlugins/.blt-environment-id'
-  local function read()
-    local file = io.open(path, 'rb');if not file then return end
-    local value = file:read(129);file:close()
-    if value and #value >= 16 and #value <= 128 and value:match('^[%x{}%-]+$') then return value end
-  end
-  local value = read()
-  if not value and api.genGuid then
-    pcall(function()
-      if api.RecursiveCreateDirectory then api.RecursiveCreateDirectory(root .. '/UserPlugins', 0) end
-      local token = api.genGuid();assert(type(token) == 'string' and token:match('^[%x{}%-]+$'))
-      local file = assert(io.open(path, 'wb'));local ok = file:write(token);local closed = file:close()
-      if ok and closed then value = read() end
-    end)
-  end
-  environments[root] = value or false
-  return value
-end
-local confirmed = {}
-function M.confirm(path) confirmed[path] = true end
-function M.output(api, path, owner)
-  if not M.native(api, path, true) then return false end
-  if path == '' or not M.absolute(path) or confirmed[path] then return true end
-  if owner and owner ~= '' then return owner == M.environment(api) end
-  return M.directory(api, path)
-end
-function M.registry(api, identify)
-  local file = io.open(api.GetResourcePath() .. '/reaper-kb.ini', 'rb')
-  if not file then return {} end
-  local raw = file:read('*a');file:close()
-  local result = {data = raw}
-  for line in raw:gmatch('[^\r\n]+') do
-    local command, path = line:match('^SCR%s+%d+%s+0%s+(%S+)%s+.*%s+"([^"]+)"%s*$')
-    if not command then command, path = line:match('^SCR%s+%d+%s+0%s+(%S+)%s+.*%s+(%S+)%s*$') end
-    local name = path and slash(path):match('([^/]+)$')
-    local id = name and identify(name:lower():gsub(' ', '_'))
-    if id then
-      if not M.absolute(path) then path = api.GetResourcePath() .. '/Scripts/' .. path end
-      result[id] = result[id] or {}
-      result[id][#result[id] + 1] = {path = path, command = '_' .. command:gsub('^_', '')}
-    end
-  end
-  return result
-end
-function M.action(api, id, stored, command, entries, identify, verify)
-  local choices, seen = {}, {}
-  for _, row in ipairs(entries[id] or {}) do
-    if M.readable(api, row.path) and (not verify or verify(id, row.path)) then
-      if row.command == command then return row.path, row.command end
-      local key = slash(row.path);if windows(api) then key = key:lower() end
-      if not seen[key] then choices[#choices + 1] = row;seen[key] = true end
-    end
-  end
-  if #choices == 1 then return choices[1].path, choices[1].command end
-  if #choices > 1 then return nil, 'Multiple registered copies; run the intended action once.' end
-  local path = M.decode(api, stored)
-  local name = path and slash(path):match('([^/]+)$')
-  if name and identify(name:lower():gsub(' ', '_')) == id then
-    path = M.file(api, stored, {'Scripts'})
-    if path and M.readable(api, path) and (not verify or verify(id, path)) then return path, '' end
-  end
-  return nil, 'Script not found; run the installed action once to enable restoration again.'
-end
-return M
-end)()
--- END BLT PORTABLE PATHS
 local M = {version = '1.2.1'}
 local SECTION = 'BLT_APP_RESTORE'
 M.launcher = [=[
@@ -7873,10 +7752,6 @@ local function child(value)
   for part in value:gmatch('[^/]+') do if part == '.' or part == '..' then return end end
   return value
 end
-function M.join(base, relative)
-  local value = child(relative)
-  if value then return slash(base) .. '/' .. value end
-end
 function M.encode(api, path)
   if type(path) ~= 'string' or path == '' or path:sub(1, 10) == '@resource/' then return path end
   local root, value = slash(api.GetResourcePath()), slash(path)
@@ -7905,18 +7780,6 @@ function M.readable(api, path)
   local file = io.open(path, 'rb');if not file then return false end
   file:close();return true
 end
-function M.executable(api, path)
-  path = M.decode(api, path)
-  if type(path) ~= 'string' or path == '' or path:find('[%z\r\n]') then return end
-  if not windows(api) and path:lower():match('%.exe$') then return end
-  if M.absolute(path) then return M.exists(api, path) and path or nil end
-  if path:match('^[%w_.%-]+$') then return path end
-end
-function M.directory(api, path)
-  if type(path) ~= 'string' or path == '' or type(api.JS_File_Stat) ~= 'function' then return false end
-  local result = table.pack(pcall(api.JS_File_Stat, path))
-  return result[1] and result[2] == 0 and type(result[10]) == 'number' and (result[10] & 0xF000) == 0x4000
-end
 function M.file(api, path, folders)
   local value = M.decode(api, path)
   if M.exists(api, value) then return value end
@@ -7931,36 +7794,6 @@ function M.file(api, path, folders)
       if M.exists(api, candidate) then return candidate end
     end
   end
-end
-local environments = {}
-function M.environment(api)
-  local root = slash(api.GetResourcePath())
-  if environments[root] ~= nil then return environments[root] or nil end
-  local path = root .. '/UserPlugins/.blt-environment-id'
-  local function read()
-    local file = io.open(path, 'rb');if not file then return end
-    local value = file:read(129);file:close()
-    if value and #value >= 16 and #value <= 128 and value:match('^[%x{}%-]+$') then return value end
-  end
-  local value = read()
-  if not value and api.genGuid then
-    pcall(function()
-      if api.RecursiveCreateDirectory then api.RecursiveCreateDirectory(root .. '/UserPlugins', 0) end
-      local token = api.genGuid();assert(type(token) == 'string' and token:match('^[%x{}%-]+$'))
-      local file = assert(io.open(path, 'wb'));local ok = file:write(token);local closed = file:close()
-      if ok and closed then value = read() end
-    end)
-  end
-  environments[root] = value or false
-  return value
-end
-local confirmed = {}
-function M.confirm(path) confirmed[path] = true end
-function M.output(api, path, owner)
-  if not M.native(api, path, true) then return false end
-  if path == '' or not M.absolute(path) or confirmed[path] then return true end
-  if owner and owner ~= '' then return owner == M.environment(api) end
-  return M.directory(api, path)
 end
 function M.registry(api, identify)
   local file = io.open(api.GetResourcePath() .. '/reaper-kb.ini', 'rb')
@@ -8273,6 +8106,7 @@ local ok,value=pcall(BLT.CanvasHost.new,R,APP_NAME,W,H+26,SECTION)
 if not ok then Language.mb(BLT.publicError(value),APP_NAME,0);return end
 Host=value;Host.minWidth,Host.minHeight,Host.persistSize=784,710,true
 local savedW,savedH=tonumber(R.GetExtState(SECTION,'window_w')),tonumber(R.GetExtState(SECTION,'window_h'))
+local previous_content_h=H-adjustment_row_h
 if R.GetExtState(SECTION,'render_button_balance_206')~='true' then
  if savedH then savedH=savedH+16 end
  BLT.store(SECTION,'render_button_balance_206','true',true)
@@ -8280,10 +8114,19 @@ end
 if R.GetExtState(SECTION,'compact_panels_626')~='true' then
  if finite(savedH) then
   local previousH=clamp(savedH,790,1800)
-  local previousScale=min((finite(savedW) and clamp(savedW,784,2200) or W)/W,(previousH-26)/(H+100))
+  local previousScale=min((finite(savedW) and clamp(savedW,784,2200) or W)/W,(previousH-26)/(previous_content_h+100))
   savedH=previousH-100*previousScale
  end
  BLT.store(SECTION,'compact_panels_626','true',true)
+end
+if R.GetExtState(SECTION,'seam_controls_631')~='true' then
+ if finite(savedH) then
+  local previousH=clamp(savedH,710,1800)
+  local previousScale=min((finite(savedW) and clamp(savedW,784,2200) or W)/W,(previousH-26)/previous_content_h)
+  savedH=min(1800,math.ceil(previousH+adjustment_row_h*previousScale))
+  BLT.store(SECTION,'window_h',tostring(savedH),true)
+ end
+ BLT.store(SECTION,'seam_controls_631','true',true)
 end
 Host.width=finite(savedW) and clamp(savedW,784,2200) or W
 Host.height=finite(savedH) and clamp(savedH,710,1800) or H+26
@@ -8494,9 +8337,10 @@ local function drawExecute(now)
  execution.busy,execution.progress=A.busy,A.busy and A.progress or completed and 1 or nil
  execution.caption=b and UI.render_stages[b.phase].caption or A.ajob and 'ANALYZING' or A.busy and (A.cue_job and 'UPDATING CUES' or 'WRITING WAV') or completed and 'COMPLETE' or 'RENDER'
  local title=A.busy and ('処理中'..(b and b.index>0 and string.format('  %d/%d',b.index,b.count) or '')) or 'レンダリング実行'
- if U:execute('execute',Language.message(title),335/density,764/density,310/density,52/density,execution) then UI.commit_edit();UI.render_mix() end
- hint('execute',b and '工程全体の進捗です。標準レンダー中の詳細はREAPERのレンダラーに表示されます。' or 'Master mixをレンダーして区間情報を埋め込む',335,764,310,52)
- if A.busy and (b or A.job or A.xjob or A.ajob or A.cue_job) then button('cancel',678,777,92,29,'中止',UI.cancel,'処理を中止',true,C.warn) end
+ local y=H-62
+ if U:execute('execute',Language.message(title),335/density,y/density,310/density,52/density,execution) then UI.commit_edit();UI.render_mix() end
+ hint('execute',b and '工程全体の進捗です。標準レンダー中の詳細はREAPERのレンダラーに表示されます。' or 'Master mixをレンダーして区間情報を埋め込む',335,y,310,52)
+ if A.busy and (b or A.job or A.xjob or A.ajob or A.cue_job) then button('cancel',678,y+13,92,29,'中止',UI.cancel,'処理を中止',true,C.warn) end
 end
 local function tooltip(now)
  if hintID~=tooltipID then tooltipID,tooltipSince=hintID,now end
@@ -8923,8 +8767,9 @@ function UI.draw(now)
  button('cues_read',192,251,224,28,'アイテムから読み出し',function() UI.item_embed('read') end,'選択アイテムの埋込情報をプロジェクトへ追加。元ファイルのキューは維持します。',true,nil,false,12)
  button('cues_append',426,251,270,28,'アイテムへ書き込み（追加）',function() UI.item_embed('append') end,'選択アイテム内のマーカー/リージョンを元WAV/AIFFへ追記。共有する全アイテムへ反映されます。ファイル更新はUndo対象外です。',true,nil,false,12)
  button('cues_clear',706,251,238,28,'アイテムのキューをクリア',function() UI.item_embed('clear') end,'選択アイテムの元WAV/AIFFから全キューを削除。共有する全アイテムへ反映されます。ファイル更新はUndo対象外です。',true,nil,false,12)
- panel(20,302,940,218,'ループ調整')
- local loop_state=A.loop_enable or {};local transport_ready=(R.GetPlayStateEx(A.project)&4)==0 and abs(R.Master_GetPlayRate(A.project)-1)<1e-9
+ panel(20,302,940,218+adjustment_row_h,'ループ調整')
+ local loop_state=A.loop_enable or {};local recording=(R.GetPlayStateEx(A.project)&4)~=0
+ local transport_ready=not recording and abs(R.Master_GetPlayRate(A.project)-1)<1e-9
  button('crossfade',36,341,228,28,'クロスフェードを適用',UI.crossfade,'レベル突出を抑える滑らかなカーブで指定時間分だけ加工。時間は2サンプル〜ループ長に自動補正',loop_state.crossfade and transport_ready,nil,true,12.5)
  label('時間',276,342,13,C.text,1,38,27,2|4,true)
  UI.field('xfade_seconds',317,337,110,true);label('s',435,345,12,C.faint,3,28,22,4,true)
@@ -8948,64 +8793,68 @@ function UI.draw(now)
  slide_toggle('auto_audition',36,475,428,'調整後、繋ぎ目を自動再生',A.auto_audition,function()
   A.auto_audition=not A.auto_audition;if not A.auto_audition then UI.stop_loop_audition(true) end;UI.refresh()
  end,'通常はループ末端の0.75秒前から再生。クロスフェード時はその開始点（最低0.75秒前）から再生し、1回ループした約1秒後に停止',not A.busy)
- UI.draw_seam(488,318,456,187)
- panel(20,534,940,209,'レンダリング設定')
- label('対象',36,580,13,C.text,1,138,22,4,true)
- button('master_mix',185,578,169,24,'マスターミックス',function() end,'マスターミックス\n現状マスターミックスのみ対応としています。',false)
- button('range_fixed',368,578,218,24,'選択リージョン',function() end,'選択リージョン\n現状選択リージョンの書き出しのみ対応しています。\nREAPER本体や、BLT MARKER REGION DESK等でリージョンを選択してください。',false)
+ local has_loop=loop_state.target~=nil or A.selected_sustain~=nil
+ button('play_seam',36,510,148,28,'繋ぎ目を再生',UI.navigate_loop,nil,has_loop and not recording,nil,true,12)
+ button('loop_start',192,510,132,28,'ループ開始点へ',UI.go_loop_start,nil,has_loop,nil,false,12)
+ button('loop_end',332,510,132,28,'ループ終了点へ',UI.go_loop_end,nil,has_loop,nil,false,12)
+ UI.draw_seam(488,318,456,187+adjustment_row_h)
+ panel(20,570,940,209,'レンダリング設定')
+ label('対象',36,616,13,C.text,1,138,22,4,true)
+ button('master_mix',185,614,169,24,'マスターミックス',function() end,'マスターミックス\n現状マスターミックスのみ対応としています。\n他の対象でレンダリングしたい場合は「BLT_DEDICATED_RENDER」を使用してください。',false)
+ button('range_fixed',368,614,218,24,'選択リージョン',function() end,'選択リージョン\n現状選択リージョンの書き出しのみ対応しています。\nREAPER本体や、BLT MARKER REGION DESK等でリージョンを選択してください。\n他の対象でレンダリングしたい場合は「BLT_DEDICATED_RENDER」を使用してください。',false)
 
- label('フォーマット',36,614,13,C.text,1,102,26,4,true)
- checkbox('format_defaults',145,614,439,'REAPER本体の設定を使用',A.use_format,function() A.use_format=not A.use_format;UI.refresh() end,'WAVのビット深度・サンプルレート・チャンネル数をREAPER本体から参照',true,12)
+ label('フォーマット',36,650,13,C.text,1,102,26,4,true)
+ checkbox('format_defaults',145,650,439,'REAPER本体の設定を使用',A.use_format,function() A.use_format=not A.use_format;UI.refresh() end,'WAVのビット深度・サンプルレート・チャンネル数をREAPER本体から参照',true,12)
  local f=A.format or {};local manual=not A.use_format
- label('形式',36,648,11,C.faint,1,92,20)
- label('ビット深度',146,648,11,C.faint,1,122,20)
- label('サンプルレート',284,648,11,C.faint,1,137,20)
- label('チャンネル',439,648,11,C.faint,1,140,20)
- button('format',36,670,96,24,'WAV',function() end,'WAV\n現状WAVのみ対応としています。\nOGG等への対応はしていません。',false)
- dropdown('bits',146,670,124,24,f.bits and (f.bits..(f.bits==32 and ' bit float' or ' bit PCM')) or '—',function()
+ label('形式',36,684,11,C.faint,1,92,20)
+ label('ビット深度',146,684,11,C.faint,1,122,20)
+ label('サンプルレート',284,684,11,C.faint,1,137,20)
+ label('チャンネル',439,684,11,C.faint,1,140,20)
+ button('format',36,706,96,24,'WAV',function() end,'他形式でレンダリングしたい場合は「BLT_DEDICATED_RENDER」を使用してください。',false)
+ dropdown('bits',146,706,124,24,f.bits and (f.bits..(f.bits==32 and ' bit float' or ' bit PCM')) or '—',function()
   UI.menu({16,24,32},A.bits,function(v) return v..(v==32 and ' bit float' or ' bit PCM') end,function(v) A.bits=v end)
  end,'WAVのビット深度',manual)
- dropdown('sr',284,670,141,24,f.sr and (f.sr..' Hz') or '—',function()
+ dropdown('sr',284,706,141,24,f.sr and (f.sr..' Hz') or '—',function()
   UI.menu(Core.sample_rates,A.sr,function(v) return v..' Hz' end,function(v) A.sr=v end)
  end,'出力サンプルレート',manual)
- dropdown('ch',439,670,145,24,f.channels and (f.channels==1 and 'Mono' or f.channels==2 and 'Stereo' or f.channels..' ch') or '—',function()
+ dropdown('ch',439,706,145,24,f.channels and (f.channels==1 and 'Mono' or f.channels==2 and 'Stereo' or f.channels..' ch') or '—',function()
   UI.menu(Core.channel_options,A.channels,function(v) return v==1 and 'Mono' or v==2 and 'Stereo' or v..' ch' end,function(v) A.channels=v end)
  end,'出力チャンネル数',manual)
- line(607,578,607,698,C.edge,.28)
- label('出力先',624,580,13,C.text,1,70,22,4,true)
+ line(607,614,607,734,C.edge,.28)
+ label('出力先',624,616,13,C.text,1,70,22,4,true)
  local dir=A.use_default_directory and (A.default_directory~='' and A.default_directory or '（プロジェクトの標準保存先）') or A.directory
  local name=A.use_default_filename and (A.default_pattern~='' and A.default_pattern or '（REAPERの既定名）') or (A.filename..'.wav')
- label('保存フォルダー',624,604,11,C.faint,1,58,26,4)
- checkbox('directory_defaults',686,604,258,'REAPER設定を使用',A.use_default_directory,function()
+ label('保存フォルダー',624,640,11,C.faint,1,58,26,4)
+ checkbox('directory_defaults',686,640,258,'REAPER設定を使用',A.use_default_directory,function()
  A.use_default_directory=not A.use_default_directory;UI.refresh()
 end,'保存フォルダーのみREAPER本体の設定を使用',true,11)
- if A.use_default_directory then button('dir_default',624,632,320,24,dir,function() end,dir,false)
+ if A.use_default_directory then button('dir_default',624,668,320,24,dir,function() end,dir,false)
  else
-  UI.field('directory',624,632,250,true,A,true,24)
-  button('dir_browse',882,632,62,24,'参照',UI.choose_directory,'保存フォルダーを選択',true,nil,true,11)
+  UI.field('directory',624,668,250,true,A,true,24)
+  button('dir_browse',882,668,62,24,'参照',UI.choose_directory,'保存フォルダーを選択',true,nil,true,11)
  end
- label('ファイル名',624,654,11,C.faint,1,58,26,4)
- checkbox('filename_defaults',686,654,258,'REAPER設定を使用',A.use_default_filename,function()
+ label('ファイル名',624,690,11,C.faint,1,58,26,4)
+ checkbox('filename_defaults',686,690,258,'REAPER設定を使用',A.use_default_filename,function()
  A.use_default_filename=not A.use_default_filename;UI.refresh()
 end,'ファイル名のみREAPER本体の設定を使用。ワイルドカードもREAPERで解決',true,11)
- if A.use_default_filename then button('name_default',624,682,320,24,name,function() end,name,false)
- else UI.field('filename',624,682,320,true,A,true,24) end
+ if A.use_default_filename then button('name_default',624,718,320,24,name,function() end,name,false)
+ else UI.field('filename',624,718,320,true,A,true,24) end
 
- line(36,709,944,709,C.edge,.28)
- slide_toggle('embed_markers',36,711,110,'マーカー',A.embed_markers,function()
+ line(36,745,944,745,C.edge,.28)
+ slide_toggle('embed_markers',36,747,110,'マーカー',A.embed_markers,function()
   A.embed_markers=not A.embed_markers;UI.refresh()
  end,'レンダー範囲内のマーカーをWAVへ埋め込み',not A.busy)
- slide_toggle('embed_regions',150,711,122,'リージョン',A.embed_regions,function()
+ slide_toggle('embed_regions',150,747,122,'リージョン',A.embed_regions,function()
   A.embed_regions=not A.embed_regions;UI.refresh()
  end,'レンダー範囲内の通常リージョンをWAVへ埋め込み',not A.busy)
- slide_toggle('embed_loop_region',276,711,176,'ループリージョン',A.embed_loop_region,function()
+ slide_toggle('embed_loop_region',276,747,176,'ループリージョン',A.embed_loop_region,function()
   A.embed_loop_region=not A.embed_loop_region;UI.refresh()
  end,'レンダー範囲内のサステインをWAVのループ情報として埋め込み',not A.busy)
- slide_toggle('exclude_selected_region',456,711,246,'選択中のリージョンを除外',A.exclude_selected_region,function()
+ slide_toggle('exclude_selected_region',456,747,246,'選択中のリージョンを除外',A.exclude_selected_region,function()
   A.exclude_selected_region=not A.exclude_selected_region;UI.refresh()
  end,'書き出し範囲として選択しているリージョンは埋め込まないようにします。\nただし、ループリージョン自体を選択して書き出した場合に、ループリージョンは除外しません。',not A.busy)
- label('マーカー文字コード設定',706,711,11.5,C.faint,1,132,26,2|4)
- dropdown('encoding',842,711,102,26,A.encoding,function()
+ label('マーカー文字コード設定',706,747,11.5,C.faint,1,132,26,2|4)
+ dropdown('encoding',842,747,102,26,A.encoding,function()
   UI.menu({'UTF-8','CP932'},A.encoding,nil,function(v) A.encoding=v end)
  end,ENCODING_HINT,true,11.5)
 
@@ -9019,7 +8868,7 @@ end,'ファイル名のみREAPER本体の設定を使用。ワイルドカード
  U.scale,U.ox,U.oy=scale,ox,oy+22*scale
  local footer=(A.warning or A.render_batch or completed) and A.status or (message~='' and message or A.status)
  if Media.waiting then footer=Media.message(SECTION) elseif BLT.notice then footer=BLT.notice end
- shell:footer(footer,A.warning or (not A.render_batch and A.problem),W,H,'0.6.29')
+ shell:footer(footer,A.warning or (not A.render_batch and A.problem),W,H,'0.6.33')
  U.scale,U.ox,U.oy=density*scale,ox,oy
  U.editor:frame()
  UI.draw_name_dialog();UI.draw_popup();UI.draw_period_notice(now)
