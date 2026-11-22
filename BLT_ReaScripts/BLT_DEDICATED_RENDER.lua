@@ -1,12 +1,12 @@
 -- @description BLT DEDICATED RENDER
--- @version 0.14.29
+-- @version 0.15.0
 -- @author Balrulu
 -- @provides
 --   . > ../
 -- @changelog
---   BLT SERIES Beta TEST UPLOAD
+--   public release
 -- @about
---   BLT SERIES Beta TEST UPLOAD
+--   BLT SERIES
 
 -- BEGIN BLT PORTABLE PATHS 1.0.0
 local BLTPaths=(function()
@@ -2991,7 +2991,7 @@ function Embed.write_chapters(path,plan,kind)
 end
 end
 
-local Model={VERSION='0.14.29',SOURCE_MASK=1|2|8|32|64|128|4096}
+local Model={VERSION='0.15.0',SOURCE_MASK=1|2|8|32|64|128|4096}
 Model.numbers={'RENDER_SETTINGS','RENDER_BOUNDSFLAG','RENDER_CHANNELS','RENDER_SRATE','RENDER_STARTPOS','RENDER_ENDPOS','RENDER_TAILFLAG','RENDER_TAILMS','RENDER_ADDTOPROJ','RENDER_DITHER','RENDER_NORMALIZE','RENDER_NORMALIZE_TARGET','RENDER_BRICKWALL','RENDER_FADEIN','RENDER_FADEOUT','RENDER_FADEINSHAPE','RENDER_FADEOUTSHAPE','RENDER_FADELPF','RENDER_PADSTART','RENDER_PADEND','RENDER_TRIMSTART','RENDER_TRIMEND','RENDER_DELAY'}
 Model.strings={'RENDER_FILE','RENDER_PATTERN','RENDER_EXTRAFILEDIR','RENDER_FORMAT2','RENDER_FORMAT'}
 Model.configs={'projrenderlimit','projrenderspeedcap','projrenderresample','projrenderrateinternal','renderclosewhendone','renderpeaks','projrenderqdelay','renderbsnew'}

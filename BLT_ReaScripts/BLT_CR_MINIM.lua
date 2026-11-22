@@ -1,12 +1,12 @@
 -- @description CR MINIM
--- @version 0.6.15
+-- @version 0.7.0
 -- @author Balrulu
 -- @provides
 --   . > ../
 -- @changelog
---   BLT SERIES Beta TEST UPLOAD
+--   public release
 -- @about
---   BLT SERIES Beta TEST UPLOAD
+--   BLT SERIES
 
 local reaper=reaper
 do
@@ -3904,7 +3904,7 @@ end
 local min,max,abs,floor=math.min,math.max,math.abs,math.floor
 local function finite(n) return type(n)=='number' and n==n and abs(n)<math.huge end
 local function clamp(n,a,b) return max(a,min(b,n)) end
-local Core={VERSION='0.6.5',SECTION='BLT_CR_MINIM'}
+local Core={VERSION='0.7.0',SECTION='BLT_CR_MINIM'}
 -- Presentation only: show message content without source locations or filenames.
 function Core.display_message(value)
  local text=tostring(value or '')

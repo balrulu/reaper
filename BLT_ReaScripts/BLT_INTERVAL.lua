@@ -1,12 +1,12 @@
 -- @description INTERVAL
--- @version 0.6.31
+-- @version 0.7.0
 -- @author Balrulu
 -- @provides
 --   . > ../
 -- @changelog
---   BLT SERIES Beta TEST UPLOAD
+--   public release
 -- @about
---   BLT SERIES Beta TEST UPLOAD
+--   BLT SERIES
 
 local reaper=reaper
 do
@@ -3089,7 +3089,7 @@ local function public_error(value,fallback)
   return text
 end
 local App={
-  version="0.6.31",section="BLT_INTERVAL",windowTitle="BLT Interval",
+  version="0.7.0",section="BLT_INTERVAL",windowTitle="BLT Interval",
   chromeTitle="I N T E R V A L",title="INTERVAL",
   subtitle="ITEM SPACING  アイテム間隔を整列",
 }

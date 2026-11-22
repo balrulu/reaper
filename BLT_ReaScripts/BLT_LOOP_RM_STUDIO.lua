@@ -1,12 +1,12 @@
 -- @description LOOP RM STUDIO
--- @version 0.6.36
+-- @version 0.7.0
 -- @author Balrulu
 -- @provides
 --   . > ../
 -- @changelog
---   BLT SERIES Beta TEST UPLOAD
+--   public release
 -- @about
---   BLT SERIES Beta TEST UPLOAD
+--   BLT SERIES
 
 local reaper=reaper
 do
@@ -3940,8 +3940,8 @@ local LanguageCatalog={en={
  ["周期を検出し補正"]="Detect and align to period",
  ["調整後、繋ぎ目を自動再生"]="Auto-play seam after adjustment",
  ["繋ぎ目を再生"]="Play Loop Seam",
- ["ループ開始点へ"]="Go to Loop Start",
- ["ループ終了点へ"]="Go to Loop End",
+ ["ループ先端へ"]="Go to Loop Start",
+ ["ループ末端へ"]="Go to Loop End",
  ["通常はループ末端の0.75秒前から再生。クロスフェード時はその開始点（最低0.75秒前）から再生し、1回ループした約1秒後に停止"]="Usually play from 0.75 s before loop end. With crossfade, start at its beginning (at least 0.75 s early); stop about 1 s after one loop.",
  ["レンダリング設定"]="RENDER SETTINGS",
  ["対象"]="Source",
@@ -8795,8 +8795,8 @@ function UI.draw(now)
  end,'通常はループ末端の0.75秒前から再生。クロスフェード時はその開始点（最低0.75秒前）から再生し、1回ループした約1秒後に停止',not A.busy)
  local has_loop=loop_state.target~=nil or A.selected_sustain~=nil
  button('play_seam',36,510,148,28,'繋ぎ目を再生',UI.navigate_loop,nil,has_loop and not recording,nil,true,12)
- button('loop_start',192,510,132,28,'ループ開始点へ',UI.go_loop_start,nil,has_loop,nil,false,12)
- button('loop_end',332,510,132,28,'ループ終了点へ',UI.go_loop_end,nil,has_loop,nil,false,12)
+ button('loop_start',192,510,132,28,'ループ先端へ',UI.go_loop_start,nil,has_loop,nil,false,12)
+ button('loop_end',332,510,132,28,'ループ末端へ',UI.go_loop_end,nil,has_loop,nil,false,12)
  UI.draw_seam(488,318,456,187+adjustment_row_h)
  panel(20,570,940,209,'レンダリング設定')
  label('対象',36,616,13,C.text,1,138,22,4,true)
@@ -8868,7 +8868,7 @@ end,'ファイル名のみREAPER本体の設定を使用。ワイルドカード
  U.scale,U.ox,U.oy=scale,ox,oy+22*scale
  local footer=(A.warning or A.render_batch or completed) and A.status or (message~='' and message or A.status)
  if Media.waiting then footer=Media.message(SECTION) elseif BLT.notice then footer=BLT.notice end
- shell:footer(footer,A.warning or (not A.render_batch and A.problem),W,H,'0.6.33')
+ shell:footer(footer,A.warning or (not A.render_batch and A.problem),W,H,'0.7.0')
  U.scale,U.ox,U.oy=density*scale,ox,oy
  U.editor:frame()
  UI.draw_name_dialog();UI.draw_popup();UI.draw_period_notice(now)

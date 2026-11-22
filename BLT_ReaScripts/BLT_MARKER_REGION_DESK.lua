@@ -1,12 +1,12 @@
 -- @description MARKER REGION DESK
--- @version 0.6.23
+-- @version 0.7.0
 -- @author Balrulu
 -- @provides
 --   . > ../
 -- @changelog
---   BLT SERIES Beta TEST UPLOAD
+--   public release
 -- @about
---   BLT SERIES Beta TEST UPLOAD
+--   BLT SERIES
 
 local reaper=reaper
 do
@@ -5251,7 +5251,7 @@ local function draw()
  local message=A.blt_status or (#A.items==0 and 'マーカー／リージョンがありません。' or string.format('%d件  選択 %d件',#A.items,A.selected_count or 0))
  local bad=A.blt_bad
  if BLT.notice then message,bad=BLT.notice,BLT.noticeBad end
- shell:footer(message,bad,W,H+22,'0.6.23')
+ shell:footer(message,bad,W,H+22,'0.7.0')
  shell:drawBar();drawContext()
  U.scale,U.ox,U.oy=density*scale,ox,oy
 end

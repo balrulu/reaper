@@ -1,12 +1,12 @@
 -- @description BATCH RENAME
--- @version 0.6.18
+-- @version 0.7.0
 -- @author Balrulu
 -- @provides
 --   . > ../
 -- @changelog
---   BLT SERIES Beta TEST UPLOAD
+--   public release
 -- @about
---   BLT SERIES Beta TEST UPLOAD
+--   BLT SERIES
 
 local reaper=reaper
 do
@@ -5344,7 +5344,7 @@ local function draw()
   end
   U.scale,U.ox,U.oy=scale,ox,oy+22*scale
   if BLT.notice then message,message_bad=BLT.notice,BLT.noticeBad end
-  shell:footer(message,message_bad,W,H,'0.6.4')
+  shell:footer(message,message_bad,W,H,'0.7.0')
   U.scale,U.ox,U.oy=density*scale,ox,oy
   draw_duplicate_modal();U:finish();pending();trackEdit();shell:drawBar();tooltip(U.now)
 end

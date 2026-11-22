@@ -1,12 +1,12 @@
 -- @description AUTO TRIM / SPLIT
--- @version 0.6.13
+-- @version 0.7.0
 -- @author Balrulu
 -- @provides
 --   . > ../
 -- @changelog
---   BLT SERIES Beta TEST UPLOAD
+--   public release
 -- @about
---   BLT SERIES Beta TEST UPLOAD
+--   BLT SERIES
 
 local reaper=reaper
 do
@@ -5354,7 +5354,7 @@ local function draw()
   local bad=A.bad
   if Media.waiting then message=Media.message(SECTION);bad=false
   elseif BLT.notice then message,bad=BLT.notice,BLT.noticeBad end
-  shell:footer(message~='' and message or (not A.ready and '音声アイテムを選択してください。' or ''),bad,W,H,'0.6.3')
+  shell:footer(message~='' and message or (not A.ready and '音声アイテムを選択してください。' or ''),bad,W,H,'0.7.0')
   shell:drawBar()
   U.scale,U.ox,U.oy=density*scale,ox,oy
 end

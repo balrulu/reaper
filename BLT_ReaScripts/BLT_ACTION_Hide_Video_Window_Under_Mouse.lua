@@ -1,12 +1,12 @@
 -- @description ACTION - Auto-hide video window under mouse (toggle)
--- @version 1.1.8
+-- @version 1.2.0
 -- @author Balrulu
 -- @provides
 --   . > ../
 -- @changelog
---   BLT SERIES ACTIONS
+--   public release
 -- @about
---   BLT SERIES Beta TEST UPLOAD
+--   BLT SERIES ACTIONS
 
 -- BEGIN BLT TOGGLE RESTORE EMBEDDED 1.4.1
 do

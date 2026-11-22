@@ -1,12 +1,12 @@
 -- @description ENVELOPE CANVAS ITEM
--- @version 0.7.18
+-- @version 0.8.0
 -- @author Balrulu
 -- @provides
 --   . > ../
 -- @changelog
---   BLT SERIES Beta TEST UPLOAD
+--   public release
 -- @about
---   BLT SERIES Beta TEST UPLOAD
+--   BLT SERIES
 
 local reaper=reaper
 do
@@ -4637,7 +4637,7 @@ function B.cleanup(fn,...)
  return ok,result
 end
 end
-local Core={VERSION='0.7.18',SECTION='BLT_ENVELOPE_CANVAS_ITEM',MAX_POINTS=1024}
+local Core={VERSION='0.8.0',SECTION='BLT_ENVELOPE_CANVAS_ITEM',MAX_POINTS=1024}
 local min,max,abs,floor,ceil=math.min,math.max,math.abs,math.floor,math.ceil
 local function clamp(v,a,b) return max(a,min(b,v)) end
 local function finite(v) return type(v)=='number' and v==v and abs(v)<math.huge end

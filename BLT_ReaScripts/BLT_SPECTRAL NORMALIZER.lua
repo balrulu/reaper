@@ -1,12 +1,12 @@
 -- @description SPECTRAL NORMALIZER
--- @version 0.6.15
+-- @version 0.7.0
 -- @author Balrulu
 -- @provides
 --   . > ../
 -- @changelog
---   BLT SERIES Beta TEST UPLOAD
+--   public release
 -- @about
---   BLT SERIES Beta TEST UPLOAD
+--   BLT SERIES
 
 -- BLT external storage 1.1.0. Embedded; large data stays beside this script.
 local reaper=reaper
@@ -3546,7 +3546,7 @@ end)()
 -- END BLT MEDIA GATE
 local mediaGraphics={}
 local Media,reaper=create_media_gate(reaper,mediaGraphics)
-local Core={VERSION='0.6.4',SECTION='BLT_SPECTRAL_NORMALIZER',MAX_POINTS=1024}
+local Core={VERSION='0.7.0',SECTION='BLT_SPECTRAL_NORMALIZER',MAX_POINTS=1024}
 local abs,min,max,sqrt,log,pi,floor,ceil=math.abs,math.min,math.max,math.sqrt,math.log,math.pi,math.floor,math.ceil
 local function clamp(x,a,b) return min(b,max(a,x)) end
 local function finite(x) return type(x)=='number' and x==x and abs(x)<math.huge end

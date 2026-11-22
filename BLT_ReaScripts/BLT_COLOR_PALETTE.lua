@@ -1,12 +1,12 @@
 -- @description COLOR PALETTE
--- @version 0.6.13
+-- @version 0.7.0
 -- @author Balrulu
 -- @provides
 --   . > ../
 -- @changelog
---   BLT SERIES Beta TEST UPLOAD
+--   public release
 -- @about
---   BLT SERIES Beta TEST UPLOAD
+--   BLT SERIES
 
 local reaper=reaper
 do
@@ -3102,7 +3102,7 @@ end)()
 local gfx,Host,U,shell,menu,controls,C,label
 local R=reaper
 local SECTION='BLT_COLOR_PALETTE'
-local VERSION='0.6.5'
+local VERSION='0.7.0'
 local function dependencies()
  local osname=R.GetOS() or ''
  if not (osname:match('Win') or osname:match('OSX') or osname:match('macOS')) then return false,'WindowsまたはmacOSが必要です。' end

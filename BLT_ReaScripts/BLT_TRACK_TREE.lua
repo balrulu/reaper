@@ -1,12 +1,12 @@
 -- @description TRACK TREE
--- @version 0.3.26
+-- @version 0.4.0
 -- @author Balrulu
 -- @provides
 --   . > ../
 -- @changelog
---   BLT SERIES Beta TEST UPLOAD
+--   public release
 -- @about
---   BLT SERIES Beta TEST UPLOAD
+--   BLT SERIES
 
 local AppCanvasHost=(function()
 local M={}
@@ -4849,7 +4849,7 @@ local function draw()
  local message=A.message~=''and A.message or string.format(Language.text('%dトラック / 選択 %d'),#A.rows,count)
  gfx.textRoute(true)
  label(message,12,gfx.h-19,gfx.w-72,18,8,A.bad and C.red or C.muted)
- label('v0.3.20',gfx.w-56,gfx.h-19,44,18,8,C.faint,false,2,3,true)
+ label('v0.4.0',gfx.w-56,gfx.h-19,44,18,8,C.faint,false,2,3,true)
  gfx.textRoute(false)
  TreeUI:finish();tree_animation();BLT.bar();gfx.update()
 end

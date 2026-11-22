@@ -1,12 +1,12 @@
 -- @description SIMPLE NORMALIZER
--- @version 0.6.11
+-- @version 0.7.0
 -- @author Balrulu
 -- @provides
 --   . > ../
 -- @changelog
---   BLT SERIES Beta TEST UPLOAD
+--   public release
 -- @about
---   BLT SERIES Beta TEST UPLOAD
+--   BLT SERIES
 
 local reaper=reaper
 do
@@ -5517,7 +5517,7 @@ local function draw()
  if rateWarning and not A.bad then msg='速度変更あり：1.0倍速換算の測定値です（実再生値とは異なる場合があります）' end
  if Media.waiting then msg=Media.message(SECTION) elseif BLT.notice then msg=BLT.notice end
  U.scale,U.ox,U.oy=scale,ox,oy+22*scale
- shell:footer(msg,A.bad or rateWarning or BLT.noticeBad,W,H,'0.6.1',analysis_progress())
+ shell:footer(msg,A.bad or rateWarning or BLT.noticeBad,W,H,'0.7.0',analysis_progress())
  U.scale,U.ox,U.oy=density*scale,ox,oy;shell:drawBar()
 end
 Host:bindShortcuts()

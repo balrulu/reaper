@@ -1,12 +1,12 @@
 -- @description MINIMAL INFO PANEL
--- @version 0.2.44
+-- @version 0.3.0
 -- @author Balrulu
 -- @provides
 --   . > ../
 -- @changelog
---   BLT SERIES Beta TEST UPLOAD
+--   public release
 -- @about
---   BLT SERIES Beta TEST UPLOAD
+--   BLT SERIES
 
 -- BLT preset transfer limits 1.1.0. Embedded; no runtime dependency.
 local AppCanvasHost=(function()

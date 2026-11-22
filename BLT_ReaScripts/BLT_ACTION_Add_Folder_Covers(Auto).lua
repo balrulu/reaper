@@ -1,12 +1,12 @@
 -- @description ACTION - Add Folder Covers (Auto)
--- @version 1.0.20
+-- @version 1.1.0
 -- @author Balrulu
 -- @provides
 --   . > ../
 -- @changelog
---   BLT SERIES ACTIONS
+--   public release
 -- @about
---   BLT SERIES Beta TEST UPLOAD
+--   BLT SERIES ACTIONS
 
 -- BEGIN BLT TOGGLE RESTORE EMBEDDED 1.4.1
 local reaper=reaper

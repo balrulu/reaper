@@ -1,12 +1,12 @@
 -- @description ACTION - Open selected item in external editor (original or glued range)
--- @version 1.0.5
+-- @version 1.1.0
 -- @author Balrulu
 -- @provides
 --   . > ../
 -- @changelog
---   BLT SERIES ACTIONS
+--   public release
 -- @about
---   BLT SERIES Beta TEST UPLOAD
+--   BLT SERIES ACTIONS
 
 local reaper=reaper
 do

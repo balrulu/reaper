@@ -1,12 +1,12 @@
 -- @description LOUDNESS TRACE
--- @version 0.8.23
+-- @version 0.9.0
 -- @author Balrulu
 -- @provides
 --   . > ../
 -- @changelog
---   BLT SERIES Beta TEST UPLOAD
+--   public release
 -- @about
---   BLT SERIES Beta TEST UPLOAD
+--   BLT SERIES
 
 local reaper=reaper
 do
@@ -3360,7 +3360,7 @@ end)()
 
 local Media=create_media_gate(reaper,mediaGraphics,{selectedOnly=true})
 
-local VERSION="0.8.23"
+local VERSION="0.9.0"
 local MAX_HISTORY_ROWS=126000
 local MAX_SAVE_BYTES=12*1024*1024
 local Core = {}

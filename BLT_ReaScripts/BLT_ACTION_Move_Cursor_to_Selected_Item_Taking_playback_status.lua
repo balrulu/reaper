@@ -1,12 +1,12 @@
 -- @description ACTION - Move Cursor to Selected Item Taking playback status
--- @version 1.0.2
+-- @version 1.1.0
 -- @author Balrulu
 -- @provides
 --   . > ../
 -- @changelog
---   BLT SERIES ACTIONS
+--   public release
 -- @about
---   BLT SERIES Beta TEST UPLOAD
+--   BLT SERIES ACTIONS
 
 reaper.defer(function() end)
 
