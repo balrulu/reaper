@@ -1236,16 +1236,30 @@ function M.new(api,title,width,height,section)
  local fontCount,epoch=0,0
  local gradients,gradientSlots,gradientNext={},{},0
  local recording,gradientPixels=nil,0
- local gradientImages,gradientTrimFrame={},-60
+ local gradientImages,gradientUnused,gradientTime,gradientTrimAt={},0,0,0
  local function releaseGradient(entry)
-  if entry.image then entry.image.owner=nil;entry.image=nil end
+  if not entry.image then return end
+  entry.image.owner=nil;entry.image=nil
+  if gradientUnused==0 then gradientTrimAt=max(gradientTrimAt,gradientTime+1) end
+  gradientUnused=gradientUnused+1
+ end
+ local function trimGradients()
+  if gradientUnused==0 or gradientTime<gradientTrimAt or H.resourceHold then return end
+  gradientTrimAt=gradientTime+1
+  for i=#gradientImages,1,-1 do
+   local image=gradientImages[i]
+   if not image.owner and image.frame<gradientFrame-1 then
+    H:releaseImage(image.image,true);gradientPixels=gradientPixels-image.area
+    gradientUnused=gradientUnused-1;table.remove(gradientImages,i)
+   end
+  end
  end
  local function clearGradients()
   for _,entry in pairs(gradients) do releaseGradient(entry) end
   gradients,gradientSlots,gradientNext={},{},0
  end
  local function cacheGradient(entry)
-  if entry.count==0 or entry.vectorOnly or not api.new_array or not I.CreateImageFromSize or (H.gradientBuilds or 0)>0 or entry.hits<2 then return end
+  if entry.count==0 or entry.vectorOnly or H.resourceHold or not api.new_array or not I.CreateImageFromSize or (H.gradientBuilds or 0)>0 or entry.hits<3 then return end
   local dpi=entry.dpi;local ox,oy=H.originX,H.originY
   local left,top,right,bottom=math.huge,math.huge,-math.huge,-math.huge
   for i=1,entry.count do
@@ -1255,26 +1269,10 @@ function M.new(api,title,width,height,section)
   end
   local w,h=right-left,bottom-top
   if w<1 or h<1 or w*h>262144 then return end
-  local slot
-  for _,image in ipairs(gradientImages) do
-   if not H.resourceHold and not image.owner and image.frame<gradientFrame-1 and image.w>=w and image.h>=h and
-    (not slot or image.w*image.h<slot.w*slot.h) then slot=image end
-  end
   local iw,ih=ceil(w/16)*16,ceil(h/8)*8
-  if not slot then
-   if iw*ih>262144 then return end
-   if (#gradientImages>=96 or gradientPixels+iw*ih>2097152) and
-    gradientFrame-gradientTrimFrame>=60 and not H.resourceHold then
-    gradientTrimFrame=gradientFrame
-    for i=#gradientImages,1,-1 do
-     local image=gradientImages[i]
-     if not image.owner and image.frame<gradientFrame-1 then
-      H:releaseImage(image.image,true);gradientPixels=gradientPixels-image.w*image.h;table.remove(gradientImages,i)
-     end
-    end
-   end
-   if #gradientImages>=96 or gradientPixels+iw*ih>2097152 then return end
-  end
+  local area=iw*ih
+  if area>262144 then return end
+  if #gradientImages>=96 or gradientPixels+area>2097152 then return end
   local direct,boxes={},{}
   if entry.uncertain then
    local epsilon=1/256
@@ -1315,14 +1313,14 @@ function M.new(api,title,width,height,section)
     end
    end
   end
-  if not slot then
-   slot={image=I.CreateImageFromSize(iw,ih),w=iw,h=ih};H:attachImage(slot.image)
-   gradientImages[#gradientImages+1]=slot;gradientPixels=gradientPixels+iw*ih
-  end
-  I.Image_SetPixels_Array(slot.image,0,0,w,h,api.new_array(pixels))
-  slot.owner,slot.frame=entry,gradientFrame
+  -- A viewport can skip rendering and leave texture updates pending in ReaImGui.
+  local image=I.CreateImageFromSize(iw,ih)
+  I.Image_SetPixels_Array(image,0,0,w,h,api.new_array(pixels))
+  H:attachImage(image)
+  local slot={image=image,area=area,owner=entry,frame=gradientFrame}
+  gradientImages[#gradientImages+1]=slot;gradientPixels=gradientPixels+area
   entry.image,entry.imageX,entry.imageY,entry.imageW,entry.imageH=slot,left/dpi-ox,top/dpi-oy,w/dpi,h/dpi
-  entry.imageU,entry.imageV=w/slot.w,h/slot.h
+  entry.imageU,entry.imageV=w/iw,h/ih
   local vectors={}
   for i=1,entry.count do if direct[i] then vectors[#vectors+1]=entry.runs[i] end end
   entry.runs=vectors;entry.count=#vectors
@@ -1690,6 +1688,8 @@ function M.new(api,title,width,height,section)
   if gradientFrame%60==1 then self:retainResources() end
   if shown and previouslyShown==false then self.visibilitySettle=4 end
   self.resourceHold=self.imageHold or not shown or (self.visibilitySettle or 0)>0
+  gradientTime=now
+  trimGradients()
   if not shown then return false end
   self.seenWindow=true
   local dpi=I.GetWindowDpiScale(ctx)
