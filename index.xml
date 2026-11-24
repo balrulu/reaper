@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<index version="1" name="BLT ReaScripts" commit="59fcbb6219d03f6998b53c216683dbd151f8ca4e">
+<index version="1" name="BLT ReaScripts" commit="3c1fc33c2efe97af01728bc3ea908b66a008cfe2">
   <category name="BLT">
     <reapack name="BLT_SPATIAL_FIELD.jsfx" type="effect" desc="SPATIAL FIELD">
       <metadata>
@@ -11,7 +11,6 @@
 }
 ]]></description>
       </metadata>
-      
       <version name="0.6.1" author="Balrulu" time="2026-11-22T17:09:49Z">
         <changelog><![CDATA[public release]]></changelog>
         <source>https://github.com/balrulu/reaper/raw/59fcbb6219d03f6998b53c216683dbd151f8ca4e/BLT/BLT_SPATIAL_FIELD.jsfx</source>
@@ -165,7 +164,6 @@
 }
 ]]></description>
       </metadata>
-      
       <version name="0.15.1" author="Balrulu" time="2026-11-22T17:09:26Z">
         <changelog><![CDATA[public release]]></changelog>
         <source main="main" file="../BLT_DEDICATED_RENDER.lua">https://github.com/balrulu/reaper/raw/c436e12df22bb244a4cc10d7d2c8e8ab78de3645/BLT_ReaScripts/BLT_DEDICATED_RENDER.lua</source>
@@ -241,9 +239,10 @@
 }
 ]]></description>
       </metadata>
-      <version name="0.9.0" author="Balrulu" time="2026-11-22T16:42:25Z">
+      
+      <version name="0.9.4" author="Balrulu" time="2026-11-24T09:49:16Z">
         <changelog><![CDATA[public release]]></changelog>
-        <source main="main" file="../BLT_LOUDNESS_TRACE.lua">https://github.com/balrulu/reaper/raw/a479a2ab309eab68158e223b3238a94db2187780/BLT_ReaScripts/BLT_LOUDNESS_TRACE.lua</source>
+        <source main="main" file="../BLT_LOUDNESS_TRACE.lua">https://github.com/balrulu/reaper/raw/3c1fc33c2efe97af01728bc3ea908b66a008cfe2/BLT_ReaScripts/BLT_LOUDNESS_TRACE.lua</source>
       </version>
     </reapack>
     <reapack name="BLT_MARKER_REGION_DESK.lua" type="script" desc="MARKER REGION DESK">
