@@ -1,5 +1,5 @@
 -- @description LOUDNESS TRACE
--- @version 0.9.0
+-- @version 0.9.4
 -- @author Balrulu
 -- @provides
 --   . > ../
@@ -3360,7 +3360,7 @@ end)()
 
 local Media=create_media_gate(reaper,mediaGraphics,{selectedOnly=true})
 
-local VERSION="0.9.0"
+local VERSION="0.9.4"
 local MAX_HISTORY_ROWS=126000
 local MAX_SAVE_BYTES=12*1024*1024
 local Core = {}
@@ -4349,7 +4349,7 @@ local LanguageCatalog={en={
  ["測定開始前に時間選択が変更されました。"]="Time selection changed before measurement started.",
  ["LOUDNESS TRACE | 解析"]="LOUDNESS TRACE | Analysis",
  ["LOUDNESS TRACE | 保存"]="LOUDNESS TRACE | Save",
- ["目標"]="Aim",
+ ["目標"]="Target",
  ["ドッキング中はウィンドウを縮小できません。\nフローティング表示で使用してください。"]="Cannot collapse while docked.\nUse a floating window.",
  ["中止"]="Stop",
  ["解析"]="Analyze",
@@ -4360,6 +4360,9 @@ local LanguageCatalog={en={
  ["グラフ "]="Graph ",
  ["警告表示"]="WARNINGS",
  ["補助表示"]="GUIDES",
+ ["グリッド"]="Grid",
+ ["許容"]="Tol.",
+ ["グラフ"]="Graph",
  ["上限"]="Upper",
  ["超過"]="Above",
  ["下限"]="Lower",
@@ -4813,10 +4816,14 @@ local C={bg={.018,.030,.055},panel={.040,.068,.110},field={.018,.040,.080},
   edge={.145,.285,.445},text={.955,.980,1},muted={.690,.780,.875},
   faint={.390,.505,.635},accent={.120,.490,.980},ice={.650,.895,1},
   deep={.045,.235,.520},warn={1,.65,.35},mint={.38,.88,.72},red={1,.27,.34},purple={.77,.64,1},gold={1,.80,.39}}
+Core.guide_keys={'s','m','i'}
+function Core.guide_defaults()
+  return {grid=true,target={s=false,m=false,i=false},tolerance={s=true,m=true,i=true}}
+end
 local S={lo=-60,hi=0,visible=true,height=280,
   show={s=true,m=true,i=true,rms=false,peak=false},
   targets={s={-23,3},m={-23,3},i={-23,1}},source="master",
-  alertUpper=false,alertLower=false,alertPeak=false}
+  alertUpper=false,alertLower=false,alertPeak=false,guides=Core.guide_defaults()}
 -- LIVE meter / embedded JSFX
 local Live={enabled=false,protocol=2,memory='BLT_LOUDNESS_TRACE_RT_V2',fx_relative='BLT/BLT_Loudness_Trace_Live.jsfx'}
 Live.jsfx=[==[
@@ -5211,10 +5218,16 @@ end
 local function save_settings()
   local fields={S.source,tostring(S.height),tostring(S.lo),tostring(S.hi)}
   for _,v in ipairs({S.show.s,S.show.m,S.show.i,S.show.rms,S.show.peak}) do fields[#fields+1]=v and '1' or '0' end
-  for _,k in ipairs({'s','m','i'}) do fields[#fields+1]=tostring(S.targets[k][1]);fields[#fields+1]=tostring(S.targets[k][2]) end
+  for _,k in ipairs(Core.guide_keys) do fields[#fields+1]=tostring(S.targets[k][1]);fields[#fields+1]=tostring(S.targets[k][2]) end
   fields[#fields+1]=S.alertUpper and '1' or '0'
   fields[#fields+1]=S.alertLower and '1' or '0'
   fields[#fields+1]=S.alertPeak and '1' or '0'
+  local guides=S.guides
+  fields[#fields+1]=guides.grid and '1' or '0'
+  for _,k in ipairs(Core.guide_keys) do
+    fields[#fields+1]=guides.target[k] and '1' or '0'
+    fields[#fields+1]=guides.tolerance[k] and '1' or '0'
+  end
   R.SetProjExtState(A.project,PROJECT_SECTION,'settings',table.concat(fields,';'))
 end
 local function load_settings()
@@ -5222,13 +5235,14 @@ local function load_settings()
   S.show={s=true,m=true,i=true,rms=false,peak=false}
   S.targets={s={-23,3},m={-23,3},i={-23,1}}
   S.alertUpper=false;S.alertLower=false;S.alertPeak=false
+  S.guides=Core.guide_defaults()
   local _,layout=R.GetProjExtState(A.project,PROJECT_SECTION,'measurement_layout')
   local _,legacy=R.GetProjExtState(A.project,SECTION,'measurement_layout');A.layoutLegacy=legacy~=''
   for _,v in ipairs(Core.layouts) do if v.id==legacy then layout=legacy end end
   A.layout='stereo';for _,v in ipairs(Core.layouts) do if v.id==layout then A.layout=layout end end
   local _,raw=R.GetProjExtState(A.project,PROJECT_SECTION,'settings')
   local f={};for v in raw:gmatch('[^;]+') do f[#f+1]=v end
-  if #f~=18 or f[1]~='master' then return end
+  if (#f~=18 and #f~=25) or f[1]~='master' then return end
   S.source='master';S.height=Core.clamp(tonumber(f[2]) or 280,180,800)
   local lo,hi=tonumber(f[3]),tonumber(f[4])
   if Core.finite(lo) and Core.finite(hi) and Core.finite(hi-lo) and hi-lo>1e-6 then
@@ -5237,7 +5251,7 @@ local function load_settings()
     if hi>lo then S.lo,S.hi=lo,hi end
   end
   S.show.s=f[5]=='1';S.show.m=f[6]=='1';S.show.i=f[7]=='1';S.show.rms=f[8]=='1';S.show.peak=f[9]=='1'
-  for j,k in ipairs({'s','m','i'}) do
+  for j,k in ipairs(Core.guide_keys) do
     local base=8+j*2
     local t,e=tonumber(f[base]),tonumber(f[base+1])
     if Core.finite(t) and Core.finite(e) and e>=0 then
@@ -5245,6 +5259,14 @@ local function load_settings()
     end
   end
   S.alertUpper=f[16]=='1';S.alertLower=f[17]=='1';S.alertPeak=f[18]=='1'
+  if #f==25 then
+    local guides=S.guides
+    guides.grid=f[19]~='0'
+    for j,k in ipairs(Core.guide_keys) do
+      guides.target[k]=f[18+j*2]=='1'
+      guides.tolerance[k]=f[19+j*2]~='0'
+    end
+  end
 end
 -- Snapshot ownership is explicit. Never delete by subtracting an enumeration
 -- from the reference set: enumeration output/case is not an ownership proof.
@@ -6117,9 +6139,13 @@ local function chart(width,height,first,last)
   local function yy(v) return Core.level_y(v,top,bottom,S.lo,S.hi) end
   local function xx(t) return Core.time_x(t,first,last,width) end
   local step=Core.tick_step(last-first,width)
-  for t=math.ceil(first/step)*step,last,step do lline(xx(t),top,xx(t),bottom,C.edge,.42) end
+  local firstTick=math.ceil(first/step)*step
   local ticks=Core.axis_ticks(S.lo,S.hi,bottom-top)
-  for _,v in ipairs(ticks) do lline(0,yy(v),width,yy(v),C.edge,.6) end
+  local guides=S.guides
+  if guides.grid then
+    for t=firstTick,last,step do local x=xx(t);lline(x,top,x,bottom,C.edge,.42) end
+    for _,v in ipairs(ticks) do local y=yy(v);lline(0,y,width,y,C.edge,.6) end
+  end
   local colors={s=C.ice,m=C.mint,i=C.purple,rms=C.gold,peak=C.faint}
   local data=A.data
   if data then
@@ -6136,17 +6162,24 @@ local function chart(width,height,first,last)
    for _,range in ipairs(ranges) do
      local ax,bx=range[1],range[2]
      lrect(ax,top,bx-ax,bottom-top,C.accent,.035)
-     for _,key in ipairs({'s','m','i'}) do
-       if S.show[key] then
+     for _,key in ipairs(Core.guide_keys) do
+       if S.show[key] and (guides.target[key] or guides.tolerance[key]) then
          local target=S.targets[key]
-         for j,v in ipairs({target[1]-target[2],target[1]+target[2]}) do
-           if v>=S.lo and v<=S.hi and (j==1 or target[2]~=0) then
-             local y=yy(v)
-             for x=floor(ax/14)*14,bx,14 do
-               local left,right=max(ax,x),min(bx,x+5)
-               if right>left then lline(left,y,right,y,colors[key],.23) end
+         local aim,tolerance=target[1],target[2]
+         if guides.tolerance[key] then
+           for j=1,tolerance==0 and 1 or 2 do
+             local v=aim+(j==1 and -tolerance or tolerance)
+             if v>=S.lo and v<=S.hi then
+               local y=yy(v)
+               for x=floor(ax/14)*14,bx,14 do
+                 local left,right=max(ax,x),min(bx,x+5)
+                 if right>left then lline(left,y,right,y,colors[key],.23) end
+               end
              end
            end
+         end
+         if guides.target[key] and aim>=S.lo and aim<=S.hi then
+           local y=yy(aim);lline(ax,y,bx,y,colors[key],.53)
          end
        end
      end
@@ -6210,7 +6243,7 @@ local function chart(width,height,first,last)
   end
   if width>370 then ltext(Live.enabled and (Live.phase=='writing' and 'LIVE / RECORDING' or 'LIVE / WAIT') or (data and (A.stale and 'SAVED / RE-MEASURE' or 'MEASURED') or 'NO MEASUREMENT'),width-185,5,180,Live.enabled and C.mint or A.stale and C.gold or C.faint) end
   ltext((S.show.rms or S.show.peak) and 'LUFS / dBFS' or 'LUFS',7,height-20,110,C.faint)
-  for t=math.ceil(first/step)*step,last,step do
+  for t=firstTick,last,step do
     local x=xx(t); if x>115 and x<width-64 then ltext(Core.clock(t),x+3,height-20,85,C.faint) end
   end
 end
@@ -6539,8 +6572,11 @@ local function change_height(h)
   end
   A.cache=""
 end
-local function edited()
+local function edited(visualOnly)
+  local current=visualOnly and A.data and not A.stale and R.GetProjectStateChangeCount(A.project)==A.baseline
   A.revision=A.revision+1;save_settings()
+  if current then A.baseline=R.GetProjectStateChangeCount(A.project) end
+  if visualOnly then A.cache='' end
 end
 
 function A.flash_field(id) U:flash(id);A.flashUntil=R.time_precise()+.9;wake_visuals() end
@@ -6711,7 +6747,7 @@ local function tcp_button(now)
 end
 
 
-BLT.factorySettings={lo=-60,hi=0,visible=true,height=280,show={s=true,m=true,i=true,rms=false,peak=false},targets={s={-23,3},m={-23,3},i={-23,1}},source="master",alertUpper=false,alertLower=false,alertPeak=false}
+BLT.factorySettings={lo=-60,hi=0,visible=true,height=280,show={s=true,m=true,i=true,rms=false,peak=false},targets={s={-23,3},m={-23,3},i={-23,1}},source="master",alertUpper=false,alertLower=false,alertPeak=false,guides=Core.guide_defaults()}
 function Live.warnings(data)
   local run=Live.run;local h=run.summary;local a,b=S.targets.s,S.targets.m
   if h.targets.s[1]~=a[1] or h.targets.s[2]~=a[2] or h.targets.m[1]~=b[1] or h.targets.m[2]~=b[2] then
@@ -6895,6 +6931,9 @@ function BLT.blocked() return shell.popupOpen or Host.drag~=nil or gfx.mouse_y<2
 BLT.host={wake=wake_visuals}
 Media.state=A;Media.onchange=wake_visuals;Media.all_items=true
 BLT.attachPresets({presetLoaded=function(name)shell:showPresetName(name)end,R=R,section=SECTION,defaults=BLT.factorySettings,capture=function() return S end,
+ upgrade=function(v)
+  if type(v)=='table' and v.guides==nil then v.guides=Core.guide_defaults() end
+ end,
  valid=function(v)
   if v.lo< -120 or v.hi>24 or v.lo>=v.hi or v.height<100 or v.height>1000 or v.source~='master' then return false end
   for _,t in pairs(v.targets) do if #t~=2 or t[1]< -120 or t[1]>24 or t[2]<0 or t[2]>120 then return false end end
@@ -6904,7 +6943,7 @@ BLT.attachPresets({presetLoaded=function(name)shell:showPresetName(name)end,R=R,
   for k,x in pairs(v) do S[k]=x end
   if hc then change_height(S.height) end
   if vc then set_graph_track_visible(S.visible) end
-  edited();wake_visuals()
+  edited(not hc and not vc);wake_visuals()
  end,busy=function() return A.job~=nil or A.windowTransition~=nil end,commit=commit_edit,
  cancelEdit=function() commit_edit(true);release() end,wake=wake_visuals})
 local presetDirty=Presets.dirty
@@ -6919,6 +6958,7 @@ end
 local defaultOptions={size=12/density,bold=true}
 local clearOptions={variant='clear',size=12/density,bold=true}
 local toggleOptions={size=12/density,bold=true,led='left'}
+local graphToggleOptions={size=10/density,bold=true,led='left'}
 local execution={cancelable=true,autoComplete=false,finishWhenDisabled=true,bold=true}
 local function execution_button(label,x,y,w,h,caption)
  local compact=A.collapsed
@@ -6932,17 +6972,55 @@ local function execution_button(label,x,y,w,h,caption)
 end
 local function button(id,label,x,y,w,h,fn,primary,selected,eyebrow)
  if primary then execution_button(label,x,y,w,h,eyebrow);return end
- local enabled=id~='clear' or not A.job and (A.data~=nil or Live.enabled)
+ local enabled=(id~='clear' or not A.job and (A.data~=nil or Live.enabled)) and (id~='grid' or not A.job)
  controls:button(id,Language.message(label),x,y,w,h,enabled,selected,nil,id=='clear' and clearOptions or defaultOptions)
  register(id,x,y,w,h,fn,enabled)
 end
-local function toggle(key,label,x,y,w,h)
- controls:button('toggle_'..key,Language.message(label),x,y,w,h,true,S.show[key],nil,toggleOptions)
+local function toggle(key,label,x,y,w,h,options)
+ controls:button('toggle_'..key,Language.message(label),x,y,w,h,true,S.show[key],nil,options or toggleOptions)
  register('toggle_'..key,x,y,w,h,function()
   S.show[key]=not S.show[key]
   if S.show[key] and not graph_track_is_visible() then set_graph_track_visible(true) end
   edited();wake_visuals()
  end)
+end
+local function guide_checkbox(key,kind,label,x,y)
+ I.SetCursorScreenPos(ctx,x,y)
+ local settings=S.guides[kind]
+ local clicked,value=I.Checkbox(ctx,label..'###trace_'..kind..'_'..key,settings[key])
+ if clicked then settings[key]=value end
+ return clicked
+end
+local graphRowY,graphRowHeight=286,30
+local function draw_guide_checkboxes()
+ local packed=Host.rgba
+ I.PushFont(ctx,Host.font,max(6,floor(10*scale+.5)))
+ I.PushItemFlag(ctx,I.ItemFlags_NoNav,true)
+ I.PushStyleVar(ctx,I.StyleVar_FramePadding,0,0)
+ I.PushStyleVar(ctx,I.StyleVar_ItemInnerSpacing,2*scale,0)
+ I.PushStyleVar(ctx,I.StyleVar_FrameBorderSize,1)
+ I.PushStyleColor(ctx,I.Col_Text,packed(table.unpack(C.muted,1,3)))
+ I.PushStyleColor(ctx,I.Col_Border,packed(table.unpack(C.edge2,1,3)))
+ I.PushStyleColor(ctx,I.Col_CheckMark,packed(table.unpack(C.ice,1,3)))
+ I.PushStyleColor(ctx,I.Col_FrameBg,packed(table.unpack(C.field,1,3)))
+ I.PushStyleColor(ctx,I.Col_FrameBgHovered,packed(table.unpack(C.panel2,1,3)))
+ I.PushStyleColor(ctx,I.Col_FrameBgActive,packed(table.unpack(C.panel2,1,3)))
+ local left=Host.originX+ox
+ local y=Host.originY+oy+(graphRowY+graphRowHeight*.5)*scale-I.GetFrameHeight(ctx)*.5
+ local target,tolerance=Language.message('目標'),Language.message('許容')
+ local blocked=A.job~=nil or shell.popupOpen or UI.layoutOpen or Host.drag~=nil or A.windowTransition~=nil
+ local changed=false
+ for j,key in ipairs(Core.guide_keys) do
+  local x=24+(j-1)*204
+  local disabled=blocked or not S.show[key]
+  if disabled then I.BeginDisabled(ctx,true) end
+  local goalClicked=guide_checkbox(key,'target',target,left+(x+95)*scale,y)
+  local tolClicked=guide_checkbox(key,'tolerance',tolerance,left+(x+147)*scale,y)
+  if disabled then I.EndDisabled(ctx) end
+  changed=changed or goalClicked or tolClicked
+ end
+ I.PopStyleColor(ctx,6);I.PopStyleVar(ctx,3);I.PopItemFlag(ctx);I.PopFont(ctx)
+ if changed then edited(true);wake_visuals() end
 end
 local switchOptions={background=false,showState=false,switchScale=24/(44*density),size=12/density,labelOffset=32/density,bold=true}
 local liveOptions={bold=true}
@@ -6961,6 +7039,7 @@ function Live.draw_button(x,y,w,h,compact)
  register('live',x,y,w,h,function() commit_edit();Live.toggle();wake_visuals() end,enabled)
 end
 local numberOptions={left=36,right=5,size=13}
+local targetNumberOptions={left=41,right=5,size=13}
 local numberCache={}
 local function number_field(id,label,x,y,w,get,set,step,h,normalize,digits)
  h=h or 28
@@ -6968,9 +7047,11 @@ local function number_field(id,label,x,y,w,get,set,step,h,normalize,digits)
  field.field,field.get,field.set,field.step,field.normalize,field.digits=true,get,set,step or 1,normalize,digits or 2
  local v=get();local cache=numberCache[id]
  if not cache or cache.value~=v then cache=cache or {};numberCache[id]=cache;cache.value,cache.text=v,number_text(v,digits) end
- controls:number(id,cache.text,x,y,w,h,true,numberOptions)
- gfx.setfont(1,Host.faces[1],max(7,floor(10*scale+.5)),0);color(C.faint)
- gfx.x,gfx.y=ox+(x+5)*scale,oy+y*scale;gfx.drawstr(Language.message(label),4,ox+(x+35)*scale,oy+(y+h)*scale)
+ local englishTarget=label=='目標' and Language.code=='EN'
+ local options=englishTarget and targetNumberOptions or numberOptions
+ controls:number(id,cache.text,x,y,w,h,true,options)
+ gfx.setfont(1,Host.faces[1],max(englishTarget and 6 or 7,floor(10*scale+.5)),0);color(C.faint)
+ gfx.x,gfx.y=ox+(x+5)*scale,oy+y*scale;gfx.drawstr(Language.message(label),4,ox+(x+options.left-1)*scale,oy+(y+h)*scale)
  field.fn=function()
   local current=widgetByID[id]
   U.editor:open(id,number_text(current.get(),current.digits),function(raw)
@@ -7103,8 +7184,10 @@ local function controller()
       text(lraText,x+91,213,10.3,C.gold,cardW-101,2)
     end
     target_fields(key,x+8,241,cardW-16)
-    toggle(key,'グラフ '..(S.show[key] and 'ON' or 'OFF'),x+8,286,cardW-16,30)
+    local compactLabels=scale<.76
+    toggle(key,compactLabels and 'グラフ' or 'グラフ '..(S.show[key] and 'ON' or 'OFF'),x+8,graphRowY,81,graphRowHeight,graphToggleOptions)
   end
+  draw_guide_checkboxes()
   controls:panel(24,336,598,86)
   local warnUp,warnDown,warnPeak=warning_durations(data)
   text('警告表示',36,347,12.5,C.muted,110)
@@ -7122,10 +7205,13 @@ local function controller()
   text(warning_time_text(warnDown),132,405,9.4,C.faint,92,2,true)
   text(warning_time_text(warnPeak),228,405,9.4,C.faint,98,2,true)
   line(334,366,334,411,C.edge,.30)
-  toggle('rms','RMS '..(S.show.rms and 'ON' or 'OFF'),346,375,126,30)
-  rect(346,375,126,2,C.gold,.68)
-  toggle('peak','Peak '..(S.show.peak and 'ON' or 'OFF'),484,375,126,30)
-  rect(484,375,126,2,C.faint,.72)
+  toggle('rms','RMS '..(S.show.rms and 'ON' or 'OFF'),346,375,84,30,graphToggleOptions)
+  rect(346,375,84,2,C.gold,.68)
+  toggle('peak','Peak '..(S.show.peak and 'ON' or 'OFF'),436,375,84,30,graphToggleOptions)
+  rect(436,375,84,2,C.faint,.72)
+  button('grid','グリッド',526,375,84,30,function()
+    S.guides.grid=not S.guides.grid;edited(true)
+  end,nil,S.guides.grid)
 
   controls:panel(24,428,598,76)
   text('グラフ設定',36,435,12.2,C.muted,95)
